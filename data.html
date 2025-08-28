@@ -1,0 +1,140 @@
+<html lang="zh-CN"><head>
+    <meta charset="UTF-8">
+    <title>战绩</title>
+    <style>
+        .circle-container {
+            position: relative;
+            width: 80px;
+            height: 80px;
+            display: inline-block;
+        }
+        
+        .black-circle {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background-color: #000;
+        }
+        
+        .arc {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: rotate(90deg);
+        }
+        
+        .arc circle {
+            fill: none;
+            stroke: _COLOR_;
+            stroke-width: 8;
+            cx: 40;
+            cy: 40;
+            transition: stroke-dashoffset 0.5s ease;
+            r: 36;
+            stroke-dashoffset: _ARC_;
+            stroke-dasharray: 226.2;
+        }
+
+        .text{
+            position: absolute;
+            color: _COLOR_;
+            font-size: 40px;
+            font-weight: 1000;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+        }
+    </style>
+</head>
+
+<body style="margin: 0px">
+    <div>
+    <div style="width: 480px;height: 100px;display: flex;align-items: center;">
+        <img style="width: 80px; height: 80px; border: 2px solid #000; border-radius: 50%; display: inline-block;margin: 10px;" src="_avatar_"></img>
+        <span style="font-size: 30px;margin-left: 10px;white-space: nowrap;overflow: hidden;text-overflow: ellipsis;width: 360px;">_name_</span>
+    </div>
+    <div style="width: 480px;display: flex;align-items: center;height: 80px;">
+        <div style="display: inline-block;width: 160px;text-align: center;font-size: 50px;">
+            <div class="circle-container mb-8">
+                <div class="black-circle"></div>
+                <div class="text"><div style="width:100%;">_POOL_</div></div>
+                <svg class="arc">
+                    <circle id="arc"/>
+                </svg>
+            </div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_WE_</div>
+            <div style="font-size: 20px;">WE</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_Rating_</div>
+            <div style="font-size: 20px;">Rating</div>
+        </div>
+    </div>
+    <div style="width: 480px;display: flex;align-items: center;height: 80px;">
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_ELO_</div>
+            <div style="font-size: 20px;">ELO</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_cnt_</div>
+            <div style="font-size: 20px;">场次</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_winRate_</div>
+            <div style="font-size: 20px;">胜率</div>
+        </div>
+    </div>
+    <div style="width: 480px;display: flex;align-items: center;height: 80px;">
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_RWS_</div>
+            <div style="font-size: 20px;">RWS</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_ADR_</div>
+            <div style="font-size: 20px;">ADR</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_KD_</div>
+            <div style="font-size: 20px;">KD</div>
+        </div>
+    </div>
+    <div style="width: 480px;display: flex;align-items: center;height: 80px;">
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_headShotRatio_</div>
+            <div style="font-size: 20px;">爆头率</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_entryKillRatio_</div>
+            <div style="font-size: 20px;">首杀率</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_vs1WinRate_</div>
+            <div style="font-size: 20px;">1v1胜率</div>
+        </div>
+    </div>
+    <div style="width: 480px;display: flex;align-items: center;height: 80px;">
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_avgK_</div>
+            <div style="font-size: 20px;">场均击杀</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_avgD_</div>
+            <div style="font-size: 20px;">场均死亡</div>
+        </div>
+        <div style="display: inline-block; width: 160px; text-align: center;">
+            <div style="font-size: 40px;">_avgA_</div>
+            <div style="font-size: 20px;">场均助攻</div>
+        </div>
+    </div>
+
+    <div style="margin: 10px; font-size: 20px" >最新一场：_LastTime_</div>
+    </div>
+
+</body></html>

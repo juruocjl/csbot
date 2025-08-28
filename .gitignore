@@ -1,0 +1,6 @@
+.env.prod
+__pycache__
+temp
+groups.db
+venv
+avatar
