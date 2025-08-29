@@ -217,7 +217,9 @@ class DataManager:
             pool = "S"
             color = "#87CEFA"
             arc = 0
-            if pvpScore <= 1000:
+            if pvpScore == 0:
+                pool = "?"
+            elif pvpScore <= 1000:
                 pool = "D"
                 arc = pvpScore / 1000
             elif pvpScore <= 1150:
@@ -293,7 +295,7 @@ class DataManager:
                 result = self.get_stats(steamid)
                 if result:
                     datas.append((steamid, result[3]))
-        sorted(datas, key=lambda x: x[1], reverse=True)
+        datas = sorted(datas, key=lambda x: x[1], reverse=True)
         if len(datas) == 0:
             return None
         html = rank_content[0]
@@ -355,7 +357,7 @@ updateall = on_command("更新所有", rule=to_me(), priority=10, block=True, pe
 
 @help.handle()
 async def help_function():
-    await help.finish("可用指令：\n/绑定 steamid64\n/更新数据\n/查看数据")
+    await help.finish("可用指令：\n/绑定 steamid64\n/更新数据\n/查看数据\n/排名")
 
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
@@ -409,9 +411,11 @@ async def show_function(message: MessageEvent):
         await show.finish("请先使用 /绑定 steamid64 绑定")
 
 @rank.handle()
-async def rank_function(message: MessageEvent):
+async def rank_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
+
+
 
     image = await db.get_elo_rk_image(db.get_member(sid))
     if image:
