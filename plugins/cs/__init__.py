@@ -21,6 +21,28 @@ from pyppeteer import launch
 from io import BytesIO
 import tempfile
 import time
+import datetime
+
+
+load_dotenv(".env.prod")
+SeasonId = os.getenv("SeasonId")
+lastSeasonId = os.getenv("lastSeasonId")
+
+with open("data.html", 'r', encoding='utf-8') as file:
+    data_content = file.read()
+
+with open("rank.html", 'r', encoding='utf-8') as file:
+    rank_content = file.read().split("<!--SPLIT--->")
+
+with open("matches.html", 'r', encoding='utf-8') as file:
+    matches_content = file.read().split("<!--SPLIT--->")
+
+
+def get_today_start_timestamp():
+    today = datetime.date.today()
+    today_start = datetime.datetime.combine(today, datetime.time.min)
+    timestamp = int(time.mktime(today_start.timetuple()))
+    return timestamp
 
 def path_to_file_url(path):
     absolute_path = os.path.abspath(path)
@@ -37,9 +59,58 @@ async def screenshot_html_to_png(url, width, height):
     await asyncio.sleep(1)
     image = await page.screenshot()
     await browser.close()
-
     return image
-async def gen_rank_html(datas, min_value, max_value, ndigits, title, suf=''):
+
+
+def get_elo_info(pvpScore):
+    pool = "S"
+    color = "#87CEFA"
+    arc = 0
+    if pvpScore == 0:
+        pool = "?"
+    elif pvpScore <= 1000:
+        pool = "D"
+        arc = pvpScore / 1000
+    elif pvpScore <= 1150:
+        pool = "C"
+        arc = (pvpScore - 1000) / 150
+    elif pvpScore <= 1300:
+        pool = "C+"
+        arc = (pvpScore - 1150) / 150
+    elif pvpScore <= 1450:
+        pool = "C+"
+        arc = (pvpScore - 1300) / 150
+        color = "#FFDF00"
+    elif pvpScore <= 1600:
+        pool = "B"
+        arc = (pvpScore - 1450) / 150
+    elif pvpScore <= 1750:
+        pool = "B+"
+        arc = (pvpScore - 1600) / 150
+    elif pvpScore <= 1900:
+        pool = "B+"
+        arc = (pvpScore - 1750) / 150
+        color = "#FFDF00"
+    elif pvpScore <= 2050:
+        pool = "A"
+        arc = (pvpScore - 1900) / 150
+    elif pvpScore <= 2200:
+        pool = "A+"
+        arc = (pvpScore - 2050) / 150
+    elif pvpScore <= 2400:
+        pool = "A+"
+        arc = (pvpScore - 2200) / 200
+        color = "#FFDF00"
+    
+    return pool, color, arc
+
+def output(val, format):
+    if format.startswith("d"):
+        return f"{val: .{int(format[1:])}f}"
+    elif format.startswith("p"):
+        return f"{val * 100: .{int(format[1:])}f}%"
+
+async def gen_rank_html(datas, min_value, max_value, title, format):
     html = rank_content[0]
     sum = 0
     for (steamid, value) in datas:
@@ -48,13 +119,13 @@ async def gen_rank_html(datas, min_value, max_value, ndigits, title, suf=''):
         temp_html = temp_html.replace('_AVATAR_', path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
         temp_html = temp_html.replace('_COLOR_', red_to_green_color(score))
         temp_html = temp_html.replace('_LEN_', f"{round(500 * score)}")
-        temp_html = temp_html.replace('_VALUE_', f"{value: .{ndigits}f}{suf}")
+        temp_html = temp_html.replace('_VALUE_', output(value, format))
         html += temp_html
         sum += value
     html += rank_content[2]
     avg = sum / len(datas)
     score = (avg - min_value) / (max_value - min_value)
-    html = html.replace("_AVG_", f"{avg: .{ndigits}f}{suf}")
+    html = html.replace("_AVG_", output(avg, format))
     html = html.replace("_AVGPOS_", f"{round(score * 500) + 98}")
     html = html.replace("_AVGLEN_", f"{round(len(datas) * 90) + 40}")
     html = html.replace("_TITLE_", title)
@@ -65,13 +136,49 @@ async def gen_rank_html(datas, min_value, max_value, ndigits, title, suf=''):
         os.remove(temp_file.name)
     return BytesIO(img)
 
-load_dotenv(".env.prod")
+async def gen_matches_html(datas, steamid, name):
+    green = "#4CAF50"
+    red = "#F44336"
+    gray = "#9E9E9E"
+    html = matches_content[0]
+    html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+    html = html.replace("_name_", name)
+    for match in datas:
+        (_,_,seasonId,mapName,team,winTeam,score1,score2,pwRating,we,timeStamp,kill,death,assist,_,mode,pvpScore,pvpScoreChange,pvpMvp,isgroup,greenMatch) = match
+        temp_html = matches_content[1]
+        myScore = score1 if team == 1 else score2
+        opScore = score2 if team == 1 else score1
+        Result = 2 if team == winTeam else (1 if winTeam == -1 else 0)
+        temp_html = temp_html.replace("_SCORERESULT_", ["负", "平", "胜"][Result])
+        temp_html = temp_html.replace("_TIME_", datetime.datetime.fromtimestamp(timeStamp).strftime("%m-%d %H:%M"))
+        temp_html = temp_html.replace("_SCORE1_", f"{myScore}")
+        temp_html = temp_html.replace("_SCORE2_", f"{opScore}")
+        temp_html = temp_html.replace("_SCORECOLOR_", [red, gray, green][Result])
+        temp_html = temp_html.replace("_MAP_", mapName)
+        temp_html = temp_html.replace("_TYPE_", mode)
+        temp_html = temp_html.replace("_RT_",f"{pwRating: .2f}")
+        temp_html = temp_html.replace("_RTCOLOR_", green if pwRating > 1 else red)
+        temp_html = temp_html.replace("_K_", f"{kill}")
+        temp_html = temp_html.replace("_D_", f"{death}")
+        temp_html = temp_html.replace("_A_", f"{assist}")
+        temp_html = temp_html.replace("_WE_", f"{we: .1f}")
+        temp_html = temp_html.replace("_WECOLOR_", green if we > 8 else red)
+        temp_html = temp_html.replace("_GROUPDISPLAY_", "inline" if isgroup else "none")
+        pool, color, arc = get_elo_info(pvpScore)
+        temp_html = temp_html.replace("_POOLCOLOR_", color)
+        temp_html = temp_html.replace("_ARC_", f"{113.1 * (1 - arc)}")
+        temp_html = temp_html.replace("_POOL_", pool)
+        temp_html = temp_html.replace("_DELTA_", f"{pvpScoreChange}")
 
-with open("data.html", 'r', encoding='utf-8') as file:
-    data_content = file.read()
+        html += temp_html
+    html += matches_content[2]
 
-with open("rank.html", 'r', encoding='utf-8') as file:
-    rank_content = file.read().split("<!--SPLIT--->")
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+        temp_file.write(html)
+        temp_file.close()
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 570, 100 + len(datas) * 80)
+        os.remove(temp_file.name)
+    return BytesIO(img)
 
 def red_to_green_color(score):
     red = 1.0 - score
@@ -164,6 +271,13 @@ class DataManager:
         ''', (uid, steamid))
         self.conn.commit()
 
+    def unbind(self, uid):
+        cursor = self.conn.cursor()
+        cursor.execute('''
+        DELETE FROM members_steamid WHERE uid == ?;
+        ''', (uid,))
+        self.conn.commit()
+
     def get_steamid(self, uid):
         cursor = self.conn.cursor()
         cursor.execute('''
@@ -185,7 +299,7 @@ class DataManager:
         result = requests.post(url,headers=header,json=payload, verify=False)
         data = result.json()
         if data["statusCode"] != 0:
-            return "爬取失败：" + data["errorMessage"]
+            return (False, "爬取失败：" + data["errorMessage"])
         cursor = self.conn.cursor()
         cursor.execute('''
         SELECT avatarlink FROM steamid_detail WHERE steamid = ?
@@ -239,8 +353,11 @@ class DataManager:
               data["data"]["seasonId"],
               ))
         self.conn.commit()
-        for SeasonID in [os.getenv("SeasonId"), os.getenv("lastSeasonId")]:
+        tot = 0
+        name = data["data"]["name"]
+        for SeasonID in [SeasonId, lastSeasonId]:
             page = 1
+            totfail = 0
             while True:
                 url = "https://api.wmpvp.com/api/csgo/home/match/list"  
 
@@ -254,7 +371,7 @@ class DataManager:
                     "dataSource": 3,
                     "mySteamId": os.getenv("mySteamId"),
                     "page": page,
-                    "pageSize": 20,
+                    "pageSize": 50,
                     "pvpType": -1,
                     "toSteamId": steamid
                 }
@@ -263,6 +380,7 @@ class DataManager:
                 data = result.json()
                 if data["statusCode"] != 0:
                     return "爬取失败：" + data["errorMessage"]
+                time.sleep(0.2)
                 failed = 0
                 success = 0
                 for match in data['data']['matchList']:
@@ -317,11 +435,15 @@ class DataManager:
                     else:
                         failed += 1
                 print(f"success {success}, fail {failed}")
+                tot += success
+                totfail += failed
                 if success == 0 or failed >= 2:
                     break
                 page += 1
+            if totfail >= 2:
+                break
         self.conn.commit()
-        return None
+        return (True, name, tot)
     
     def get_stats(self, steamid):
         cursor = self.conn.cursor()
@@ -353,44 +475,7 @@ class DataManager:
             html = html.replace("_avgA_", "nan" if cnt == 0 else f"{assists / cnt : .2f}")
             html = html.replace("_LastTime_", lasttime)
 
-            pool = "S"
-            color = "#87CEFA"
-            arc = 0
-            if pvpScore == 0:
-                pool = "?"
-            elif pvpScore <= 1000:
-                pool = "D"
-                arc = pvpScore / 1000
-            elif pvpScore <= 1150:
-                pool = "C"
-                arc = (pvpScore - 1000) / 150
-            elif pvpScore <= 1300:
-                pool = "C+"
-                arc = (pvpScore - 1150) / 150
-            elif pvpScore <= 1450:
-                pool = "C+"
-                arc = (pvpScore - 1300) / 150
-                color = "#FFDF00"
-            elif pvpScore <= 1600:
-                pool = "B"
-                arc = (pvpScore - 1450) / 150
-            elif pvpScore <= 1750:
-                pool = "B+"
-                arc = (pvpScore - 1600) / 150
-            elif pvpScore <= 1900:
-                pool = "B+"
-                arc = (pvpScore - 1750) / 150
-                color = "#FFDF00"
-            elif pvpScore <= 2050:
-                pool = "A"
-                arc = (pvpScore - 1900) / 150
-            elif pvpScore <= 2200:
-                pool = "A+"
-                arc = (pvpScore - 2050) / 150
-            elif pvpScore <= 2400:
-                pool = "A+"
-                arc = (pvpScore - 2200) / 200
-                color = "#FFDF00"
+            pool, color, arc = get_elo_info(pvpScore)
             
             html = html.replace("_COLOR_", color)
             html = html.replace("_ARC_", f"{226.2 * (1 - arc)}")
@@ -403,8 +488,15 @@ class DataManager:
             return BytesIO(img)
         else:
             return None
-    
-    
+
+    def search_user(self, name, id = 1):
+        cursor = self.conn.cursor()
+        cursor.execute('''SELECT steamid, name FROM steamid_detail 
+            WHERE name LIKE ? 
+            ORDER BY steamid
+            LIMIT 1 OFFSET ?''', (name, id - 1))
+        return cursor.fetchone()
+
     def get_all_steamid(self):
         cursor = self.conn.cursor()
         cursor.execute('SELECT steamid FROM members_steamid',)
@@ -432,319 +524,263 @@ class DataManager:
             return members
         return []
 
-    async def get_elo_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, result[3]))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, datas[-1][1] - 10, datas[0][1], 0, "天梯分排名")
-
-    async def get_rt_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, result[7]))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 0.1), datas[0][1], 2, "rating")
+    def get_time_sql(self, time_type):
+        if time_type == "今日":
+            return f"(timeStamp >= {get_today_start_timestamp()})"
+        elif time_type == "昨日":
+            return f"({get_today_start_timestamp() - 24 * 3600} <= timeStamp and timeStamp < {get_today_start_timestamp()})"
+        elif time_type == "本周":
+            return f"({int(time.time()) - 7 * 24 * 3600} <= timeStamp)"
+        elif time_type == "本赛季":
+            return f"(seasonId == '{SeasonId}')"
+        elif time_type == "两赛季":
+            return f"(seasonId == '{SeasonId}' or seasonId == '{lastSeasonId}')"
+        elif time_type == "上赛季":
+            return f"(seasonId == '{lastSeasonId}')"
+        elif time_type == "全部":
+            return f"( 1 == 1 )"
+        else:
+            raise ValueError("err time")
     
-    async def get_we_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, result[8]))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 1), datas[0][1], 1, "WE")
-    
-    async def get_adr_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, result[13]))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 10), datas[0][1], 1, "ADR")
-
-    async def get_cnt_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, result[4]))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 1), datas[0][1], 1, "场次")
-    
-    async def get_wr_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, round(result[6] * 100)))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 10), datas[0][1], 1, "胜率", suf='%')
-
-    async def get_ek_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, round(result[15] * 100)))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 10), datas[0][1], 1, "首杀率", suf='%')
-
-    async def get_hs_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, round(result[14] * 100)))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 10), datas[0][1], 1, "爆头率", suf='%')
-    
-    async def get_1v1_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId"):
-                    datas.append((steamid, round(result[16] * 100)))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 10), datas[0][1], 1, "1v1胜率", suf='%')
-
-    async def get_k_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId") and result[4] != 0:
-                    datas.append((steamid, result[9] / result[4]))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 1), datas[0][1], 2, "场均击杀")
-
-    async def get_d_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId") and result[4] != 0:
-                    datas.append((steamid, result[10] / result[4]))
-        datas = sorted(datas, key=lambda x: x[1])
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[0][1] - 1), datas[-1][1], 2, "场均死亡")
-
-    async def get_a_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                result = self.get_stats(steamid)
-                if result and result[18] == os.getenv("SeasonId") and result[4] != 0:
-                    datas.append((steamid, result[11] / result[4]))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 1), datas[0][1], 2, "场均助攻")
-
-    async def get_jinli_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                cursor = self.conn.cursor()
-                cursor.execute('''SELECT AVG(pwRating) as avgRating
+    def get_value(self, steamid, query_type, time_type):
+        time_sql = self.get_time_sql(time_type)
+        steamid_sql = f"steamid == '{steamid}'"
+        cursor = self.conn.cursor()
+        
+        if query_type == "ELO":
+            assert(time_type == "本赛季")
+            result = self.get_stats(steamid)
+            if result and result[18] == SeasonId and result[3] != 0:
+                return result[3]
+            raise ValueError(f"no {query_type}")
+        if query_type == "rt":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
-                                and winTeam != team 
-                                and (seasonId == ? or seasonId == ?) and steamid == ?
-                            ''', (os.getenv("SeasonId"), os.getenv("lastSeasonId"), steamid))
-                result = cursor.fetchone()[0]
-                print(result)
-                if result:
-                    datas.append((steamid, result))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 0.1), datas[0][1], 2, "两赛季 失败场次rating")
-
-    async def get_zhayu_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                cursor = self.conn.cursor()
-                cursor.execute('''SELECT AVG(pwRating) as avgRating
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "WE":
+            cursor.execute(f'''SELECT AVG(we) as avgwe
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
-                                and winTeam == team 
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "ADR":
+            assert(time_type == "本赛季")
+            result = self.get_stats(steamid)
+            if result and result[18] == SeasonId and result[4] != 0:
+                return result[13]
+            raise ValueError(f"no {query_type}")
+        if query_type == "场次":
+            cursor.execute(f'''SELECT COUNT(mid) as cnt
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "胜率":
+            cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(team) as cnt
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1]:
+                return result[0]
+            raise ValueError(f"no {query_type}")
+        if query_type == "首杀":
+            assert(time_type == "本赛季")
+            result = self.get_stats(steamid)
+            if result and result[18] == SeasonId and result[4] != 0:
+                return result[15]
+            raise ValueError(f"no {query_type}")
+        if query_type == "爆头":
+            assert(time_type == "本赛季")
+            result = self.get_stats(steamid)
+            if result and result[18] == SeasonId and result[4] != 0:
+                return result[14]
+            raise ValueError(f"no {query_type}")
+        if query_type == "1v1":
+            assert(time_type == "本赛季")
+            result = self.get_stats(steamid)
+            if result and result[18] == SeasonId and result[4] != 0:
+                return result[16]
+            raise ValueError(f"no {query_type}")
+        if query_type == "击杀":
+            cursor.execute(f'''SELECT AVG(kill) as avgkill
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "死亡":
+            cursor.execute(f'''SELECT AVG(death) as avgdeath
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "助攻":
+            cursor.execute(f'''SELECT AVG(assist) as avgassist
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "尽力":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and winTeam != team  
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "带飞":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and winTeam == team  
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "炸鱼":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and winTeam == team  
                                 and min(score1, score2) <= 6
-                                and (seasonId == ? or seasonId == ?) and steamid == ?
-                            ''', (os.getenv("SeasonId"), os.getenv("lastSeasonId"), steamid))
-                result = cursor.fetchone()[0]
-                print(result)
-                if result:
-                    datas.append((steamid, result))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 0.1), datas[0][1], 2, "两赛季 小分拿下rating")
-
-    async def get_yanyuan_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                cursor = self.conn.cursor()
-                cursor.execute('''SELECT AVG(pwRating) as avgRating
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "演员":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
-                                and isgroup == 1
-                                and (seasonId == ? or seasonId == ?) and steamid == ?
-                            ''', (os.getenv("SeasonId"), os.getenv("lastSeasonId"), steamid))
-                result = cursor.fetchone()[0]
-                print(result)
-                if result:
-                    datas.append((steamid, result))
-        datas = sorted(datas, key=lambda x: x[1])
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[0][1] - 0.1), datas[-1][1], 2, "两赛季 组排rating")
-
-    async def get_guli_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                cursor = self.conn.cursor()
-                cursor.execute('''SELECT COUNT(*) AS total_count
+                                and isgroup == 1  
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "鼓励":
+            cursor.execute(f'''SELECT COUNT(*) AS total_count
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局")
                                 and isgroup == 0
-                                and (seasonId == ? or seasonId == ?) and steamid == ?
-                            ''', (os.getenv("SeasonId"), os.getenv("lastSeasonId"), steamid))
-                result = cursor.fetchone()[0]
-                print(result)
-                if result:
-                    datas.append((steamid, result))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 0.1), datas[0][1], 0, "两赛季 单排场数")
-    
-    async def get_shangfen_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                cursor = self.conn.cursor()
-                cursor.execute('''SELECT SUM(pvpScoreChange) as ScoreDelta
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+               return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "悲情":
+            cursor.execute(f'''SELECT COUNT(*) AS total_count
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
-                                and timeStamp >= ?
-                                and (seasonId == ? or seasonId == ?) and steamid == ?
-                            ''', (int(time.time()) - 7 * 24 * 3600, os.getenv("SeasonId"), os.getenv("lastSeasonId"), steamid))
-                result = cursor.fetchone()[0]
-                print(result)
-                if result:
-                    datas.append((steamid, result))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 10), datas[0][1], 0, "7天内 上分")
-
-    async def get_neizhan_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                cursor = self.conn.cursor()
-                cursor.execute('''SELECT AVG(pwRating) as avgRating
+                                and winTeam != team  
+                                and pwRating > 1.2
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+               return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "馁站":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
                                 FROM 'matches'
                                 WHERE 
                                 mode == "PVP自定义"
-                                and (seasonId == ? or seasonId == ?) and steamid == ?
-                            ''', (os.getenv("SeasonId"), os.getenv("lastSeasonId"), steamid))
-                result = cursor.fetchone()[0]
-                print(result)
-                if result:
-                    datas.append((steamid, result))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
-            return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 0.1), datas[0][1], 2, "两赛季 馁站rating")
-
-    async def get_var_rk_image(self, uids):
-        datas = []
-        for uid in uids:
-            steamid = self.get_steamid(uid)
-            if steamid != None:
-                cursor = self.conn.cursor()
-                cursor.execute("""
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()[0]
+            if result:
+                return result
+            raise ValueError(f"no {query_type}")        
+        if query_type == "上分":
+            cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(pvpScoreChange) as CNT
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] != 0:
+                return result[0]
+            raise ValueError(f"no {query_type}")
+        if query_type == "方差":
+            cursor.execute(f"""
                                 WITH filtered_matches AS (
                                     SELECT pwRating FROM 'matches'
                                     WHERE 
                                     (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
-                                    and (seasonId == ? or seasonId == ?) and steamid == ?
+                                    and {time_sql} and {steamid_sql}
                                 )
                                 SELECT SUM((pwRating - avg_val) * (pwRating - avg_val)) AS SUM2, COUNT(pwRating) AS CNT
                                 FROM filtered_matches, 
                                     (SELECT AVG(pwRating) AS avg_val FROM filtered_matches) AS sub
-                            """, (os.getenv("SeasonId"), os.getenv("lastSeasonId"), steamid))
-                result = cursor.fetchone()
-                print(result)
-                if result[1] != 0:
-                    datas.append((steamid, result[0] / (result[1] - 1)))
-        datas = sorted(datas, key=lambda x: x[1], reverse=True)
-        if len(datas) == 0:
+                            """)
+            result = cursor.fetchone()
+            if result[1] > 1:
+                return result[0] / (result[1] - 1)
+            raise ValueError(f"no {query_type}")
+        raise ValueError(f"unknown {query_type}")
+    
+    async def get_matches_image(self, steamid, time_type, LIMIT = 20):
+        cursor = self.conn.cursor()
+        cursor.execute(f'''SELECT * FROM 'matches'
+                            WHERE 
+                            {self.get_time_sql(time_type)} and steamid == ?
+                            ORDER BY timeStamp DESC
+                            LIMIT ?
+                        ''', (steamid, LIMIT, ))
+        result = cursor.fetchall()
+        if len(result):
+            return await gen_matches_html(result, steamid, self.get_stats(steamid)[2])
+        else:
             return None
-        return await gen_rank_html(datas, max(0, datas[-1][1] - 0.1), datas[0][1], 2, "两赛季 rating方差")
 
     def query(self, sql):
         cursor = self.conn.cursor()
@@ -756,7 +792,6 @@ class DataManager:
         return url_pattern.sub('url deleted', str(cursor.fetchall()))
 
 
-        
 if not os.path.exists("avatar"):
     os.makedirs("avatar", exist_ok=True)
 
@@ -778,6 +813,8 @@ help = on_command("帮助", rule=to_me(), priority=20, block=True)
 
 bind = on_command("绑定", rule=to_me(), priority=10, block=True)
 
+unbind = on_command("解绑", rule=to_me(), priority=10, block=True)
+
 update = on_command("更新数据", rule=to_me(), priority=10, block=True)
 
 show = on_command("查看数据", rule=to_me(), priority=10, block=True)
@@ -786,11 +823,23 @@ rank = on_command("排名", rule=to_me(), priority=10, block=True)
 
 updateall = on_command("全部更新", rule=to_me(), priority=10, block=True, permission=SUPERUSER)
 
+matches = on_command("记录", rule=to_me(), priority=10, block=True)
+
 sql = on_command("sql", rule=to_me(), priority=10, block=True, permission=SUPERUSER)
 
 @help.handle()
 async def help_function():
-    await help.finish("可用指令：\n/绑定 steamid64\n/更新数据\n/查看数据\n/排名")
+    await help.finish("""可用指令：
+/绑定 steamid64
+/解绑
+/更新数据
+/查看数据 (用户名匹配)
+默认查看自己数据。你可以使用用户名匹配查看第一个匹配到用户的数据。
+/记录 (用户名匹配) (时间)
+默认查看自己记录。最多 20 条。如果只有一个参数，会优先判断是否为时间。默认时间为全部。
+/排名 [选项] (时间)
+查看指定时间指定排名，具体可选项可以使用 /排名 查看。
+""")
 
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
@@ -802,6 +851,14 @@ async def bind_function(message: MessageEvent, args: Message = CommandArg()):
         await bind.finish(f"成功绑定{steamid}。你可以使用 /更新数据 获取战绩。")
     else:
         await bind.finish("请输入steamid64，应该是一个17位整数。你可以使用steamidfinder等工具找到此值。")
+
+@unbind.handle()
+async def unbind_function(message: MessageEvent):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    print("user: %s\nsession: %s\n" % (uid, sid))
+    db.unbind(uid)
+    await unbind.finish(f"解绑成功。")
 
 @update.handle()
 async def update_function(message: MessageEvent):
@@ -815,24 +872,30 @@ async def update_function(message: MessageEvent):
     if steamid != None:
         print(f"更新{steamid}战绩")
         result = db.update_stats(steamid)
-        if result == None:
+        if result[0]:
+            await update.send(f"{result[1]} 成功更新 {result[2]} 场数据")
             image = await db.get_stats_image(steamid)
             assert(image != None)
             await update.finish(MessageSegment.file_image(image))
         else:
-            await update.finish(result)
+            await update.finish(result[1])
     else:
         await update.finish("请先使用 /绑定 steamid64 绑定")
 
 @show.handle()
-async def show_function(message: MessageEvent):
+async def show_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     
     db.add_member(sid, uid)
-
     print("user: %s\nsession: %s\n" % (uid, sid))
     steamid = db.get_steamid(uid)
+    if user := args.extract_plain_text():
+        if result := db.search_user(user):
+            await show.send(f"找到用户 {result[1]}")
+            steamid = result[0]
+        else:
+            await show.finish(f"未找到用户")
     if steamid != None:
         print(f"查询{steamid}战绩")
         image = await db.get_stats_image(steamid)
@@ -841,70 +904,137 @@ async def show_function(message: MessageEvent):
         else:
             await show.finish("请先使用 /更新数据 更新战绩")
     else:
-        await show.finish("请先使用 /绑定 steamid64 绑定")
+        await show.finish("请先使用 /绑定 steamid64 绑定或者指定用户")
+
+
+
+valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
+# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最小值，输出格式)
+rank_config = [
+    ("ELO", "ELO", 3, True, True, "m-10", "d0"),
+    ("rt", "rating", 3, False, True, "m-0.05", "d2"),
+    ("WE", "WE", 3, False, True, "m-1", "d2"),
+    ("ADR", "ADR", 3, True, True, "m-10", "d2"),
+    ("场次", "场次", 3, False, True, "v0", "d0"),
+    ("胜率", "胜率", 3, False, True, "v0", "p2"),
+    ("首杀", "首杀率", 3, True, True, "v0", "p0"),
+    ("爆头", "爆头率", 3, True, True, "v0", "p0"),
+    ("1v1", "1v1胜率", 3, True, True, "v0", "p0"),
+    ("击杀", "场均击杀", 3, False, True, "m-0.1", "d2"),
+    ("死亡", "场均死亡", 3, False, True, "m-0.1", "d2"),
+    ("助攻", "场均助攻", 3, False, True, "m-0.1", "d2"),
+    ("尽力", "失败平均rt", 4, False, True, "m-0.05", "d2"),
+    ("带飞", "胜利平均rt", 4, False, True, "m-0.05", "d2"),
+    ("炸鱼", "小分平均rt", 4, False, True, "m-0.05", "d2"),
+    ("演员", "组排平均rt", 4, False, False, "m-0.05", "d2"),
+    ("鼓励", "单排场次", 4, False, True, "v0", "d0"),
+    ("悲情", ">1.2rt失败场次", 4, False, True, "v0", "d0"),
+    ("馁站", "馁站平均rt", 4, False, True, "m-0.05", "d2"),
+    ("上分", "上分", 2, False, True, "m-1", "d0"),
+    ("方差", "rt方差", 4, False, True, "v0" , "d2"),
+]
+
+valid_rank = [a[0] for a in rank_config]
 
 @rank.handle()
 async def rank_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
 
-    wrong_arg = False
-    image = None
-    rk_type = args.extract_plain_text()
-    if rk_type == "ELO":
-        image = await db.get_elo_rk_image(db.get_member(sid))
-    elif rk_type == "rt":
-        image = await db.get_rt_rk_image(db.get_member(sid))
-    elif rk_type == "WE":
-        image = await db.get_we_rk_image(db.get_member(sid))
-    elif rk_type == "ADR":
-        image = await db.get_adr_rk_image(db.get_member(sid))
-    elif rk_type == "场次":
-        image = await db.get_cnt_rk_image(db.get_member(sid))
-    elif rk_type == "胜率":
-        image = await db.get_wr_rk_image(db.get_member(sid))
-    elif rk_type == "首杀":
-        image = await db.get_ek_rk_image(db.get_member(sid))
-    elif rk_type == "爆头":
-        image = await db.get_hs_rk_image(db.get_member(sid))
-    elif rk_type == "1v1":
-        image = await db.get_1v1_rk_image(db.get_member(sid))
-    elif rk_type == "击杀":
-        image = await db.get_k_rk_image(db.get_member(sid))
-    elif rk_type == "死亡":
-        image = await db.get_d_rk_image(db.get_member(sid))
-    elif rk_type == "助攻":
-        image = await db.get_a_rk_image(db.get_member(sid))
-    elif rk_type == "尽力":
-        image = await db.get_jinli_rk_image(db.get_member(sid))
-    elif rk_type == "炸鱼":
-        image = await db.get_zhayu_rk_image(db.get_member(sid))
-    elif rk_type == "演员":
-        image = await db.get_yanyuan_rk_image(db.get_member(sid))
-    elif rk_type == "鼓励":
-        image = await db.get_guli_rk_image(db.get_member(sid))
-    elif rk_type == "馁站":
-        image = await db.get_neizhan_rk_image(db.get_member(sid))
-    elif rk_type == "上分":
-        image = await db.get_shangfen_rk_image(db.get_member(sid))
-    elif rk_type == "方差":
-        image = await db.get_var_rk_image(db.get_member(sid))
+    text = args.extract_plain_text()
+    uids = db.get_member(sid)
+
+
+    if text:
+        cmd = text.split()
+        if len(cmd) > 0:
+            rank_type = cmd[0]
+            if rank_type in valid_rank:
+                index = valid_rank.index(rank_type)
+                config = rank_config[index]
+                time_type = valid_time[config[2]]
+                if len(cmd) >= 2:
+                    time_type = cmd[1]
+                if time_type in valid_time:
+                    if config[3] and time_type != valid_time[config[2]]:
+                        await rank.finish(f"{rank_type} 仅支持 {valid_time[config[2]]}")
+                    datas = []
+                    for uid in uids:
+                        steamid = db.get_steamid(uid)
+                        if steamid != None:
+                            try:
+                                val = db.get_value(steamid, rank_type, time_type)
+                                print(val)
+                                datas.append((steamid, val))
+                            except ValueError as e:
+                                print(e)
+                                pass
+                    datas = sorted(datas, key=lambda x: x[1], reverse=config[4])
+                    if len(datas) == 0:
+                        await rank.finish("没有人类了")
+                    max_value = datas[0][1] if config[4] else datas[-1][1]
+                    min_value = (datas[-1][1] if config[4] else datas[0][1])
+                    if max_value == 0 and rank_type == "胜率":
+                        await rank.finish("啊😰device😱啊这是人类啊😩哦，bro也没杀人😩这局...这局没有人类了😭只有🐍只有🐭，只有沟槽的野榜😭只有...啊！！！😭我在看什么😭我🌿你的😫🖐🏻️🎧")
+                    if config[5].startswith("m"):
+                        min_value += float(config[5][1:])
+                    else:
+                        min_value = float(config[5][1:])
+                    await rank.finish(MessageSegment.file_image(await gen_rank_html(datas, min_value, max_value, f"{time_type} {config[1]}", config[6])))
+
+    await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可用选项：{valid_rank}\n可用时间：{valid_time}")
+        
+
+@matches.handle()
+async def matches_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+
+    text = args.extract_plain_text()
+
+    steamid = db.get_steamid(uid)
+    time_type = "全部"
+
+    if text:
+        cmd = text.split()
+        if len(cmd) == 1:
+            if cmd[0] not in valid_time:
+                if result := db.search_user(cmd[0]):
+                    await matches.send(f"找到用户 {result[1]}")
+                    steamid = result[0]
+                else:
+                    await matches.finish(f"未找到用户")
+            else:
+                time_type = cmd[0]
+        elif len(cmd) > 1:
+            if result := db.search_user(cmd[0]):
+                await matches.send(f"找到用户 {result[1]}")
+                steamid = result[0]
+            else:
+                await matches.finish(f"未找到用户")
+            if cmd[1] not in valid_time:
+                await matches.finish(f"非法的时间")
+            else:
+                time_type = cmd[1]
+    if steamid != None:
+        print(steamid, time_type)
+        image = await db.get_matches_image(steamid, time_type)
+        if image:
+            await matches.finish(MessageSegment.file_image(image))
+        else:
+            await matches.finish("未找到比赛")
     else:
-        wrong_arg = True
-    
-    if wrong_arg:
-        await rank.finish("请使用 /排名 [选项] 生成排名。目前可用选项：ELO，rt，WE，ADR，场次，胜率，首杀，爆头，1v1，击杀，死亡，助攻，尽力，炸鱼，演员，鼓励，馁站，上分，方差")
-    elif image:
-        await rank.finish(MessageSegment.file_image(image))
-    else:
-        await rank.finish("没有人类了")
+        await matches.finish("请先使用 /绑定 steamid64 绑定或者指定用户")
 
 @updateall.handle()
 async def updateall_function():
     await updateall.send("开始更新所有数据")
+    qwq = []
     for steamid in db.get_all_steamid():
-        db.update_stats(steamid)
-    await updateall.finish("更新完成")
+        result = db.update_stats(steamid)
+        if result[0] and result[2] != 0:
+            qwq.append(result[1:])
+    await updateall.finish(f"更新完成 {qwq}")
 
 @sql.handle()
 async def sql_function(args: Message = CommandArg()):
