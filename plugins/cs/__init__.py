@@ -22,6 +22,13 @@ from io import BytesIO
 import tempfile
 import time
 import datetime
+import logging
+
+logging.basicConfig(
+    filename='app.log',  # 日志文件
+    level=logging.INFO,  # 只记录 ERROR 及以上级别
+    format='%(asctime)s - %(levelname)s - %(message)s'  # 格式
+)
 
 
 load_dotenv(".env.prod")
@@ -62,47 +69,80 @@ async def screenshot_html_to_png(url, width, height):
     return image
 
 
-def get_elo_info(pvpScore):
-    pool = "S"
-    color = "#87CEFA"
-    arc = 0
-    if pvpScore == 0:
-        pool = "?"
-    elif pvpScore <= 1000:
-        pool = "D"
-        arc = pvpScore / 1000
-    elif pvpScore <= 1150:
-        pool = "C"
-        arc = (pvpScore - 1000) / 150
-    elif pvpScore <= 1300:
-        pool = "C+"
-        arc = (pvpScore - 1150) / 150
-    elif pvpScore <= 1450:
-        pool = "C+"
-        arc = (pvpScore - 1300) / 150
-        color = "#FFDF00"
-    elif pvpScore <= 1600:
-        pool = "B"
-        arc = (pvpScore - 1450) / 150
-    elif pvpScore <= 1750:
-        pool = "B+"
-        arc = (pvpScore - 1600) / 150
-    elif pvpScore <= 1900:
-        pool = "B+"
-        arc = (pvpScore - 1750) / 150
-        color = "#FFDF00"
-    elif pvpScore <= 2050:
-        pool = "A"
-        arc = (pvpScore - 1900) / 150
-    elif pvpScore <= 2200:
-        pool = "A+"
-        arc = (pvpScore - 2050) / 150
-    elif pvpScore <= 2400:
-        pool = "A+"
-        arc = (pvpScore - 2200) / 200
-        color = "#FFDF00"
-    
-    return pool, color, arc
+def get_elo_info(pvpScore, seasonId = SeasonId):
+    if int(seasonId[1:]) >= 21:
+        pool = "S"
+        color = "#87CEFA"
+        arc = 0
+        if pvpScore == 0:
+            pool = "?"
+        elif pvpScore <= 1000:
+            pool = "D"
+            arc = pvpScore / 1000
+        elif pvpScore <= 1150:
+            pool = "C"
+            arc = (pvpScore - 1000) / 150
+        elif pvpScore <= 1300:
+            pool = "C+"
+            arc = (pvpScore - 1150) / 150
+        elif pvpScore <= 1450:
+            pool = "C+"
+            arc = (pvpScore - 1300) / 150
+            color = "#FFDF00"
+        elif pvpScore <= 1600:
+            pool = "B"
+            arc = (pvpScore - 1450) / 150
+        elif pvpScore <= 1750:
+            pool = "B+"
+            arc = (pvpScore - 1600) / 150
+        elif pvpScore <= 1900:
+            pool = "B+"
+            arc = (pvpScore - 1750) / 150
+            color = "#FFDF00"
+        elif pvpScore <= 2050:
+            pool = "A"
+            arc = (pvpScore - 1900) / 150
+        elif pvpScore <= 2200:
+            pool = "A+"
+            arc = (pvpScore - 2050) / 150
+        elif pvpScore <= 2400:
+            pool = "A+"
+            arc = (pvpScore - 2200) / 200
+            color = "#FFDF00"
+        
+        return pool, color, arc
+    else:
+        pool = "S"
+        color = "#87CEFA"
+        arc = 0
+        if pvpScore == 0:
+            pool = "?"
+        elif pvpScore <= 1000:
+            pool = "D"
+            arc = pvpScore / 1000
+        elif pvpScore <= 1200:
+            pool = "D+"
+            arc = (pvpScore - 1000) / 200
+        elif pvpScore <= 1400:
+            pool = "C"
+            arc = (pvpScore - 1200) / 200
+        elif pvpScore <= 1600:
+            pool = "C+"
+            arc = (pvpScore - 1400) / 200
+        elif pvpScore <= 1800:
+            pool = "B"
+            arc = (pvpScore - 1600) / 200
+        elif pvpScore <= 2000:
+            pool = "B+"
+            arc = (pvpScore - 1800) / 200
+        elif pvpScore <= 2200:
+            pool = "A"
+            arc = (pvpScore - 2000) / 200
+        elif pvpScore <= 2400:
+            pool = "A+"
+            arc = (pvpScore - 2200) / 200
+        
+        return pool, color, arc
 
 def output(val, format):
     if format.startswith("d"):
@@ -114,14 +154,17 @@ async def gen_rank_html(datas, min_value, max_value, title, format):
     html = rank_content[0]
     sum = 0
     for (steamid, value) in datas:
-        score = (value - min_value) / (max_value - min_value)
+        score = (value[0] - min_value) / (max_value - min_value)
         temp_html = rank_content[1]
         temp_html = temp_html.replace('_AVATAR_', path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
         temp_html = temp_html.replace('_COLOR_', red_to_green_color(score))
         temp_html = temp_html.replace('_LEN_', f"{round(500 * score)}")
-        temp_html = temp_html.replace('_VALUE_', output(value, format))
+        if len(value) == 1:
+            temp_html = temp_html.replace('_VALUE_', output(value[0], format))
+        else:
+            temp_html = temp_html.replace('_VALUE_', f"{output(value[0], format)},{value[1]}场")
         html += temp_html
-        sum += value
+        sum += value[0]
     html += rank_content[2]
     avg = sum / len(datas)
     score = (avg - min_value) / (max_value - min_value)
@@ -132,7 +175,7 @@ async def gen_rank_html(datas, min_value, max_value, title, format):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
         temp_file.write(html)
         temp_file.close()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 750, 200 + len(datas) * 90)
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 200 + len(datas) * 90)
         os.remove(temp_file.name)
     return BytesIO(img)
 
@@ -164,11 +207,11 @@ async def gen_matches_html(datas, steamid, name):
         temp_html = temp_html.replace("_WE_", f"{we: .1f}")
         temp_html = temp_html.replace("_WECOLOR_", green if we > 8 else red)
         temp_html = temp_html.replace("_GROUPDISPLAY_", "inline" if isgroup else "none")
-        pool, color, arc = get_elo_info(pvpScore)
+        pool, color, arc = get_elo_info(pvpScore, seasonId)
         temp_html = temp_html.replace("_POOLCOLOR_", color)
         temp_html = temp_html.replace("_ARC_", f"{113.1 * (1 - arc)}")
         temp_html = temp_html.replace("_POOL_", pool)
-        temp_html = temp_html.replace("_DELTA_", f"{pvpScoreChange}")
+        temp_html = temp_html.replace("_DELTA_", f"{pvpScoreChange:+}")
 
         html += temp_html
     html += matches_content[2]
@@ -230,7 +273,7 @@ class DataManager:
             headShotRatio FLOAT,
             entryKillRatio FLOAT,
             vs1WinRate FLOAT,
-            lasttime TEXT,
+            lasttime INT,
             seasonId TEXT,
             PRIMARY KEY (steamid)
         )
@@ -255,10 +298,33 @@ class DataManager:
             duration INT,
             mode TEXT,
             pvpScore INT,
+            pvpStars INT,
             pvpScoreChange INT,
             pvpMvp INT,
             isgroup INT,
             greenMatch INT,
+            entryKill INT,
+            headShot INT,
+            headShotRatio FLOAT,
+            flashTeammate INT,
+            flashSuccess mvpValue,
+            twoKill INT,
+            threeKill INT,
+            fourKill INT,
+            fiveKill INT,
+            vs1 INT,
+            vs2 INT,
+            vs3 INT,
+            vs4 INT,
+            vs5 INT,
+            dmgArmor INT,
+            dmgHealth INT,
+            adpr INT,
+            rws FLOAT,
+            teamId INT,
+            throwsCnt INT,
+            snipeNum INT,
+            firstDeath INT,
             PRIMARY KEY (mid, steamid)
         )
         ''')
@@ -286,6 +352,96 @@ class DataManager:
         result = cursor.fetchone()
         return result[0] if result else None
 
+    def update_match(self, mid, timeStamp, season):
+        logging.info(f"[update_match] start {mid}")
+        cursor = self.conn.cursor()
+        cursor.execute('''SELECT COUNT(mid) as cnt FROM matches WHERE mid == ?
+        ''',(mid, ))
+        result = cursor.fetchone()
+        if result[0] > 0:
+            logging.info(f"[update_match] {mid} in db")
+            return 0
+        url = "https://api.wmpvp.com/api/v1/csgo/match"
+        payload = {
+            "matchId": mid,
+        }
+        header = {
+            "appversion": "3.5.4.172",
+            "token":os.getenv("wmtoken")
+        }
+        result = requests.post(url,headers=header,json=payload, verify=False)
+        data = result.json()
+        if data["statusCode"] != 0:
+            logging.error(f"爬取失败  {mid} {data}")
+            self.conn.rollback()
+            raise RuntimeError("爬取失败：" + data["errorMessage"])
+        base = data['data']['base']
+        count = {}
+        for player in data['data']['players']:
+            if player['teamId'] not in count:
+                count[player['teamId']] = 0
+            count[player['teamId']] += 1
+        for player in data['data']['players']:
+            cursor.execute('''INSERT OR REPLACE INTO matches
+                (mid,
+                steamid,
+                seasonId,
+                mapName,
+                team,
+                winTeam,
+                score1,
+                score2,
+                pwRating,
+                we,
+                timeStamp,
+                kill,
+                death,
+                assist,
+                duration,
+                mode,
+                pvpScore,
+                pvpStars,
+                pvpScoreChange,
+                pvpMvp,
+                isgroup,
+                greenMatch,
+                entryKill,
+                headShot,
+                headShotRatio,
+                flashTeammate,
+                flashSuccess,
+                twoKill,
+                threeKill,
+                fourKill,
+                fiveKill,
+                vs1,
+                vs2,
+                vs3,
+                vs4,
+                vs5,
+                dmgArmor,
+                dmgHealth,
+                adpr,
+                rws,
+                teamId,
+                throwsCnt,
+                snipeNum,
+                firstDeath
+                ) VALUES
+                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)  
+            ''', 
+                (mid, player['playerId'], season, base['map'], player['team'],
+                base['winTeam'], base['score1'], base['score2'], player['pwRating'], player['we'],
+                timeStamp, player['kill'], player['death'], player['assist'], base['duration'],
+                base['mode'], player['pvpScore'], player['pvpStars'], player['pvpScoreChange'], int(player['mvp']),
+                bool(count[player['teamId']] > 1), base['greenMatch'], player['entryKill'], player['headShot'], player['headShotRatio'],
+                player['flashTeammate'], player['flashSuccess'], player['twoKill'], player['threeKill'], player['fourKill'],
+                player['fiveKill'], player['vs1'], player['vs2'], player['vs3'], player['vs4'],
+                player['vs5'], player['dmgArmor'], player['dmgHealth'], player['adpr'], player['rws'],
+                player['teamId'], player['throwsCnt'], player['snipeNum'], player['firstDeath'])
+            )
+        return 1
+
     def update_stats(self, steamid):
         url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats"
         payload = {
@@ -299,17 +455,65 @@ class DataManager:
         result = requests.post(url,headers=header,json=payload, verify=False)
         data = result.json()
         if data["statusCode"] != 0:
+            logging.error(f"爬取失败 {steamid} {data}")
             return (False, "爬取失败：" + data["errorMessage"])
         cursor = self.conn.cursor()
         cursor.execute('''
-        SELECT avatarlink FROM steamid_detail WHERE steamid = ?
+        SELECT avatarlink, lasttime FROM steamid_detail WHERE steamid = ?
         ''', (steamid,))
         result = cursor.fetchone()
-        if not result or result != data["data"]["avatar"]:
+        if not result or result[0] != data["data"]["avatar"]:
             urllib.request.urlretrieve(data["data"]["avatar"], Path(f"./avatar/{steamid}.png"))
-        lasttime = "none"
-        if len(data["data"]["historyDates"]) != 0:
-            lasttime = data["data"]["historyDates"][0]
+        LastTime = 0
+        if result:
+            LastTime = result[1]
+        newLastTime = LastTime
+        name = data["data"]["name"]
+        addMatches = 0
+        def work():
+            nonlocal newLastTime
+            nonlocal addMatches
+            for SeasonID in [SeasonId, lastSeasonId]:
+                page = 1
+                while True:
+                    url = "https://api.wmpvp.com/api/csgo/home/match/list"  
+
+                    headers = {
+                        "appversion": "3.5.4.172",
+                        "token": os.getenv("wmtoken")
+                    }
+
+                    payload = {
+                        "csgoSeasonId": SeasonID,
+                        "dataSource": 3,
+                        "mySteamId": os.getenv("mySteamId"),
+                        "page": page,
+                        "pageSize": 50,
+                        "pvpType": -1,
+                        "toSteamId": steamid
+                    }
+
+                    result = requests.post(url, json=payload, headers=headers,verify=False)
+                    ddata = result.json()
+                    if ddata["statusCode"] != 0:
+                        logging.error(f"爬取失败 {steamid} {SeasonID} {page} {data}")
+                        self.conn.rollback()
+                        return (False, "爬取失败：" + data["errorMessage"])
+                    time.sleep(0.1)
+                    for match in ddata['data']['matchList']:
+                        newLastTime = max(newLastTime, match["timeStamp"])
+                        if match["timeStamp"] > LastTime:
+                            try:
+                                self.update_match(match["matchId"], match["timeStamp"], SeasonID)
+                                addMatches += 1
+                            except RuntimeError as e:
+                                return (False, f"爬取失败 {e}")
+                        else:
+                            return
+                    if len(ddata['data']['matchList']) == 0:
+                        break
+                    page += 1
+        work()
         cursor.execute('''
         INSERT OR REPLACE INTO steamid_detail 
             (steamid,
@@ -349,101 +553,11 @@ class DataManager:
               data["data"]["headShotRatio"],
               data["data"]["entryKillRatio"],
               data["data"]["vs1WinRate"],
-              lasttime,
+              newLastTime,
               data["data"]["seasonId"],
               ))
         self.conn.commit()
-        tot = 0
-        name = data["data"]["name"]
-        for SeasonID in [SeasonId, lastSeasonId]:
-            page = 1
-            totfail = 0
-            while True:
-                url = "https://api.wmpvp.com/api/csgo/home/match/list"  
-
-                headers = {
-                    "appversion": "3.5.4.172",
-                    "token": os.getenv("wmtoken")
-                }
-
-                payload = {
-                    "csgoSeasonId": SeasonID,
-                    "dataSource": 3,
-                    "mySteamId": os.getenv("mySteamId"),
-                    "page": page,
-                    "pageSize": 50,
-                    "pvpType": -1,
-                    "toSteamId": steamid
-                }
-
-                result = requests.post(url, json=payload, headers=headers,verify=False)
-                data = result.json()
-                if data["statusCode"] != 0:
-                    return "爬取失败：" + data["errorMessage"]
-                time.sleep(0.2)
-                failed = 0
-                success = 0
-                for match in data['data']['matchList']:
-                    cursor = self.conn.cursor()
-                    cursor.execute('''
-                        INSERT OR IGNORE INTO matches
-                        (mid,
-                        steamid,
-                        seasonId,
-                        mapName,
-                        team,
-                        winTeam,
-                        score1,
-                        score2,
-                        pwRating,
-                        we,
-                        timeStamp,
-                        kill,
-                        death,
-                        assist,
-                        duration,
-                        mode,
-                        pvpScore,
-                        pvpScoreChange,
-                        pvpMvp,
-                        isgroup,
-                        greenMatch)
-                        VALUES
-                        (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ''',(match["matchId"],match["playerId"],SeasonID,
-                        match["mapName"],
-                        match["team"],
-                        match["winTeam"],
-                        match["score1"],
-                        match["score2"],
-                        match["pwRating"],
-                        match["we"],
-                        match["timeStamp"],
-                        match["kill"],
-                        match["death"],
-                        match["assist"],
-                        match["duration"],
-                        match["mode"],
-                        match["pvpScore"],
-                        match["pvpScoreChange"],
-                        int(match["pvpMvp"]),
-                        int(match["group"]),
-                        match["greenMatch"]
-                    ))
-                    if cursor.rowcount > 0:
-                        success += 1
-                    else:
-                        failed += 1
-                print(f"success {success}, fail {failed}")
-                tot += success
-                totfail += failed
-                if success == 0 or failed >= 2:
-                    break
-                page += 1
-            if totfail >= 2:
-                break
-        self.conn.commit()
-        return (True, name, tot)
+        return (True, name, addMatches)
     
     def get_stats(self, steamid):
         cursor = self.conn.cursor()
@@ -473,7 +587,7 @@ class DataManager:
             html = html.replace("_avgK_", "nan" if cnt == 0 else f"{kills / cnt : .2f}")
             html = html.replace("_avgD_", "nan" if cnt == 0 else f"{deaths / cnt : .2f}")
             html = html.replace("_avgA_", "nan" if cnt == 0 else f"{assists / cnt : .2f}")
-            html = html.replace("_LastTime_", lasttime)
+            html = html.replace("_LastTime_", datetime.datetime.fromtimestamp(lasttime).strftime("%y-%m-%d %H:%M"))
 
             pool, color, arc = get_elo_info(pvpScore)
             
@@ -551,35 +665,35 @@ class DataManager:
             assert(time_type == "本赛季")
             result = self.get_stats(steamid)
             if result and result[18] == SeasonId and result[3] != 0:
-                return result[3]
+                return result[3], result[4]
             raise ValueError(f"no {query_type}")
         if query_type == "rt":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "WE":
-            cursor.execute(f'''SELECT AVG(we) as avgwe
+            cursor.execute(f'''SELECT AVG(we) as avgwe, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "ADR":
             assert(time_type == "本赛季")
             result = self.get_stats(steamid)
             if result and result[18] == SeasonId and result[4] != 0:
-                return result[13]
+                return result[13], result[4]
             raise ValueError(f"no {query_type}")
         if query_type == "场次":
             cursor.execute(f'''SELECT COUNT(mid) as cnt
@@ -588,98 +702,98 @@ class DataManager:
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[0] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "胜率":
-            cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(team) as cnt
+            cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
-            if result[1]:
-                return result[0]
+            if result[1] > 0:
+                return result
             raise ValueError(f"no {query_type}")
         if query_type == "首杀":
             assert(time_type == "本赛季")
             result = self.get_stats(steamid)
             if result and result[18] == SeasonId and result[4] != 0:
-                return result[15]
+                return result[15], result[4]
             raise ValueError(f"no {query_type}")
         if query_type == "爆头":
             assert(time_type == "本赛季")
             result = self.get_stats(steamid)
             if result and result[18] == SeasonId and result[4] != 0:
-                return result[14]
+                return result[14], result[4]
             raise ValueError(f"no {query_type}")
         if query_type == "1v1":
             assert(time_type == "本赛季")
             result = self.get_stats(steamid)
             if result and result[18] == SeasonId and result[4] != 0:
-                return result[16]
+                return result[16], result[4]
             raise ValueError(f"no {query_type}")
         if query_type == "击杀":
-            cursor.execute(f'''SELECT AVG(kill) as avgkill
+            cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "死亡":
-            cursor.execute(f'''SELECT AVG(death) as avgdeath
+            cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "助攻":
-            cursor.execute(f'''SELECT AVG(assist) as avgassist
+            cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "尽力":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and winTeam != team  
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "带飞":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and winTeam == team  
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "炸鱼":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
@@ -687,36 +801,36 @@ class DataManager:
                                 and min(score1, score2) <= 6
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "演员":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                                 and isgroup == 1  
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "鼓励":
-            cursor.execute(f'''SELECT COUNT(*) AS total_count
+            cursor.execute(f'''SELECT COUNT(*) AS total_count, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局")
                                 and isgroup == 0
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                return result
             raise ValueError(f"no {query_type}")
         if query_type == "悲情":
-            cursor.execute(f'''SELECT COUNT(*) AS total_count
+            cursor.execute(f'''SELECT COUNT(mid) AS total_count
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
@@ -724,31 +838,86 @@ class DataManager:
                                 and pwRating > 1.2
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[0] > 0:
                return result
             raise ValueError(f"no {query_type}")
         if query_type == "馁站":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
                                 mode == "PVP自定义"
                                 and {time_sql} and {steamid_sql}
                             ''')
-            result = cursor.fetchone()[0]
-            if result:
+            result = cursor.fetchone()
+            if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")        
         if query_type == "上分":
-            cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(pvpScoreChange) as CNT
+            cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
                             (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
-            if result[1] != 0:
-                return result[0]
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "回均首杀":
+            cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
+        if query_type == "回均狙杀":
+            cursor.execute(f'''SELECT SUM(snipeNum) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
+        if query_type == "内鬼":
+            cursor.execute(f'''SELECT AVG(flashTeammate) as avgFT, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "投掷":
+            cursor.execute(f'''SELECT AVG(throwsCnt) as avgFT, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "白给":
+            cursor.execute(f'''SELECT SUM(entryKill - firstDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
             raise ValueError(f"no {query_type}")
         if query_type == "方差":
             cursor.execute(f"""
@@ -764,7 +933,7 @@ class DataManager:
                             """)
             result = cursor.fetchone()
             if result[1] > 1:
-                return result[0] / (result[1] - 1)
+                return (result[0] / (result[1] - 1), result[1])
             raise ValueError(f"no {query_type}")
         raise ValueError(f"unknown {query_type}")
     
@@ -827,9 +996,45 @@ matches = on_command("记录", rule=to_me(), priority=10, block=True)
 
 sql = on_command("sql", rule=to_me(), priority=10, block=True, permission=SUPERUSER)
 
+
+
+valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
+# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最小值，输出格式)
+rank_config = [
+    ("ELO", "ELO", 3, True, True, "m-10", "d0"),
+    ("rt", "rating", 3, False, True, "m-0.05", "d2"),
+    ("WE", "WE", 3, False, True, "m-1", "d2"),
+    ("ADR", "ADR", 3, True, True, "m-10", "d2"),
+    ("场次", "场次", 3, False, True, "v0", "d0"),
+    ("胜率", "胜率", 3, False, True, "v0", "p2"),
+    ("首杀", "首杀率", 3, True, True, "v0", "p0"),
+    ("爆头", "爆头率", 3, True, True, "v0", "p0"),
+    ("1v1", "1v1胜率", 3, True, True, "v0", "p0"),
+    ("击杀", "场均击杀", 3, False, True, "m-0.1", "d2"),
+    ("死亡", "场均死亡", 3, False, True, "m-0.1", "d2"),
+    ("助攻", "场均助攻", 3, False, True, "m-0.1", "d2"),
+    ("尽力", "未胜利平均rt", 4, False, True, "m-0.05", "d2"),
+    ("带飞", "胜利平均rt", 4, False, True, "m-0.05", "d2"),
+    ("炸鱼", "小分平均rt", 4, False, True, "m-0.05", "d2"),
+    ("演员", "组排平均rt", 4, False, False, "m-0.05", "d2"),
+    ("鼓励", "单排场次", 4, False, True, "v0", "d0"),
+    ("悲情", ">1.2rt未胜利场次", 4, False, True, "v0", "d0"),
+    ("馁站", "馁站平均rt", 4, False, True, "m-0.05", "d2"),
+    ("上分", "上分", 2, False, True, "m-1", "d0"),
+    ("回均首杀", "平均每回合首杀", 3, False, True, "m-0.5", "d2"),
+    ("回均狙杀", "平均每回合狙杀", 3, False, True, "m-0.5", "d2"),
+    ("内鬼", "场均闪白队友", 3, False, True, "m-0.5", "d1"),
+    ("投掷", "场均道具投掷数", 3, False, True, "m-0.5", "d1"),
+    ("白给", "平均每回合首杀-首死", 3, False, False, "m-0.01", "d2"),
+    ("方差", "rt方差", 4, False, True, "v0" , "d2"),
+]
+
+valid_rank = [a[0] for a in rank_config]
+
+
 @help.handle()
 async def help_function():
-    await help.finish("""可用指令：
+    await help.finish(f"""可用指令：
 /绑定 steamid64
 /解绑
 /更新数据
@@ -839,6 +1044,9 @@ async def help_function():
 默认查看自己记录。最多 20 条。如果只有一个参数，会优先判断是否为时间。默认时间为全部。
 /排名 [选项] (时间)
 查看指定时间指定排名，具体可选项可以使用 /排名 查看。
+
+(用户名匹配) 使用语法为 % 匹配任意长度串，_ 匹配长度为 1 串。
+可选 (时间)：{valid_time}
 """)
 
 @bind.handle()
@@ -906,36 +1114,6 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
     else:
         await show.finish("请先使用 /绑定 steamid64 绑定或者指定用户")
 
-
-
-valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
-# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最小值，输出格式)
-rank_config = [
-    ("ELO", "ELO", 3, True, True, "m-10", "d0"),
-    ("rt", "rating", 3, False, True, "m-0.05", "d2"),
-    ("WE", "WE", 3, False, True, "m-1", "d2"),
-    ("ADR", "ADR", 3, True, True, "m-10", "d2"),
-    ("场次", "场次", 3, False, True, "v0", "d0"),
-    ("胜率", "胜率", 3, False, True, "v0", "p2"),
-    ("首杀", "首杀率", 3, True, True, "v0", "p0"),
-    ("爆头", "爆头率", 3, True, True, "v0", "p0"),
-    ("1v1", "1v1胜率", 3, True, True, "v0", "p0"),
-    ("击杀", "场均击杀", 3, False, True, "m-0.1", "d2"),
-    ("死亡", "场均死亡", 3, False, True, "m-0.1", "d2"),
-    ("助攻", "场均助攻", 3, False, True, "m-0.1", "d2"),
-    ("尽力", "失败平均rt", 4, False, True, "m-0.05", "d2"),
-    ("带飞", "胜利平均rt", 4, False, True, "m-0.05", "d2"),
-    ("炸鱼", "小分平均rt", 4, False, True, "m-0.05", "d2"),
-    ("演员", "组排平均rt", 4, False, False, "m-0.05", "d2"),
-    ("鼓励", "单排场次", 4, False, True, "v0", "d0"),
-    ("悲情", ">1.2rt失败场次", 4, False, True, "v0", "d0"),
-    ("馁站", "馁站平均rt", 4, False, True, "m-0.05", "d2"),
-    ("上分", "上分", 2, False, True, "m-1", "d0"),
-    ("方差", "rt方差", 4, False, True, "v0" , "d2"),
-]
-
-valid_rank = [a[0] for a in rank_config]
-
 @rank.handle()
 async def rank_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
@@ -969,11 +1147,12 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                             except ValueError as e:
                                 print(e)
                                 pass
-                    datas = sorted(datas, key=lambda x: x[1], reverse=config[4])
+                    print(datas)
+                    datas = sorted(datas, key=lambda x: x[1][0], reverse=config[4])
                     if len(datas) == 0:
                         await rank.finish("没有人类了")
-                    max_value = datas[0][1] if config[4] else datas[-1][1]
-                    min_value = (datas[-1][1] if config[4] else datas[0][1])
+                    max_value = datas[0][1][0] if config[4] else datas[-1][1][0]
+                    min_value = datas[-1][1][0] if config[4] else datas[0][1][0]
                     if max_value == 0 and rank_type == "胜率":
                         await rank.finish("啊😰device😱啊这是人类啊😩哦，bro也没杀人😩这局...这局没有人类了😭只有🐍只有🐭，只有沟槽的野榜😭只有...啊！！！😭我在看什么😭我🌿你的😫🖐🏻️🎧")
                     if config[5].startswith("m"):
