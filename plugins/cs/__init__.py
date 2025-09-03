@@ -23,11 +23,13 @@ import tempfile
 import time
 import datetime
 import logging
+from openai import OpenAI
+import psutil
 
 logging.basicConfig(
-    filename='app.log',  # 日志文件
-    level=logging.INFO,  # 只记录 ERROR 及以上级别
-    format='%(asctime)s - %(levelname)s - %(message)s'  # 格式
+    filename='app.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
 
@@ -162,7 +164,7 @@ async def gen_rank_html(datas, min_value, max_value, title, format):
         if len(value) == 1:
             temp_html = temp_html.replace('_VALUE_', output(value[0], format))
         else:
-            temp_html = temp_html.replace('_VALUE_', f"{output(value[0], format)},{value[1]}场")
+            temp_html = temp_html.replace('_VALUE_', f"{output(value[0], format)} <span style='font-size:20px;'>{value[1]}场</span>")
         html += temp_html
         sum += value[0]
     html += rank_content[2]
@@ -187,7 +189,7 @@ async def gen_matches_html(datas, steamid, name):
     html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
     html = html.replace("_name_", name)
     for match in datas:
-        (_,_,seasonId,mapName,team,winTeam,score1,score2,pwRating,we,timeStamp,kill,death,assist,_,mode,pvpScore,pvpScoreChange,pvpMvp,isgroup,greenMatch) = match
+        (mid,steamid,seasonId,mapName,team,winTeam,score1,score2,pwRating,we,timeStamp,kill,death,assist,duration,mode,pvpScore,pvpStars,pvpScoreChange,pvpMvp,isgroup,greenMatch,entryKill,headShot,headShotRatio,flashTeammate,flashSuccess,twoKill,threeKill,fourKill,fiveKill,vs1,vs2,vs3,vs4,vs5,dmgArmor,dmgHealth,adpr,rws,teamId,throwsCnt,snipeNum,firstDeath) = match
         temp_html = matches_content[1]
         myScore = score1 if team == 1 else score2
         opScore = score2 if team == 1 else score1
@@ -328,6 +330,14 @@ class DataManager:
             PRIMARY KEY (mid, steamid)
         )
         ''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ai_mem (
+            gid TEXT,
+            mem TEXT,
+            PRIMARY KEY (gid)
+        )
+        ''')
         self.conn.commit()
     
     def bind(self, uid, steamid):
@@ -373,7 +383,6 @@ class DataManager:
         data = result.json()
         if data["statusCode"] != 0:
             logging.error(f"爬取失败  {mid} {data}")
-            self.conn.rollback()
             raise RuntimeError("爬取失败：" + data["errorMessage"])
         base = data['data']['base']
         count = {}
@@ -440,6 +449,7 @@ class DataManager:
                 player['vs5'], player['dmgArmor'], player['dmgHealth'], player['adpr'], player['rws'],
                 player['teamId'], player['throwsCnt'], player['snipeNum'], player['firstDeath'])
             )
+        self.conn.commit()
         return 1
 
     def update_stats(self, steamid):
@@ -497,7 +507,6 @@ class DataManager:
                     ddata = result.json()
                     if ddata["statusCode"] != 0:
                         logging.error(f"爬取失败 {steamid} {SeasonID} {page} {data}")
-                        self.conn.rollback()
                         return (False, "爬取失败：" + data["errorMessage"])
                     time.sleep(0.1)
                     for match in ddata['data']['matchList']:
@@ -690,10 +699,15 @@ class DataManager:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "ADR":
-            assert(time_type == "本赛季")
-            result = self.get_stats(steamid)
-            if result and result[18] == SeasonId and result[4] != 0:
-                return result[13], result[4]
+            cursor.execute(f'''SELECT AVG(adpr) as avgADR, COUNT(mid) as cnt
+                                FROM 'matches'
+                                WHERE 
+                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
             raise ValueError(f"no {query_type}")
         if query_type == "场次":
             cursor.execute(f'''SELECT COUNT(mid) as cnt
@@ -724,10 +738,15 @@ class DataManager:
                 return result[15], result[4]
             raise ValueError(f"no {query_type}")
         if query_type == "爆头":
-            assert(time_type == "本赛季")
-            result = self.get_stats(steamid)
-            if result and result[18] == SeasonId and result[4] != 0:
-                return result[14], result[4]
+            cursor.execute(f'''SELECT SUM(headShot) as totHS, SUM(kill) as totK, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
             raise ValueError(f"no {query_type}")
         if query_type == "1v1":
             assert(time_type == "本赛季")
@@ -818,7 +837,7 @@ class DataManager:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "鼓励":
-            cursor.execute(f'''SELECT COUNT(*) AS total_count, COUNT(mid) as cnt
+            cursor.execute(f'''SELECT COUNT(mid) AS total_count
                                 FROM 'matches'
                                 WHERE 
                                 (mode =="天梯组排对局" or mode == "天梯单排对局")
@@ -886,6 +905,17 @@ class DataManager:
             if result[2] > 0:
                 return (result[0] / result[1], result[2])
             raise ValueError(f"no {query_type}")
+        if query_type == "多杀":
+            cursor.execute(f'''SELECT SUM(twoKill + threeKill + fourKill + fiveKill) as totMK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
         if query_type == "内鬼":
             cursor.execute(f'''SELECT AVG(flashTeammate) as avgFT, COUNT(mid) as cnt
                             FROM 'matches'
@@ -908,6 +938,17 @@ class DataManager:
             if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
+        if query_type == "闪白":
+            cursor.execute(f'''SELECT AVG(flashSuccess) as avgFS, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
         if query_type == "白给":
             cursor.execute(f'''SELECT SUM(entryKill - firstDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt
                             FROM 'matches'
@@ -919,7 +960,7 @@ class DataManager:
             if result[2] > 0:
                 return (result[0] / result[1], result[2])
             raise ValueError(f"no {query_type}")
-        if query_type == "方差":
+        if query_type == "方差rt":
             cursor.execute(f"""
                                 WITH filtered_matches AS (
                                     SELECT pwRating FROM 'matches'
@@ -935,8 +976,91 @@ class DataManager:
             if result[1] > 1:
                 return (result[0] / (result[1] - 1), result[1])
             raise ValueError(f"no {query_type}")
+        if query_type == "方差ADR":
+            cursor.execute(f"""
+                                WITH filtered_matches AS (
+                                    SELECT adpr FROM 'matches'
+                                    WHERE 
+                                    (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                    and {time_sql} and {steamid_sql}
+                                )
+                                SELECT SUM((adpr - avg_val) * (adpr - avg_val)) AS SUM2, COUNT(adpr) AS CNT
+                                FROM filtered_matches, 
+                                    (SELECT AVG(adpr) AS avg_val FROM filtered_matches) AS sub
+                            """)
+            result = cursor.fetchone()
+            if result[1] > 1:
+                return (result[0] / (result[1] - 1), result[1])
+            raise ValueError(f"no {query_type}")
         raise ValueError(f"unknown {query_type}")
-    
+
+    def get_all_value(self, steamid, time_type):
+        time_sql = self.get_time_sql(time_type)
+        steamid_sql = f"steamid == '{steamid}'"
+        cursor = self.conn.cursor()
+        cursor.execute(f'''SELECT 
+                            AVG(pwRating) as avgRating,
+                            MAX(pwRating) as maxRating,
+                            MIN(pwRating) as minRating,
+                            AVG(we) as avgwe,
+                            AVG(adpr) as avgADR,
+                            AVG(winTeam == team) as wr,
+                            AVG(kill) as avgkill,
+                            AVG(death) as avgdeath,
+                            AVG(assist) as avgassist,
+                            SUM(pvpScoreChange) as ScoreDelta,
+                            SUM(entryKill) as totEK,
+                            SUM(firstDeath) as totFD,
+                            SUM(snipeNum) as totSK,
+                            SUM(twoKill + threeKill + fourKill + fiveKill) as totMK,
+                            AVG(throwsCnt) as avgTR,
+                            AVG(flashTeammate) as avgFT,
+                            AVG(flashSuccess) as avgFS,
+                            SUM(score1 + score2) as totR,
+                            COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                        ''')
+        return cursor.fetchone()
+        
+    def get_propmt(self, steamid):
+        result = self.get_stats(steamid)
+        if not result:
+            return None
+        (steamid, _, name, pvpScore, cnt, kd, winRate, pwRating, avgWe, kills, deaths, assists, rws, adr, headShotRatio, entryKillRatio, vs1WinRate, lasttime, _) = result
+        score = "未定段" if pvpScore == 0 else f"{pvpScore}"
+        prompt = f"用户名 {name}，当前天梯分数 {score}，本赛季1v1胜率 {vs1WinRate: .2f}，本赛季首杀率 {entryKillRatio: .2f}，"
+        for time_type in ["本赛季"]:
+            (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = self.get_all_value(steamid, time_type)
+            prompt += f"{time_type}进行了{cnt}把比赛"
+            if cnt == 0:
+                continue
+            prompt += f"{time_type}平均rating {avgRating :.2f}，"
+            prompt += f"{time_type}最高rating {maxRating :.2f}，"
+            prompt += f"{time_type}最低rating {minRating :.2f}，"
+            prompt += f"{time_type}平均WE {avgwe :.1f}，"
+            prompt += f"{time_type}平均ADR {avgADR :.0f}，"
+            prompt += f"{time_type}胜率 {wr :.2f}，"
+            prompt += f"{time_type}场均击杀 {avgkill :.1f}，"
+            prompt += f"{time_type}场均死亡 {avgdeath :.1f}，"
+            prompt += f"{time_type}场均助攻 {avgassist :.1f}，"
+            prompt += f"{time_type}分数变化 {ScoreDelta :+.0f}，"
+            prompt += f"{time_type}回均首杀 {totEK / totR :+.2f}，"
+            prompt += f"{time_type}回均首死 {totFD / totR :+.2f}，"
+            prompt += f"{time_type}回均狙杀 {totSK / totR :+.2f}，"
+            prompt += f"{time_type}多杀回合占比 {totMK / totR :+.2f}，"
+            prompt += f"{time_type}场均道具投掷 {avgTR :+.2f}，"
+            prompt += f"{time_type}场均闪白对手 {avgFS :+.2f}，"
+            prompt += f"{time_type}场均闪白队友 {avgFT :+.2f}，"
+            try:
+                var = self.get_value(steamid, "方差rt", time_type)[0]
+                prompt += f"{time_type}rating方差 {var :+.2f}，"
+            except RuntimeError as e:
+                pass
+        return prompt
+
     async def get_matches_image(self, steamid, time_type, LIMIT = 20):
         cursor = self.conn.cursor()
         cursor.execute(f'''SELECT * FROM 'matches'
@@ -950,6 +1074,28 @@ class DataManager:
             return await gen_matches_html(result, steamid, self.get_stats(steamid)[2])
         else:
             return None
+
+    def get_mem(self, gid):
+        if gid.startswith("group_"):
+            gid = gid.split("_")[1]
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'SELECT mem FROM ai_mem WHERE gid = ?',
+                (gid, )
+            )
+            if result := cursor.fetchone():
+              return result[0]
+        return ""
+
+    def set_mem(self, gid, mem):
+        if gid.startswith("group_"):
+            gid = gid.split("_")[1]
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'INSERT OR REPLACE INTO  ai_mem (gid, mem) VALUES (?, ?)',
+                (gid, mem)
+            )
+            self.conn.commit()
 
     def query(self, sql):
         cursor = self.conn.cursor()
@@ -996,37 +1142,50 @@ matches = on_command("记录", rule=to_me(), priority=10, block=True)
 
 sql = on_command("sql", rule=to_me(), priority=10, block=True, permission=SUPERUSER)
 
+aiask = on_command("ai", rule=to_me(), priority=10, block=True)
 
+aiasktb = on_command("aitb", rule=to_me(), priority=10, block=True)
+
+aiaskxmm = on_command("aixmm", rule=to_me(), priority=10, block=True)
+
+aiaskxhs = on_command("aixhs", rule=to_me(), priority=10, block=True)
+
+aimem = on_command("ai记忆", rule=to_me(), priority=10, block=True)
+
+getstatus = on_command("状态", rule=to_me(), priority=10, block=True)
 
 valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
 # (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最小值，输出格式)
 rank_config = [
-    ("ELO", "ELO", 3, True, True, "m-10", "d0"),
-    ("rt", "rating", 3, False, True, "m-0.05", "d2"),
-    ("WE", "WE", 3, False, True, "m-1", "d2"),
-    ("ADR", "ADR", 3, True, True, "m-10", "d2"),
-    ("场次", "场次", 3, False, True, "v0", "d0"),
-    ("胜率", "胜率", 3, False, True, "v0", "p2"),
-    ("首杀", "首杀率", 3, True, True, "v0", "p0"),
-    ("爆头", "爆头率", 3, True, True, "v0", "p0"),
-    ("1v1", "1v1胜率", 3, True, True, "v0", "p0"),
-    ("击杀", "场均击杀", 3, False, True, "m-0.1", "d2"),
-    ("死亡", "场均死亡", 3, False, True, "m-0.1", "d2"),
-    ("助攻", "场均助攻", 3, False, True, "m-0.1", "d2"),
-    ("尽力", "未胜利平均rt", 4, False, True, "m-0.05", "d2"),
-    ("带飞", "胜利平均rt", 4, False, True, "m-0.05", "d2"),
-    ("炸鱼", "小分平均rt", 4, False, True, "m-0.05", "d2"),
-    ("演员", "组排平均rt", 4, False, False, "m-0.05", "d2"),
-    ("鼓励", "单排场次", 4, False, True, "v0", "d0"),
-    ("悲情", ">1.2rt未胜利场次", 4, False, True, "v0", "d0"),
-    ("馁站", "馁站平均rt", 4, False, True, "m-0.05", "d2"),
-    ("上分", "上分", 2, False, True, "m-1", "d0"),
-    ("回均首杀", "平均每回合首杀", 3, False, True, "m-0.5", "d2"),
-    ("回均狙杀", "平均每回合狙杀", 3, False, True, "m-0.5", "d2"),
-    ("内鬼", "场均闪白队友", 3, False, True, "m-0.5", "d1"),
-    ("投掷", "场均道具投掷数", 3, False, True, "m-0.5", "d1"),
-    ("白给", "平均每回合首杀-首死", 3, False, False, "m-0.01", "d2"),
-    ("方差", "rt方差", 4, False, True, "v0" , "d2"),
+    ("ELO", "ELO", "本赛季", True, True, "m-10", "d0"),
+    ("rt", "rating", "本赛季", False, True, "m-0.05", "d2"),
+    ("WE", "WE", "本赛季", False, True, "m-1", "d2"),
+    ("ADR", "ADR", "本赛季", False, True, "m-10", "d2"),
+    ("场次", "场次", "本赛季", False, True, "v0", "d0"),
+    ("胜率", "胜率", "本赛季", False, True, "v0", "p2"),
+    ("首杀", "首杀率", "本赛季", True, True, "v0", "p0"),
+    ("爆头", "爆头率", "本赛季", False, True, "v0", "p0"),
+    ("1v1", "1v1胜率", "本赛季", True, True, "v0", "p0"),
+    ("击杀", "场均击杀", "本赛季", False, True, "m-0.1", "d2"),
+    ("死亡", "场均死亡", "本赛季", False, True, "m-0.1", "d2"),
+    ("助攻", "场均助攻", "本赛季", False, True, "m-0.1", "d2"),
+    ("尽力", "未胜利平均rt", "两赛季", False, True, "m-0.05", "d2"),
+    ("带飞", "胜利平均rt", "两赛季", False, True, "m-0.05", "d2"),
+    ("炸鱼", "小分平均rt", "两赛季", False, True, "m-0.05", "d2"),
+    ("演员", "组排平均rt", "两赛季", False, False, "m-0.05", "d2"),
+    ("鼓励", "单排场次", "两赛季", False, True, "v0", "d0"),
+    ("悲情", ">1.2rt未胜利场次", "两赛季", False, True, "v0", "d0"),
+    ("馁站", "馁站平均rt", "两赛季", False, True, "m-0.05", "d2"),
+    ("上分", "上分", "本周", False, True, "m-1", "d0"),
+    ("回均首杀", "平均每回合首杀", "本赛季", False, True, "m-0.01", "d2"),
+    ("回均狙杀", "平均每回合狙杀", "本赛季", False, True, "m-0.01", "d2"),
+    ("多杀", "多杀回合占比", "本赛季", False, True, "m-0.01", "p0"),
+    ("内鬼", "场均闪白队友", "本赛季", False, True, "m-0.5", "d1"),
+    ("投掷", "场均道具投掷数", "本赛季", False, True, "m-0.5", "d1"),
+    ("闪白", "场均闪白数", "本赛季", False, True, "m-0.5", "d1"),
+    ("白给", "平均每回合首杀-首死", "本赛季", False, False, "m-0.01", "d2"),
+    ("方差rt", "rt方差", "两赛季", False, True, "v0" , "d2"),
+    ("方差ADR", "ADR方差", "两赛季", False, True, "v0" , "d0"),
 ]
 
 valid_rank = [a[0] for a in rank_config]
@@ -1044,7 +1203,13 @@ async def help_function():
 默认查看自己记录。最多 20 条。如果只有一个参数，会优先判断是否为时间。默认时间为全部。
 /排名 [选项] (时间)
 查看指定时间指定排名，具体可选项可以使用 /排名 查看。
-
+/ai /aitb /aixmm /aixhs [内容]
+向ai提问，风格为 普通ai，贴吧老哥，可爱女友，小红书
+/ai记忆 [内容]
+向ai增加记忆内容
+/状态
+查询服务器状态
+                      
 (用户名匹配) 使用语法为 % 匹配任意长度串，_ 匹配长度为 1 串。
 可选 (时间)：{valid_time}
 """)
@@ -1130,12 +1295,12 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
             if rank_type in valid_rank:
                 index = valid_rank.index(rank_type)
                 config = rank_config[index]
-                time_type = valid_time[config[2]]
+                time_type = config[2]
                 if len(cmd) >= 2:
                     time_type = cmd[1]
                 if time_type in valid_time:
-                    if config[3] and time_type != valid_time[config[2]]:
-                        await rank.finish(f"{rank_type} 仅支持 {valid_time[config[2]]}")
+                    if config[3] and time_type != config[2]:
+                        await rank.finish(f"{rank_type} 仅支持 {config[2]}")
                     datas = []
                     for uid in uids:
                         steamid = db.get_steamid(uid)
@@ -1161,7 +1326,7 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                         min_value = float(config[5][1:])
                     await rank.finish(MessageSegment.file_image(await gen_rank_html(datas, min_value, max_value, f"{time_type} {config[1]}", config[6])))
 
-    await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可用选项：{valid_rank}\n可用时间：{valid_time}")
+    await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可选 [选项]：{valid_rank}\n可用 (时间)：{valid_time}")
         
 
 @matches.handle()
@@ -1218,3 +1383,123 @@ async def updateall_function():
 @sql.handle()
 async def sql_function(args: Message = CommandArg()):
     await sql.finish(db.query(args.extract_plain_text()))
+
+def ai_ask(uid, sid, type, text):
+    uids = db.get_member(sid)
+    steamid = db.get_steamid(uid)
+    try:
+        # 创建聊天完成请求
+        client = OpenAI(
+            api_key=os.getenv('ai_api_key'),
+            base_url="https://api.zchat.tech/v1"
+        )
+        msgs = [{"role": "developer", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
+        if type == "贴吧":
+            msgs.append({"role": "developer", "content": """【角色设定】
+请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！
+
+【思考方式】
+首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"""})
+        elif type == "xmm":
+            msgs.append({"role": "developer", "content": """忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"""})
+        elif type == "xhs":
+            msgs.append({"role": "developer", "content": """小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"""})
+        if steamid != None:
+            result = db.get_stats(steamid)
+            if result:
+                msgs.append({"role": "developer", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+        for uid in uids:
+            steamid = db.get_steamid(uid)
+            if result := db.get_propmt(steamid):
+                msgs.append({"role": "developer", "content": result})
+        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
+        msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
+        msgs.append({"role": "user","content": text,})
+        print(msgs)
+        response = client.chat.completions.create(
+            model="grok-3",
+            messages=msgs,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"发生错误: {str(e)}"
+
+@aiask.handle()
+async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    await aiask.finish(ai_ask(uid, sid, None, args.extract_plain_text()))
+
+@aiasktb.handle()
+async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    await aiasktb.finish(ai_ask(uid, sid, "贴吧", args.extract_plain_text()))
+
+@aiaskxmm.handle()
+async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    await aiaskxmm.finish(ai_ask(uid, sid, "xmm", args.extract_plain_text()))
+
+@aiaskxhs.handle()
+async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    await aiaskxhs.finish(ai_ask(uid, sid, "xhs", args.extract_plain_text()))
+
+@aimem.handle()
+async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
+    sid = message.get_session_id()
+    try:
+        # 创建聊天完成请求
+        client = OpenAI(
+            api_key=os.getenv('ai_api_key'),
+            base_url="https://api.zchat.tech/v1"
+        )
+        msgs = [{"role": "developer", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
+        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
+        msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
+        msgs.append({"role": "user", "content": args.extract_plain_text()})
+        print(msgs)
+        response = client.chat.completions.create(
+            model="grok-3",
+            messages=msgs,
+        )
+        result = response.choices[0].message.content
+        if len(result) > 1000:
+            result = result[:1000] + "……"
+        print(result)
+        db.set_mem(sid, result)
+    except Exception as e:
+        result = f"发生错误: {str(e)}"
+    await aimem.finish(result)
+
+@getstatus.handle()
+async def getstatus_function():
+    cpu_usage = psutil.cpu_percent()
+    
+    # 获取内存信息
+    memory = psutil.virtual_memory()
+    total_mem = memory.total / (1024 **3)  # 转换为GB
+    used_mem = memory.used / (1024** 3)
+    available_mem = memory.available / (1024 **3)
+    mem_usage = memory.percent
+    
+    # 组织结果
+    status = {
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'cpu_usage_percent': cpu_usage,
+        'memory': {
+            'total_gb': round(total_mem, 2),
+            'used_gb': round(used_mem, 2),
+            'available_gb': round(available_mem, 2),
+            'usage_percent': mem_usage
+        }
+    }
+    await getstatus.finish(f"""=== 系统状态 ({status['timestamp']}) ===
+    CPU 总使用率: {status['cpu_usage_percent']}%
+    内存总容量: {status['memory']['total_gb']}GB
+    已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
+    可用内存: {status['memory']['available_gb']}GB
+    ----------------------------------------""")
