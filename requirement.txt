@@ -4,7 +4,6 @@ numpy
 requests
 nb-cli
 openai
-nonebot-adapter-qq
+nonebot-adapter-onebot
 nonebot2[fastapi]
-nonebot2[httpx]
 nonebot2[websockets]

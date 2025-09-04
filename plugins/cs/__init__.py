@@ -1,7 +1,6 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.qq import MessageEvent, MessageSegment
-from nonebot.adapters import Message
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.params import CommandArg
 from nonebot import on_command
 from nonebot.rule import to_me
@@ -25,6 +24,8 @@ import datetime
 import logging
 from openai import OpenAI
 import psutil
+import json
+from fuzzywuzzy import process
 
 logging.basicConfig(
     filename='app.log',
@@ -152,7 +153,7 @@ def output(val, format):
     elif format.startswith("p"):
         return f"{val * 100: .{int(format[1:])}f}%"
 
-async def gen_rank_html(datas, min_value, max_value, title, format):
+async def gen_rank_html1(datas, min_value, max_value, title, format):
     html = rank_content[0]
     sum = 0
     for (steamid, value) in datas:
@@ -161,6 +162,43 @@ async def gen_rank_html(datas, min_value, max_value, title, format):
         temp_html = temp_html.replace('_AVATAR_', path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
         temp_html = temp_html.replace('_COLOR_', red_to_green_color(score))
         temp_html = temp_html.replace('_LEN_', f"{round(500 * score)}")
+        temp_html = temp_html.replace('_LEFTPX_', f"10")
+        if len(value) == 1:
+            temp_html = temp_html.replace('_VALUE_', output(value[0], format))
+        else:
+            temp_html = temp_html.replace('_VALUE_', f"{output(value[0], format)} <span style='font-size:20px;'>{value[1]}场</span>")
+        html += temp_html
+        sum += value[0]
+    html += rank_content[2]
+    avg = sum / len(datas)
+    score = (avg - min_value) / (max_value - min_value)
+    html = html.replace("_AVG_", output(avg, format))
+    html = html.replace("_AVGPOS_", f"{round(score * 500) + 98}")
+    html = html.replace("_AVGLEN_", f"{round(len(datas) * 90) + 40}")
+    html = html.replace("_TITLE_", title)
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+        temp_file.write(html)
+        temp_file.close()
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 200 + len(datas) * 90)
+        os.remove(temp_file.name)
+    return BytesIO(img)
+
+async def gen_rank_html2(datas, min_value, max_value, title, format):
+    html = rank_content[0]
+    sum = 0
+    zeroscore = - min_value / (max_value - min_value)
+    for (steamid, value) in datas:
+        score = (value[0] - min_value) / (max_value - min_value)
+        temp_html = rank_content[1]
+        temp_html = temp_html.replace('_AVATAR_', path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+        temp_html = temp_html.replace('_COLOR_', red_to_green_color(score))
+        if value[0] >= 0:
+            temp_html = temp_html.replace('_LEN_', f"{round(500 * (score - zeroscore))}")
+            temp_html = temp_html.replace('_LEFTPX_', f"{round(500 * zeroscore) + 10}")
+        else:
+            temp_html = temp_html.replace('_LEN_', f"{round(500 * (zeroscore - score))}")
+            temp_html = temp_html.replace('_LEFTPX_', f"{round(500 * score) + 10}")
+
         if len(value) == 1:
             temp_html = temp_html.replace('_VALUE_', output(value[0], format))
         else:
@@ -193,7 +231,7 @@ async def gen_matches_html(datas, steamid, name):
         temp_html = matches_content[1]
         myScore = score1 if team == 1 else score2
         opScore = score2 if team == 1 else score1
-        Result = 2 if team == winTeam else (1 if winTeam == -1 else 0)
+        Result = 2 if team == winTeam else (1 if (winTeam != 1 and winTeam != 2) else 0)
         temp_html = temp_html.replace("_SCORERESULT_", ["负", "平", "胜"][Result])
         temp_html = temp_html.replace("_TIME_", datetime.datetime.fromtimestamp(timeStamp).strftime("%m-%d %H:%M"))
         temp_html = temp_html.replace("_SCORE1_", f"{myScore}")
@@ -646,6 +684,14 @@ class DataManager:
             members = [row[0] for row in cursor.fetchall()]
             return members
         return []
+    
+    def get_member_steamid(self, gid):
+        uids = self.get_member(gid)
+        steamids = set()
+        for uid in uids:
+            if steamid := self.get_steamid(uid):
+                steamids.add(steamid)
+        return list(steamids)
 
     def get_time_sql(self, time_type):
         if time_type == "今日":
@@ -894,6 +940,17 @@ class DataManager:
             if result[2] > 0:
                 return (result[0] / result[1], result[2])
             raise ValueError(f"no {query_type}")
+        if query_type == "回均首死":
+            cursor.execute(f'''SELECT SUM(firstDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
         if query_type == "回均狙杀":
             cursor.execute(f'''SELECT SUM(snipeNum) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
                             FROM 'matches'
@@ -1011,6 +1068,7 @@ class DataManager:
                             SUM(pvpScoreChange) as ScoreDelta,
                             SUM(entryKill) as totEK,
                             SUM(firstDeath) as totFD,
+                            AVG(headShot) as avgHS,
                             SUM(snipeNum) as totSK,
                             SUM(twoKill + threeKill + fourKill + fiveKill) as totMK,
                             AVG(throwsCnt) as avgTR,
@@ -1025,15 +1083,15 @@ class DataManager:
                         ''')
         return cursor.fetchone()
         
-    def get_propmt(self, steamid):
+    def get_propmt(self, steamid, times = ['本赛季']):
         result = self.get_stats(steamid)
         if not result:
             return None
         (steamid, _, name, pvpScore, cnt, kd, winRate, pwRating, avgWe, kills, deaths, assists, rws, adr, headShotRatio, entryKillRatio, vs1WinRate, lasttime, _) = result
         score = "未定段" if pvpScore == 0 else f"{pvpScore}"
         prompt = f"用户名 {name}，当前天梯分数 {score}，本赛季1v1胜率 {vs1WinRate: .2f}，本赛季首杀率 {entryKillRatio: .2f}，"
-        for time_type in ["本赛季"]:
-            (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = self.get_all_value(steamid, time_type)
+        for time_type in times:
+            (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = self.get_all_value(steamid, time_type)
             prompt += f"{time_type}进行了{cnt}把比赛"
             if cnt == 0:
                 continue
@@ -1050,6 +1108,7 @@ class DataManager:
             prompt += f"{time_type}回均首杀 {totEK / totR :+.2f}，"
             prompt += f"{time_type}回均首死 {totFD / totR :+.2f}，"
             prompt += f"{time_type}回均狙杀 {totSK / totR :+.2f}，"
+            prompt += f"{time_type}爆头率 {avgHS / avgkill :+.2f}，"
             prompt += f"{time_type}多杀回合占比 {totMK / totR :+.2f}，"
             prompt += f"{time_type}场均道具投掷 {avgTR :+.2f}，"
             prompt += f"{time_type}场均闪白对手 {avgFS :+.2f}，"
@@ -1057,7 +1116,7 @@ class DataManager:
             try:
                 var = self.get_value(steamid, "方差rt", time_type)[0]
                 prompt += f"{time_type}rating方差 {var :+.2f}，"
-            except RuntimeError as e:
+            except ValueError as e:
                 pass
         return prompt
 
@@ -1097,6 +1156,24 @@ class DataManager:
             )
             self.conn.commit()
 
+    def get_username(self, uid):
+        if steamid := self.get_steamid(uid):
+            if result := self.get_stats(steamid):
+                return result[2]
+        return None
+
+    def work_msg(self, msg):
+        result = ""
+        for seg in msg:
+            if seg.type == "text":
+                result += seg.data['text']
+            elif seg.type == "at":
+                if name := self.get_username(seg.data['qq']):
+                    result += name
+                else:
+                    result += "<未找到用户>"
+        return result.strip()
+
     def query(self, sql):
         cursor = self.conn.cursor()
         cursor.execute(sql)
@@ -1124,68 +1201,94 @@ config = get_plugin_config(Config)
 
 db = DataManager()
 
-help = on_command("帮助", rule=to_me(), priority=20, block=True)
+help = on_command("帮助", priority=20, block=True)
 
-bind = on_command("绑定", rule=to_me(), priority=10, block=True)
+bind = on_command("绑定", priority=10, block=True)
 
-unbind = on_command("解绑", rule=to_me(), priority=10, block=True)
+unbind = on_command("解绑", priority=10, block=True)
 
-update = on_command("更新数据", rule=to_me(), priority=10, block=True)
+update = on_command("更新数据", priority=10, block=True)
 
-show = on_command("查看数据", rule=to_me(), priority=10, block=True)
+show = on_command("查看数据", priority=10, block=True)
 
-rank = on_command("排名", rule=to_me(), priority=10, block=True)
+rank = on_command("排名", priority=10, block=True)
 
-updateall = on_command("全部更新", rule=to_me(), priority=10, block=True, permission=SUPERUSER)
+updateall = on_command("全部更新", priority=10, block=True, permission=SUPERUSER)
 
-matches = on_command("记录", rule=to_me(), priority=10, block=True)
+matches = on_command("记录", priority=10, block=True)
 
-sql = on_command("sql", rule=to_me(), priority=10, block=True, permission=SUPERUSER)
+sql = on_command("sql", priority=10, block=True, permission=SUPERUSER)
 
-aiask = on_command("ai", rule=to_me(), priority=10, block=True)
+aiask = on_command("ai", priority=10, block=True)
 
-aiasktb = on_command("aitb", rule=to_me(), priority=10, block=True)
+aiasktb = on_command("aitb", priority=10, block=True)
 
-aiaskxmm = on_command("aixmm", rule=to_me(), priority=10, block=True)
+aiaskxmm = on_command("aixmm", priority=10, block=True)
 
-aiaskxhs = on_command("aixhs", rule=to_me(), priority=10, block=True)
+aiaskxhs = on_command("aixhs", priority=10, block=True)
 
-aimem = on_command("ai记忆", rule=to_me(), priority=10, block=True)
+aiasktmr = on_command("aitmr", priority=10, block=True)
 
-getstatus = on_command("状态", rule=to_me(), priority=10, block=True)
+aiasktest = on_command("aitest", priority=10, block=True, permission=SUPERUSER)
+
+aimem = on_command("ai记忆", priority=10, block=True)
+
+getstatus = on_command("状态", priority=10, block=True)
+
+class MinAdd:
+    def __init__(self, val):
+        self.val = val
+    def getval(self, minvalue, maxvalue):
+        return minvalue + self.val, maxvalue
+class Fix:
+    def __init__(self, val):
+        self.val = val
+    def getval(self, minvalue, maxvalue):
+        return self.val, maxvalue
+class ZeroIn:
+    def __init__(self, val):
+        self.val = val
+    def getval(self, minvalue, maxvalue):
+        minvalue = min(0, minvalue)
+        maxvalue = max(0, maxvalue)
+        if minvalue == maxvalue:
+            minvalue = self.val
+        return minvalue, maxvalue
+
 
 valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
-# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最小值，输出格式)
+# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最值，输出格式，调用模板)
 rank_config = [
-    ("ELO", "ELO", "本赛季", True, True, "m-10", "d0"),
-    ("rt", "rating", "本赛季", False, True, "m-0.05", "d2"),
-    ("WE", "WE", "本赛季", False, True, "m-1", "d2"),
-    ("ADR", "ADR", "本赛季", False, True, "m-10", "d2"),
-    ("场次", "场次", "本赛季", False, True, "v0", "d0"),
-    ("胜率", "胜率", "本赛季", False, True, "v0", "p2"),
-    ("首杀", "首杀率", "本赛季", True, True, "v0", "p0"),
-    ("爆头", "爆头率", "本赛季", False, True, "v0", "p0"),
-    ("1v1", "1v1胜率", "本赛季", True, True, "v0", "p0"),
-    ("击杀", "场均击杀", "本赛季", False, True, "m-0.1", "d2"),
-    ("死亡", "场均死亡", "本赛季", False, True, "m-0.1", "d2"),
-    ("助攻", "场均助攻", "本赛季", False, True, "m-0.1", "d2"),
-    ("尽力", "未胜利平均rt", "两赛季", False, True, "m-0.05", "d2"),
-    ("带飞", "胜利平均rt", "两赛季", False, True, "m-0.05", "d2"),
-    ("炸鱼", "小分平均rt", "两赛季", False, True, "m-0.05", "d2"),
-    ("演员", "组排平均rt", "两赛季", False, False, "m-0.05", "d2"),
-    ("鼓励", "单排场次", "两赛季", False, True, "v0", "d0"),
-    ("悲情", ">1.2rt未胜利场次", "两赛季", False, True, "v0", "d0"),
-    ("馁站", "馁站平均rt", "两赛季", False, True, "m-0.05", "d2"),
-    ("上分", "上分", "本周", False, True, "m-1", "d0"),
-    ("回均首杀", "平均每回合首杀", "本赛季", False, True, "m-0.01", "d2"),
-    ("回均狙杀", "平均每回合狙杀", "本赛季", False, True, "m-0.01", "d2"),
-    ("多杀", "多杀回合占比", "本赛季", False, True, "m-0.01", "p0"),
-    ("内鬼", "场均闪白队友", "本赛季", False, True, "m-0.5", "d1"),
-    ("投掷", "场均道具投掷数", "本赛季", False, True, "m-0.5", "d1"),
-    ("闪白", "场均闪白数", "本赛季", False, True, "m-0.5", "d1"),
-    ("白给", "平均每回合首杀-首死", "本赛季", False, False, "m-0.01", "d2"),
-    ("方差rt", "rt方差", "两赛季", False, True, "v0" , "d2"),
-    ("方差ADR", "ADR方差", "两赛季", False, True, "v0" , "d0"),
+    ("ELO", "天梯分数", "本赛季", True, True, MinAdd(-10), "d0", 1),
+    ("rt", "rating", "本赛季", False, True, MinAdd(-0.05), "d2", 1),
+    ("WE", "WE", "本赛季", False, True, MinAdd(-1), "d2", 1),
+    ("ADR", "ADR", "本赛季", False, True, MinAdd(-10), "d2", 1),
+    ("场次", "场次", "本赛季", False, True, Fix(0), "d0", 1),
+    ("胜率", "胜率", "本赛季", False, True, Fix(0), "p2", 1),
+    ("首杀", "首杀率", "本赛季", True, True, Fix(0), "p0", 1),
+    ("爆头", "爆头率", "本赛季", False, True, Fix(0), "p0", 1),
+    ("1v1", "1v1胜率", "本赛季", True, True, Fix(0), "p0", 1),
+    ("击杀", "场均击杀", "本赛季", False, True, MinAdd(-0.1), "d2", 1),
+    ("死亡", "场均死亡", "本赛季", False, True, MinAdd(-0.1), "d2", 1),
+    ("助攻", "场均助攻", "本赛季", False, True, MinAdd(-0.1), "d2", 1),
+    ("尽力", "未胜利平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
+    ("带飞", "胜利平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
+    ("炸鱼", "小分平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
+    ("演员", "组排平均rt", "两赛季", False, False, MinAdd(-0.05), "d2", 1),
+    ("鼓励", "单排场次", "两赛季", False, True, Fix(0), "d0", 1),
+    ("悲情", ">1.2rt未胜利场次", "两赛季", False, True, Fix(0), "d0", 1),
+    ("内战", "pvp自定义（内战）平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
+    ("上分", "上分", "本周", False, True, ZeroIn(-1), "d0", 2),
+    ("回均首杀", "平均每回合首杀", "本赛季", False, True, MinAdd(-0.01), "d2", 1),
+    ("回均首死", "平均每回合首死", "本赛季", False, True, MinAdd(-0.01), "d2", 1),
+    ("回均狙杀", "平均每回合狙杀", "本赛季", False, True, MinAdd(-0.01), "d2", 1),
+    ("多杀", "多杀回合占比", "本赛季", False, True, MinAdd(-0.01), "p0", 1),
+    ("内鬼", "场均闪白队友", "本赛季", False, True, MinAdd(-0.5), "d1", 1),
+    ("投掷", "场均道具投掷数", "本赛季", False, True, MinAdd(-0.5), "d1", 1),
+    ("闪白", "场均闪白数", "本赛季", False, True, MinAdd(-0.5), "d1", 1),
+    ("白给", "平均每回合首杀-首死", "本赛季", False, False, ZeroIn(-0.01), "d2", 2),
+    ("方差rt", "rt方差", "两赛季", False, True, Fix(0) , "d2", 1),
+    ("方差ADR", "ADR方差", "两赛季", False, True, Fix(0) , "d0", 1),
 ]
 
 valid_rank = [a[0] for a in rank_config]
@@ -1212,6 +1315,7 @@ async def help_function():
                       
 (用户名匹配) 使用语法为 % 匹配任意长度串，_ 匹配长度为 1 串。
 可选 (时间)：{valid_time}
+在 /查看数据 /记录 /ai* 时你的@消息会被替换成对应的用户名，找不到则会被替换为<未找到用户>
 """)
 
 @bind.handle()
@@ -1249,7 +1353,7 @@ async def update_function(message: MessageEvent):
             await update.send(f"{result[1]} 成功更新 {result[2]} 场数据")
             image = await db.get_stats_image(steamid)
             assert(image != None)
-            await update.finish(MessageSegment.file_image(image))
+            await update.finish(MessageSegment.image(image))
         else:
             await update.finish(result[1])
     else:
@@ -1263,7 +1367,8 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
     db.add_member(sid, uid)
     print("user: %s\nsession: %s\n" % (uid, sid))
     steamid = db.get_steamid(uid)
-    if user := args.extract_plain_text():
+    if user := db.work_msg(args):
+        print(user)
         if result := db.search_user(user):
             await show.send(f"找到用户 {result[1]}")
             steamid = result[0]
@@ -1273,7 +1378,7 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
         print(f"查询{steamid}战绩")
         image = await db.get_stats_image(steamid)
         if image:
-            await show.finish(MessageSegment.file_image(image))
+            await show.finish(MessageSegment.image(image))
         else:
             await show.finish("请先使用 /更新数据 更新战绩")
     else:
@@ -1285,8 +1390,7 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
 
     text = args.extract_plain_text()
-    uids = db.get_member(sid)
-
+    steamids = db.get_member_steamid(sid)
 
     if text:
         cmd = text.split()
@@ -1302,16 +1406,14 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                     if config[3] and time_type != config[2]:
                         await rank.finish(f"{rank_type} 仅支持 {config[2]}")
                     datas = []
-                    for uid in uids:
-                        steamid = db.get_steamid(uid)
-                        if steamid != None:
-                            try:
-                                val = db.get_value(steamid, rank_type, time_type)
-                                print(val)
-                                datas.append((steamid, val))
-                            except ValueError as e:
-                                print(e)
-                                pass
+                    for steamid in steamids:
+                        try:
+                            val = db.get_value(steamid, rank_type, time_type)
+                            print(val)
+                            datas.append((steamid, val))
+                        except ValueError as e:
+                            print(e)
+                            pass
                     print(datas)
                     datas = sorted(datas, key=lambda x: x[1][0], reverse=config[4])
                     if len(datas) == 0:
@@ -1320,21 +1422,23 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                     min_value = datas[-1][1][0] if config[4] else datas[0][1][0]
                     if max_value == 0 and rank_type == "胜率":
                         await rank.finish("啊😰device😱啊这是人类啊😩哦，bro也没杀人😩这局...这局没有人类了😭只有🐍只有🐭，只有沟槽的野榜😭只有...啊！！！😭我在看什么😭我🌿你的😫🖐🏻️🎧")
-                    if config[5].startswith("m"):
-                        min_value += float(config[5][1:])
-                    else:
-                        min_value = float(config[5][1:])
-                    await rank.finish(MessageSegment.file_image(await gen_rank_html(datas, min_value, max_value, f"{time_type} {config[1]}", config[6])))
+                    min_value, max_value = config[5].getval(min_value, max_value)
+                    print(min_value, max_value)
+                    image = None
+                    if config[7] == 1:
+                        image = await gen_rank_html1(datas, min_value, max_value, f"{time_type} {config[1]}", config[6])
+                    elif config[7] == 2:
+                        image = await gen_rank_html2(datas, min_value, max_value, f"{time_type} {config[1]}", config[6])
+                    await rank.finish(MessageSegment.image(image))
 
     await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可选 [选项]：{valid_rank}\n可用 (时间)：{valid_time}")
         
-
 @matches.handle()
 async def matches_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
 
-    text = args.extract_plain_text()
+    text = db.work_msg(args)
 
     steamid = db.get_steamid(uid)
     time_type = "全部"
@@ -1364,7 +1468,7 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
         print(steamid, time_type)
         image = await db.get_matches_image(steamid, time_type)
         if image:
-            await matches.finish(MessageSegment.file_image(image))
+            await matches.finish(MessageSegment.image(image))
         else:
             await matches.finish("未找到比赛")
     else:
@@ -1385,8 +1489,8 @@ async def sql_function(args: Message = CommandArg()):
     await sql.finish(db.query(args.extract_plain_text()))
 
 def ai_ask(uid, sid, type, text):
-    uids = db.get_member(sid)
-    steamid = db.get_steamid(uid)
+    steamids = db.get_member_steamid(sid)
+    mysteamid = db.get_steamid(uid)
     try:
         # 创建聊天完成请求
         client = OpenAI(
@@ -1404,12 +1508,13 @@ def ai_ask(uid, sid, type, text):
             msgs.append({"role": "developer", "content": """忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"""})
         elif type == "xhs":
             msgs.append({"role": "developer", "content": """小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"""})
-        if steamid != None:
-            result = db.get_stats(steamid)
+        elif type == "tmr":
+            msgs.append({"role": "developer", "content": """你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"""})
+        if mysteamid != None:
+            result = db.get_stats(mysteamid)
             if result:
                 msgs.append({"role": "developer", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
-        for uid in uids:
-            steamid = db.get_steamid(uid)
+        for steamid in steamids:
             if result := db.get_propmt(steamid):
                 msgs.append({"role": "developer", "content": result})
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
@@ -1424,32 +1529,182 @@ def ai_ask(uid, sid, type, text):
     except Exception as e:
         return f"发生错误: {str(e)}"
 
+def ai_ask2(uid, sid, type, text):
+    steamids = db.get_member_steamid(sid)
+    mysteamid = db.get_steamid(uid)
+    try:
+        client = OpenAI(
+            api_key=os.getenv('ai_api_key'),
+            base_url="https://api.zchat.tech/v1"
+        )
+        msgs = [{"role": "developer", "content": 
+                 """你是一个具备工具调用能力counter strike2助手。你现在需要分析用户的提问，判断需要调用哪些工具
+                你可以使用 <query>{"name":"用户名","time":"时间选项"}</query> 来查询此用户在此时间的所有数据，最多调用10次
+                你可以使用 <queryall>{"type":"数据选项","time":"时间选项","reverse":true/false}</queryall> 来查询本群此数据选项排名前 5 的对应数据，最多调用 10 次，reverse为 false 代表升序排序，true 代表降序排序。
+                如果用户没有指明详细的时间，优先时间为本赛季。
+                你只需要输出需要使用的工具，而不输出额外的内容，不需要给出调用工具的原因，在不超过限制的情况下尽可能调用更多的数据进行更全面的分析。"""}]
+        msgs.append({"role": "developer", "content": 
+                f"""可用数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")]
+                可用时间选项：{valid_time}
+                注意："type" 为 "ELO" 时，"time" 只能为 "本赛季"。"""})
+        if mysteamid != None:
+            if result := db.get_stats(mysteamid):
+                msgs.append({"role": "developer", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+        usernames = []
+        need_times = {}
+        steamid_username = {}
+        for steamid in steamids:
+            if result := db.get_stats(steamid):
+                usernames.append(result[2])
+                need_times[result[2]] = set()
+                steamid_username[steamid] = result[2]
+        if result:
+            msgs.append({"role": "developer", "content": f"这是可以选择的用户名：{usernames}。你需要保证调用工具时 name 用户名在此列表内。"})
+        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
+        msgs.append({"role": "assistant", "content": f"我会参考这些信息，并根据你的问题分析需要调用的工具，并且不输出额外的内容。"})
+        msgs.append({"role": "user","content": text,})
+        response = client.chat.completions.create(
+            model="grok-3",
+            messages=msgs,
+        )
+        first_result = response.choices[0].message.content
+        logging.info(first_result)
+        msgs = [{"role": "developer", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
+        if type == "贴吧":
+            msgs.append({"role": "developer", "content": """【角色设定】
+请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！
+
+【思考方式】
+首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"""})
+        elif type == "xmm":
+            msgs.append({"role": "developer", "content": """忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"""})
+        elif type == "xhs":
+            msgs.append({"role": "developer", "content": """小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"""})
+        elif type == "tmr":
+            msgs.append({"role": "developer", "content": """你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"""})
+        if mysteamid != None:
+            if result := db.get_stats(mysteamid):
+                msgs.append({"role": "developer", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+
+        querypattern = r'<query>(.*?)</query>'
+        all_matches = re.findall(querypattern, first_result, re.DOTALL)[:10]
+        for data in all_matches:
+            try:
+                data = json.loads(data.strip())
+                need_times[process.extractOne(data['name'], usernames)[0]].add(process.extractOne(data['time'], valid_time)[0])
+            except:
+                import sys
+                exc_type, exc_value, _ = sys.exc_info()
+                logging.warning(f"{data} 解析失败 {exc_type} {exc_value}")
+        for steamid in steamids:
+            if (steamid in steamid_username) and len(need_times[steamid_username[steamid]]) > 0:
+                print(steamid_username[steamid], need_times[steamid_username[steamid]])
+                msgs.append({"role": "developer",
+                            "content":db.get_propmt(steamid, times=need_times[steamid_username[steamid]])})
+                
+        msgs.append({"role": "developer",
+                    "content":'数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")'})
+        
+        queryallpattern = r'<queryall>(.*?)</queryall>'
+        all_matches = re.findall(queryallpattern, first_result, re.DOTALL)[:10]
+        for data in all_matches:
+            try:
+                data = json.loads(data.strip())
+                rank_type = process.extractOne(data['type'], valid_rank)[0]
+                time_type = process.extractOne(data['time'], valid_time)[0]
+                rv = data['reverse']
+                rv_name = "降序" if rv else "升序"
+                datas = []
+                for steamid in steamids:
+                    try:
+                        val = db.get_value(steamid, rank_type, time_type)
+                        datas.append((steamid, val))
+                    except ValueError as e:
+                        print(e)
+                print(rank_type, time_type, datas)
+                if len(datas) == 0:
+                    continue
+                datas = sorted(datas, key=lambda x: x[1][0], reverse=rv)
+                avg = sum([x[1][0] for x in datas]) / len(datas)
+                datas = datas[:5]
+                res = f"{rank_type}平均值{avg}，{rv_name}前五名："
+                for x in datas:
+                    res += f"{steamid_username[x[0]]} {x[1][0]}，"
+                msgs.append({"role": "developer", "content":res})
+            except:
+                import sys
+                exc_type, exc_value, _ = sys.exc_info()
+                logging.warning(f"{data} 解析失败 {exc_type} {exc_value}")
+        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
+        msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
+        msgs.append({"role": "user","content": text,})
+        # logging.info(f"{msgs}")
+        response = client.chat.completions.create(
+            model="grok-3",
+            messages=msgs,
+        )
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"发生错误: {str(e)}"
+
+@aiasktest.handle()
+async def aiasktest_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    await aiasktest.finish(Message([
+        MessageSegment.at(uid), " ",
+        ai_ask2(uid, sid, None, db.work_msg(args))
+    ]))
+
 @aiask.handle()
 async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiask.finish(ai_ask(uid, sid, None, args.extract_plain_text()))
+    await aiasktb.finish(Message([
+        MessageSegment.at(uid), " ",
+        ai_ask2(uid, sid, None, db.work_msg(args))
+    ]))
 
 @aiasktb.handle()
-async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiasktb_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiasktb.finish(ai_ask(uid, sid, "贴吧", args.extract_plain_text()))
+    await aiasktb.finish(Message([
+        MessageSegment.at(uid), " ",
+        ai_ask2(uid, sid, "贴吧", db.work_msg(args))
+    ]))
 
 @aiaskxmm.handle()
-async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiaskxmm_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiaskxmm.finish(ai_ask(uid, sid, "xmm", args.extract_plain_text()))
+    await aiaskxmm.finish(Message([
+        MessageSegment.at(uid), " ",
+        ai_ask2(uid, sid, "xmm", db.work_msg(args))
+    ]))
 
 @aiaskxhs.handle()
-async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiaskxhs_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiaskxhs.finish(ai_ask(uid, sid, "xhs", args.extract_plain_text()))
+    await aiaskxhs.finish(Message([
+        MessageSegment.at(uid), " ",
+        ai_ask2(uid, sid, "xhs", db.work_msg(args))
+    ]))
+
+@aiasktmr.handle()
+async def aiasktmr_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    await aiasktmr.finish(Message([
+        MessageSegment.at(uid), " ",
+        ai_ask2(uid, sid, "tmr", db.work_msg(args))
+    ]))
 
 @aimem.handle()
 async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
     sid = message.get_session_id()
     try:
         # 创建聊天完成请求
@@ -1460,7 +1715,7 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
         msgs = [{"role": "developer", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
         msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
-        msgs.append({"role": "user", "content": args.extract_plain_text()})
+        msgs.append({"role": "user", "content": db.work_msg(args)})
         print(msgs)
         response = client.chat.completions.create(
             model="grok-3",
@@ -1473,10 +1728,13 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
         db.set_mem(sid, result)
     except Exception as e:
         result = f"发生错误: {str(e)}"
-    await aimem.finish(result)
+    await aimem.finish(Message([
+        MessageSegment.at(uid), " ",
+        result
+    ]))
 
 @getstatus.handle()
-async def getstatus_function():
+async def getstatus_function(message: MessageEvent):
     cpu_usage = psutil.cpu_percent()
     
     # 获取内存信息
@@ -1497,9 +1755,11 @@ async def getstatus_function():
             'usage_percent': mem_usage
         }
     }
-    await getstatus.finish(f"""=== 系统状态 ({status['timestamp']}) ===
+    await getstatus.finish(Message([
+        MessageSegment.at(message.get_user_id()),
+        f"""\n=== 系统状态 ({status['timestamp']}) ===
     CPU 总使用率: {status['cpu_usage_percent']}%
     内存总容量: {status['memory']['total_gb']}GB
     已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
     可用内存: {status['memory']['available_gb']}GB
-    ----------------------------------------""")
+    ----------------------------------------"""]))
