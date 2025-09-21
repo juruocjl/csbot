@@ -3,6 +3,7 @@ matplotlib
 numpy
 requests
 nb-cli
+ts3>=2.0.0b2
 openai
 nonebot-adapter-onebot
 nonebot2[fastapi]

@@ -2,12 +2,17 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.params import CommandArg
-from nonebot import on_command
+from nonebot import on_command, on
 from nonebot.rule import to_me
 from nonebot.permission import SUPERUSER
-from dotenv import load_dotenv
+from nonebot import get_bot
+from nonebot import require
+
+scheduler = require("nonebot_plugin_apscheduler").scheduler
+
 
 from .config import Config
+config = get_plugin_config(Config)
 
 from pathlib import Path
 import re
@@ -15,6 +20,7 @@ import sqlite3
 import requests
 import urllib.request
 import os
+import random
 import asyncio
 from pyppeteer import launch
 from io import BytesIO
@@ -26,6 +32,8 @@ from openai import OpenAI
 import psutil
 import json
 from fuzzywuzzy import process
+import ts3
+from bs4 import BeautifulSoup
 
 logging.basicConfig(
     filename='app.log',
@@ -34,9 +42,8 @@ logging.basicConfig(
 )
 
 
-load_dotenv(".env.prod")
-SeasonId = os.getenv("SeasonId")
-lastSeasonId = os.getenv("lastSeasonId")
+SeasonId = config.cs_season_id
+lastSeasonId = config.cs_last_season_id
 
 with open("data.html", 'r', encoding='utf-8') as file:
     data_content = file.read()
@@ -70,7 +77,6 @@ async def screenshot_html_to_png(url, width, height):
     image = await page.screenshot()
     await browser.close()
     return image
-
 
 def get_elo_info(pvpScore, seasonId = SeasonId):
     if int(seasonId[1:]) >= 21:
@@ -376,6 +382,42 @@ class DataManager:
             PRIMARY KEY (gid)
         )
         ''')
+
+        
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS member_goods (
+            uid TEXT,
+            marketHashName TEXT,
+            PRIMARY KEY (uid, marketHashName)
+        )
+        ''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS goods_info (
+            marketHashName TEXT,
+            timeStamp INT,
+            goodId INT,
+            name TEXT,
+            buffSellPrice INT,
+            buffSellNum INT,
+            yyypSellPrice INT,
+            yyypSellNum INT,
+            steamSellPrice INT,
+            steamSellNum INT,
+            PRIMARY KEY (marketHashName, timeStamp)
+        )
+        ''')
+
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS live_status (
+            liveid TEXT,
+            islive INT,
+            PRIMARY KEY (liveid)
+        )
+        ''')
+
         self.conn.commit()
     
     def bind(self, uid, steamid):
@@ -415,7 +457,7 @@ class DataManager:
         }
         header = {
             "appversion": "3.5.4.172",
-            "token":os.getenv("wmtoken")
+            "token":config.cs_wmtoken
         }
         result = requests.post(url,headers=header,json=payload, verify=False)
         data = result.json()
@@ -493,12 +535,12 @@ class DataManager:
     def update_stats(self, steamid):
         url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats"
         payload = {
-            "mySteamId": os.getenv("mySteamId"),
+            "mySteamId": config.cs_mysteam_id,
             "toSteamId": steamid
         }
         header = {
             "appversion": "3.5.4.172",
-            "token":os.getenv("wmtoken")
+            "token":config.cs_wmtoken
         }
         result = requests.post(url,headers=header,json=payload, verify=False)
         data = result.json()
@@ -528,13 +570,13 @@ class DataManager:
 
                     headers = {
                         "appversion": "3.5.4.172",
-                        "token": os.getenv("wmtoken")
+                        "token": config.cs_wmtoken
                     }
 
                     payload = {
                         "csgoSeasonId": SeasonID,
                         "dataSource": 3,
-                        "mySteamId": os.getenv("mySteamId"),
+                        "mySteamId": config.cs_mysteam_id,
                         "page": page,
                         "pageSize": 50,
                         "pvpType": -1,
@@ -726,7 +768,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -737,7 +779,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(we) as avgwe, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -748,7 +790,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(adpr) as avgADR, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -759,7 +801,7 @@ class DataManager:
             cursor.execute(f'''SELECT COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -770,7 +812,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -787,7 +829,7 @@ class DataManager:
             cursor.execute(f'''SELECT SUM(headShot) as totHS, SUM(kill) as totK, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -804,7 +846,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -815,7 +857,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -826,7 +868,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -837,7 +879,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and winTeam != team  
                                 and {time_sql} and {steamid_sql}
                             ''')
@@ -849,7 +891,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and winTeam == team  
                                 and {time_sql} and {steamid_sql}
                             ''')
@@ -861,7 +903,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and winTeam == team  
                                 and min(score1, score2) <= 6
                                 and {time_sql} and {steamid_sql}
@@ -874,7 +916,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and isgroup == 1  
                                 and {time_sql} and {steamid_sql}
                             ''')
@@ -886,19 +928,19 @@ class DataManager:
             cursor.execute(f'''SELECT COUNT(mid) AS total_count
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and isgroup == 0
                                 and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
-            if result[1] > 0:
+            if result[0] > 0:
                return result
             raise ValueError(f"no {query_type}")
         if query_type == "悲情":
             cursor.execute(f'''SELECT COUNT(mid) AS total_count
                                 FROM 'matches'
                                 WHERE 
-                                (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                 and winTeam != team  
                                 and pwRating > 1.2
                                 and {time_sql} and {steamid_sql}
@@ -922,7 +964,7 @@ class DataManager:
             cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -933,7 +975,7 @@ class DataManager:
             cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -944,7 +986,7 @@ class DataManager:
             cursor.execute(f'''SELECT SUM(firstDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -955,7 +997,7 @@ class DataManager:
             cursor.execute(f'''SELECT SUM(snipeNum) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -966,7 +1008,7 @@ class DataManager:
             cursor.execute(f'''SELECT SUM(twoKill + threeKill + fourKill + fiveKill) as totMK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -977,7 +1019,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(flashTeammate) as avgFT, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -988,7 +1030,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(throwsCnt) as avgFT, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -999,7 +1041,7 @@ class DataManager:
             cursor.execute(f'''SELECT AVG(flashSuccess) as avgFS, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -1010,7 +1052,7 @@ class DataManager:
             cursor.execute(f'''SELECT SUM(entryKill - firstDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt
                             FROM 'matches'
                             WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
                             and {time_sql} and {steamid_sql}
                             ''')
             result = cursor.fetchone()
@@ -1022,7 +1064,7 @@ class DataManager:
                                 WITH filtered_matches AS (
                                     SELECT pwRating FROM 'matches'
                                     WHERE 
-                                    (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                     and {time_sql} and {steamid_sql}
                                 )
                                 SELECT SUM((pwRating - avg_val) * (pwRating - avg_val)) AS SUM2, COUNT(pwRating) AS CNT
@@ -1038,7 +1080,7 @@ class DataManager:
                                 WITH filtered_matches AS (
                                     SELECT adpr FROM 'matches'
                                     WHERE 
-                                    (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
+                                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
                                     and {time_sql} and {steamid_sql}
                                 )
                                 SELECT SUM((adpr - avg_val) * (adpr - avg_val)) AS SUM2, COUNT(adpr) AS CNT
@@ -1048,6 +1090,17 @@ class DataManager:
             result = cursor.fetchone()
             if result[1] > 1:
                 return (result[0] / (result[1] - 1), result[1])
+            raise ValueError(f"no {query_type}")
+        if query_type == "受益":
+            cursor.execute(f'''SELECT AVG(winTeam==Team)-AVG(MAX(0, (we-2.29)/(16-2.29))), COUNT(mid) as cnt
+                            FROM 'matches'
+                            WHERE 
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
             raise ValueError(f"no {query_type}")
         raise ValueError(f"unknown {query_type}")
 
@@ -1155,6 +1208,24 @@ class DataManager:
                 (gid, mem)
             )
             self.conn.commit()
+   
+    def get_live_status(self, liveid):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'SELECT islive FROM live_status WHERE liveid = ?',
+            (liveid, )
+        )
+        if result := cursor.fetchone():
+            return result[0]
+        return 0
+
+    def set_live_status(self, liveid, status):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'INSERT OR REPLACE INTO live_status (liveid, islive) VALUES (?, ?)',
+            (liveid, status)
+        )
+        self.conn.commit()
 
     def get_username(self, uid):
         if steamid := self.get_steamid(uid):
@@ -1174,6 +1245,53 @@ class DataManager:
                     result += "<未找到用户>"
         return result.strip()
 
+    def addgoods(self, uid, name):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'INSERT OR IGNORE INTO  member_goods (uid, marketHashName) VALUES (?, ?)',
+            (uid, name)
+        )
+        self.conn.commit()
+
+    def update_goods(self, goods_list):
+        cursor = self.conn.cursor()
+        while len(goods_list) > 0:
+            now_goods = goods_list[:50]
+            goods_list = goods_list[50:]
+            res = requests.post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.cs_csqaq_api})
+            data = res.json()
+            timeStamp = time.time()
+            if data['code'] == 200:
+                for marketHashName, good_info in data['data']['success'].items():
+                    cursor.execute(
+                        'INSERT INTO goods_info (marketHashName,timeStamp,goodId,name,buffSellPrice,buffSellNum,yyypSellPrice,yyypSellNum,steamSellPrice,steamSellNum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (marketHashName, time.time(), good_info['goodId'], good_info['name'],
+                        round(good_info['buffSellPrice'] * 100), good_info['buffSellNum'],
+                        round(good_info['yyypSellPrice'] * 100), good_info['yyypSellNum'],
+                        round(good_info['steamSellPrice'] * 100), good_info['steamSellNum']
+                        )
+                    )
+                    self.conn.commit()
+            else:
+                logging.error("[update_goods] "+data['msg'])
+            time.sleep(1.1)
+
+    def getallgoods(self):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT DISTINCT marketHashName FROM member_goods')
+        res = cursor.fetchall()
+        return [a[0] for a in res]
+    
+    def getgoodsinfo(self, marketHashName):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? ORDER BY timeStamp DESC LIMIT 1', (marketHashName, ))
+        return cursor.fetchone()
+
+    def getgoodsinfo_time(self, marketHashName, TimeStamp):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? and timeStamp >= ? ORDER BY timeStamp ASC LIMIT 1', (marketHashName, TimeStamp))
+        return cursor.fetchone()
+
     def query(self, sql):
         cursor = self.conn.cursor()
         cursor.execute(sql)
@@ -1190,14 +1308,15 @@ if not os.path.exists("avatar"):
 if not os.path.exists("temp"):
     os.makedirs("temp", exist_ok=True)
 
+if not os.path.exists("pic"):
+    os.makedirs("pic", exist_ok=True)
+
 __plugin_meta__ = PluginMetadata(
     name="cs",
     description="",
     usage="",
     config=Config,
 )
-
-config = get_plugin_config(Config)
 
 db = DataManager()
 
@@ -1217,6 +1336,10 @@ updateall = on_command("全部更新", priority=10, block=True, permission=SUPER
 
 matches = on_command("记录", priority=10, block=True)
 
+weekreport = on_command("周报", priority=10, block=True)
+
+dayreport = on_command("日报", priority=10, block=True)
+
 sql = on_command("sql", priority=10, block=True, permission=SUPERUSER)
 
 aiask = on_command("ai", priority=10, block=True)
@@ -1234,6 +1357,22 @@ aiasktest = on_command("aitest", priority=10, block=True, permission=SUPERUSER)
 aimem = on_command("ai记忆", priority=10, block=True)
 
 getstatus = on_command("状态", priority=10, block=True)
+
+getts = on_command("getts", priority=10, block=True)
+
+getpic = on_command("getpic", priority=10, block=True)
+
+caigou = on_command("采购", priority=10, block=True)
+
+baojia = on_command("报价", priority=10, block=True)
+
+search = on_command("搜索", priority=10, block=True)
+
+addgoods = on_command("加仓", priority=10, block=True)
+
+langeng = on_command("烂梗",priority=10, block=True )
+
+allmsg = on(priority=100, block=True)
 
 class MinAdd:
     def __init__(self, val):
@@ -1289,6 +1428,7 @@ rank_config = [
     ("白给", "平均每回合首杀-首死", "本赛季", False, False, ZeroIn(-0.01), "d2", 2),
     ("方差rt", "rt方差", "两赛季", False, True, Fix(0) , "d2", 1),
     ("方差ADR", "ADR方差", "两赛季", False, True, Fix(0) , "d0", 1),
+    ("受益", "胜率-期望胜率", "两赛季", False, True, ZeroIn(-0.01), "p0", 2)
 ]
 
 valid_rank = [a[0] for a in rank_config]
@@ -1488,41 +1628,39 @@ async def updateall_function():
 async def sql_function(args: Message = CommandArg()):
     await sql.finish(db.query(args.extract_plain_text()))
 
+model_name = config.cs_ai_model
+
 def ai_ask(uid, sid, type, text):
     steamids = db.get_member_steamid(sid)
     mysteamid = db.get_steamid(uid)
     try:
         # 创建聊天完成请求
         client = OpenAI(
-            api_key=os.getenv('ai_api_key'),
-            base_url="https://api.zchat.tech/v1"
+            api_key=config.cs_ai_api_key,
+            base_url=config.cs_ai_url,
         )
-        msgs = [{"role": "developer", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
+        msgs = [{"role": "system", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
         if type == "贴吧":
-            msgs.append({"role": "developer", "content": """【角色设定】
-请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！
-
-【思考方式】
-首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"""})
+            msgs.append({"role": "system", "content": "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"})
         elif type == "xmm":
-            msgs.append({"role": "developer", "content": """忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"""})
+            msgs.append({"role": "system", "content": "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"})
         elif type == "xhs":
-            msgs.append({"role": "developer", "content": """小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"""})
+            msgs.append({"role": "system", "content": "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"})
         elif type == "tmr":
-            msgs.append({"role": "developer", "content": """你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"""})
+            msgs.append({"role": "system", "content": "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"})
         if mysteamid != None:
             result = db.get_stats(mysteamid)
             if result:
-                msgs.append({"role": "developer", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+                msgs.append({"role": "system", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
         for steamid in steamids:
             if result := db.get_propmt(steamid):
-                msgs.append({"role": "developer", "content": result})
+                msgs.append({"role": "system", "content": result})
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
         msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
         msgs.append({"role": "user","content": text,})
         print(msgs)
         response = client.chat.completions.create(
-            model="grok-3",
+            model=model_name,
             messages=msgs,
         )
         return response.choices[0].message.content
@@ -1534,22 +1672,18 @@ def ai_ask2(uid, sid, type, text):
     mysteamid = db.get_steamid(uid)
     try:
         client = OpenAI(
-            api_key=os.getenv('ai_api_key'),
-            base_url="https://api.zchat.tech/v1"
+            api_key=config.cs_ai_api_key,
+            base_url=config.cs_ai_url,
         )
-        msgs = [{"role": "developer", "content": 
-                 """你是一个具备工具调用能力counter strike2助手。你现在需要分析用户的提问，判断需要调用哪些工具
-                你可以使用 <query>{"name":"用户名","time":"时间选项"}</query> 来查询此用户在此时间的所有数据，最多调用10次
-                你可以使用 <queryall>{"type":"数据选项","time":"时间选项","reverse":true/false}</queryall> 来查询本群此数据选项排名前 5 的对应数据，最多调用 10 次，reverse为 false 代表升序排序，true 代表降序排序。
-                如果用户没有指明详细的时间，优先时间为本赛季。
-                你只需要输出需要使用的工具，而不输出额外的内容，不需要给出调用工具的原因，在不超过限制的情况下尽可能调用更多的数据进行更全面的分析。"""}]
-        msgs.append({"role": "developer", "content": 
+        msgs = [{"role": "system", "content": 
+                 """你是一个具备工具调用能力counter strike2助手。你现在需要分析用户的提问，判断需要调用哪些工具\n你可以使用 <query>{"name":"用户名","time":"时间选项"}</query> 来查询此用户在此时间的所有数据，最多调用10次。你的输出需要用<query>和</query>包含json内容。\n你可以使用 <queryall>{"type":"数据选项","time":"时间选项","reverse":true/false}</queryall> 来查询本群此数据选项排名前 5 的对应数据，最多调用 10 次，reverse为 false 代表升序排序，true 代表降序排序。你的输出需要使用<queryall>和</queryall>包含json内容。\n如果用户没有指明详细的时间，优先时间为本赛季。\n你只需要输出需要使用的工具，而不输出额外的内容，不需要给出调用工具的原因，在不超过限制的情况下尽可能调用更多的数据进行更全面的分析。"""}]
+        msgs.append({"role": "system", "content": 
                 f"""可用数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")]
                 可用时间选项：{valid_time}
                 注意："type" 为 "ELO" 时，"time" 只能为 "本赛季"。"""})
         if mysteamid != None:
             if result := db.get_stats(mysteamid):
-                msgs.append({"role": "developer", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+                msgs.append({"role": "system", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
         usernames = []
         need_times = {}
         steamid_username = {}
@@ -1559,32 +1693,28 @@ def ai_ask2(uid, sid, type, text):
                 need_times[result[2]] = set()
                 steamid_username[steamid] = result[2]
         if result:
-            msgs.append({"role": "developer", "content": f"这是可以选择的用户名：{usernames}。你需要保证调用工具时 name 用户名在此列表内。"})
+            msgs.append({"role": "system", "content": f"这是可以选择的用户名：{usernames}。你需要保证调用工具时 name 用户名在此列表内。"})
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
         msgs.append({"role": "assistant", "content": f"我会参考这些信息，并根据你的问题分析需要调用的工具，并且不输出额外的内容。"})
         msgs.append({"role": "user","content": text,})
         response = client.chat.completions.create(
-            model="grok-3",
+            model=model_name,
             messages=msgs,
         )
         first_result = response.choices[0].message.content
         logging.info(first_result)
-        msgs = [{"role": "developer", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
+        msgs = [{"role": "system", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
         if type == "贴吧":
-            msgs.append({"role": "developer", "content": """【角色设定】
-请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！
-
-【思考方式】
-首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"""})
+            msgs.append({"role": "system", "content": "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"})
         elif type == "xmm":
-            msgs.append({"role": "developer", "content": """忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"""})
+            msgs.append({"role": "system", "content": "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"})
         elif type == "xhs":
-            msgs.append({"role": "developer", "content": """小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"""})
+            msgs.append({"role": "system", "content": "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"})
         elif type == "tmr":
-            msgs.append({"role": "developer", "content": """你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"""})
+            msgs.append({"role": "system", "content": "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"})
         if mysteamid != None:
             if result := db.get_stats(mysteamid):
-                msgs.append({"role": "developer", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+                msgs.append({"role": "system", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
 
         querypattern = r'<query>(.*?)</query>'
         all_matches = re.findall(querypattern, first_result, re.DOTALL)[:10]
@@ -1599,10 +1729,10 @@ def ai_ask2(uid, sid, type, text):
         for steamid in steamids:
             if (steamid in steamid_username) and len(need_times[steamid_username[steamid]]) > 0:
                 print(steamid_username[steamid], need_times[steamid_username[steamid]])
-                msgs.append({"role": "developer",
+                msgs.append({"role": "system",
                             "content":db.get_propmt(steamid, times=need_times[steamid_username[steamid]])})
                 
-        msgs.append({"role": "developer",
+        msgs.append({"role": "system",
                     "content":'数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")'})
         
         queryallpattern = r'<queryall>(.*?)</queryall>'
@@ -1630,7 +1760,7 @@ def ai_ask2(uid, sid, type, text):
                 res = f"{rank_type}平均值{avg}，{rv_name}前五名："
                 for x in datas:
                     res += f"{steamid_username[x[0]]} {x[1][0]}，"
-                msgs.append({"role": "developer", "content":res})
+                msgs.append({"role": "system", "content":res})
             except:
                 import sys
                 exc_type, exc_value, _ = sys.exc_info()
@@ -1640,7 +1770,7 @@ def ai_ask2(uid, sid, type, text):
         msgs.append({"role": "user","content": text,})
         # logging.info(f"{msgs}")
         response = client.chat.completions.create(
-            model="grok-3",
+            model=model_name,
             messages=msgs,
         )
         return response.choices[0].message.content
@@ -1709,16 +1839,16 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
     try:
         # 创建聊天完成请求
         client = OpenAI(
-            api_key=os.getenv('ai_api_key'),
-            base_url="https://api.zchat.tech/v1"
+            api_key=config.cs_ai_api_key,
+            base_url=config.cs_ai_url,
         )
-        msgs = [{"role": "developer", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
+        msgs = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
         msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
         msgs.append({"role": "user", "content": db.work_msg(args)})
         print(msgs)
         response = client.chat.completions.create(
-            model="grok-3",
+            model=model_name,
             messages=msgs,
         )
         result = response.choices[0].message.content
@@ -1763,3 +1893,417 @@ async def getstatus_function(message: MessageEvent):
     已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
     可用内存: {status['memory']['available_gb']}GB
     ----------------------------------------"""]))
+
+
+URI = "telnet://serveradmin:" + config.cs_ts_pswd + "@localhost:10011"
+
+SID = 1
+
+class ChannelTreeNode(object):
+    """
+    Represents a channel or the virtual server in the channel tree of a virtual
+    server. Note, that this is a recursive data structure.
+
+    Common
+    ------
+
+    self.childs = List with the child *Channels*.
+
+    self.root = The *Channel* object, that is the root of the whole channel
+                tree.
+
+    Channel
+    -------
+
+    Represents a real channel.
+
+    self.info =  Dictionary with all informations about the channel obtained by
+                 ts3conn.channelinfo
+
+    self.parent = The parent channel, represented by another *Channel* object.
+
+    self.clients = List with dictionaries, that contains informations about the
+                   clients in this channel.
+
+    Root Channel
+    ------------
+
+    Represents the virtual server itself.
+
+    self.info = Dictionary with all informations about the virtual server
+                obtained by ts3conn.serverinfo
+
+    self.parent = None
+
+    self.clients = None
+
+    Usage
+    -----
+
+    >>> tree = ChannelTreeNode.build_tree(ts3conn, sid=1)
+
+    Todo
+    ----
+
+    * It's not sure, that the tree is always correct sorted.
+    """
+
+    def __init__(self, info, parent, root, clients=None):
+        """
+        Inits a new channel node.
+
+        If root is None, root is set to *self*.
+        """
+        self.info = info
+        self.childs = list()
+
+        # Init a root channel
+        if root is None:
+            self.parent = None
+            self.clients = None
+            self.root = self
+
+        # Init a real channel
+        else:
+            self.parent = parent
+            self.root = root
+            self.clients = clients if clients is not None else list()
+        return None
+
+    @classmethod
+    def init_root(cls, info):
+        """
+        Creates a the root node of a channel tree.
+        """
+        return cls(info, None, None, None)
+
+    def is_root(self):
+        """
+        Returns true, if this node is the root of a channel tree (the virtual
+        server).
+        """
+        return self.parent is None
+
+    def is_channel(self):
+        """
+        Returns true, if this node represents a real channel.
+        """
+        return self.parent is not None
+
+    @classmethod
+    def build_tree(cls, ts3conn, sid):
+        """
+        Returns the channel tree from the virtual server identified with
+        *sid*, using the *TS3Connection* ts3conn.
+        """
+        ts3conn.exec_("use", sid=sid, virtual=True)
+
+        serverinfo = ts3conn.query("serverinfo").first()
+        channellist = ts3conn.query("channellist").all()
+        clientlist = ts3conn.query("clientlist").all()
+
+        # channel id -> clients
+        clientlist = {cid: [client for client in clientlist \
+                            if client["cid"] == cid]
+                      for cid in map(lambda e: e["cid"], channellist)}
+
+        root = cls.init_root(serverinfo)
+        for channel in channellist:
+            channelinfo = ts3conn.query("channelinfo", cid=channel["cid"]).first()
+
+            # This makes sure, that *cid* is in the dictionary.
+            channelinfo.update(channel)
+
+            channel = cls(
+                info=channelinfo, parent=root, root=root,
+                clients=clientlist[channel["cid"]])
+            root.insert(channel)
+        return root
+
+    def insert(self, channel):
+        """
+        Inserts the channel in the tree.
+        """
+        self.root._insert(channel)
+        return None
+
+    def _insert(self, channel):
+        """
+        Inserts the channel recursivly in the channel tree.
+        Returns true, if the tree has been inserted.
+        """
+        # We assumed on previous insertions, that a channel is a direct child
+        # of the root, if we could not find the parent. Correct this, if ctree
+        # is the parent from one of these orpheans.
+        if self.is_root():
+            i = 0
+            while i < len(self.childs):
+                child = self.childs[i]
+                if channel.info["cid"] == child.info["pid"]:
+                    channel.childs.append(child)
+                    self.childs.pop(i)
+                else:
+                    i += 1
+
+        # This is not the root and the channel is a direct child of this one.
+        elif channel.info["pid"] == self.info["cid"]:
+            self.childs.append(channel)
+            return True
+
+        # Try to insert the channel recursive.
+        for child in self.childs:
+            if child._insert(channel):
+                return True
+
+        # If we could not find a parent in the whole tree, assume, that the
+        # channel is a child of the root.
+        if self.is_root():
+            self.childs.append(channel)
+        return False
+
+    def print(self, indent=0):
+        """
+        Prints the channel and it's subchannels recursive. If restore_order is
+        true, the child channels will be sorted before printing them.
+        """
+        result = ""
+        if self.is_root():
+            result += " "*(indent*3) + "|- " + self.info["virtualserver_name"] + "\n"
+        else:
+            result += " "*(indent*3) + "|- " + self.info["channel_name"] + "\n"
+            for client in self.clients:
+                # Ignore query clients
+                if client["client_type"] == "1":
+                    continue
+                result += " "*(indent*3+3) + "-> " + client["client_nickname"] + "\n"
+
+        for child in self.childs:
+            result += child.print(indent=indent + 1)
+        return result
+
+@getts.handle()
+async def getts_function():
+    """
+    Prints the channel tree of the virtual server, including all clients.
+    """
+    with ts3.query.TS3ServerConnection(URI) as ts3conn:
+        ts3conn.exec_("use", sid=SID)
+        tree = ChannelTreeNode.build_tree(ts3conn, SID)
+        await getts.finish(tree.print())
+
+
+@getpic.handle()
+async def getpic_function(message: MessageEvent):
+    uid = message.get_user_id()
+    pic_folder = Path("pic")
+    files = [f for f in pic_folder.iterdir() if f.is_file()]
+    if not files:
+        await getpic.finish("没有图片")
+    image_path = random.choice(files)
+    await getpic.finish(MessageSegment.image(image_path))
+
+@caigou.handle()
+async def caigou_function(message: MessageEvent):
+    uid = message.get_user_id()
+    await caigou.finish(MessageSegment.face(317))
+
+def get_baojia(title = "当前底价"):
+    allgoods = db.getallgoods()
+    logging.info(allgoods)
+    data = []
+    for goods in allgoods:
+        info = db.getgoodsinfo(goods)
+        info1d = db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
+        info7d = db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
+        delta1d = str((info[4] - info1d[4]) / 100) if info[1] - info1d[1] >= 24 * 3600 - 7200 else "无数据"
+        delta7d = str((info[4] - info7d[4]) / 100) if info[1] - info7d[1] >= 7 * 24 * 3600 - 7200 else "无数据"
+        
+        data.append((info[3], info[4], delta1d, delta7d))
+    data = sorted(data, key = lambda x: x[1])
+    return (title + "\n" + "\n".join([a[0] + "\n> " + str(a[1]/100) + "   Δ1d=" + a[2] + "   Δ7d=" + a[3] for a in data])).strip()
+
+@baojia.handle()
+async def baojia_function():
+    await baojia.finish(get_baojia())
+
+@search.handle()
+async def search_function(args: Message = CommandArg()):
+    res = requests.get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers={'ApiToken': config.cs_csqaq_api})
+    data = res.json()
+    if data['code'] == 200:
+        await search.finish(("搜索结果\n" + "\n".join([f"{item['id']}. {item['value']}" for item in data['data'][:10]])).strip())
+    else:
+        await search.finish("搜索出错 " + data['msg'])
+
+@addgoods.handle()
+async def addgoods_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    res = ""
+    try:
+        res = requests.get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.cs_csqaq_api})
+        data = res.json()
+        time.sleep(1.1)
+        db.update_goods([data['data']['goods_info']['market_hash_name']])
+        db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
+        res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
+    except Exception as e:
+        res = f"加仓失败 {e}"
+    await addgoods.finish(res)
+
+@scheduler.scheduled_job("cron", hour="0-9,11-23", id="hourupdate")
+async def send_day_report():
+    db.update_goods(db.getallgoods())
+
+@scheduler.scheduled_job("cron", hour="10", id="baojia")
+async def send_baojia():
+    db.update_goods(db.getallgoods())
+    bot = get_bot(str(config.cs_botid))
+    for groupid in config.cs_group_list:
+        await bot.send_msg(
+            message_type="group",
+            group_id=groupid,
+            message=get_baojia(title = "10点自动更新")
+        )
+
+def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
+    prize_name = "🥇🥈🥉456789"
+    datas = []
+    for steamid in steamids:
+        try:
+            val = db.get_value(steamid, rank_type, time_type)
+            if filter(val[0]):
+                datas.append((steamid, val))
+        except ValueError as e:
+            pass
+    datas = sorted(datas, key=lambda x: x[1][0], reverse=reverse)
+    if len(datas) == 0:
+        return "没有人类了\n"
+    rk = [0] * len(datas)
+    for i in range(1, len(datas)):
+        if datas[i][1][0] == datas[i-1][1][0]:
+            rk[i] = rk[i-1]
+        else:
+            rk[i] = i
+    result = ""
+    for i in range(len(datas)):
+        if rk[i] < n:
+            result += prize_name[rk[i]] + ". " + db.get_stats(datas[i][0])[2] + " " + output(datas[i][1][0], fmt) + "\n"
+    return result
+
+def get_report(time_type, steamids):
+    result = ""
+    result += "= 场次榜 =\n" + get_report_part("场次", time_type, steamids, True, "d0")
+    result += "= 高手榜 =\n" + get_report_part("rt", time_type, steamids, True, "d2", filter = lambda x: x > 1)
+    result += "= 菜逼榜 =\n" + get_report_part("rt", time_type, steamids, False, "d2", filter = lambda x: x < 1)
+    result += "= 演员榜 =\n" + get_report_part("演员", time_type, steamids, False, "d2", filter = lambda x: x < 1)
+    result += "= 上分榜 =\n" + get_report_part("上分", time_type, steamids, True, "d0", filter = lambda x: x > 0)
+    result += "= 掉分榜 =\n" + get_report_part("上分", time_type, steamids, False, "d0", filter = lambda x: x < 0)
+    result += "= 本周受益者 = " + get_report_part("受益", "本周", steamids, True, "p2", n=1, filter = lambda x: x > 0)
+    result += "= 本周受害者 = " + get_report_part("受益", "本周", steamids, False, "p2", n=1, filter = lambda x: x < 0)
+
+    return result
+
+@weekreport.handle()
+async def weekreport_function(message: MessageEvent):
+    sid = message.get_session_id()
+    steamids = db.get_member_steamid(sid)
+    await weekreport.finish("== 周报 ==\n" + get_report("本周", steamids))
+    
+@dayreport.handle()
+async def dayreport_function(message: MessageEvent):
+    sid = message.get_session_id()
+    steamids = db.get_member_steamid(sid)
+    await weekreport.finish("== 日报 ==\n" + get_report("今日", steamids))
+
+@langeng.handle()
+async def langeng_function():
+    res = requests.get("https://hguofichp.cn:10086/machine/getRandOne")
+    await langeng.finish(res.json()['data']['barrage'])
+
+@scheduler.scheduled_job("cron", hour="23", minute="30", id="dayreport")
+async def send_day_report():
+    for steamid in db.get_all_steamid():
+        result = db.update_stats(steamid)
+    bot = get_bot(str(config.cs_botid))
+    for groupid in config.cs_group_list:
+        steamids = db.get_member_steamid("group_" + groupid)
+        await bot.send_msg(
+            message_type="group",
+            group_id=groupid,
+            message="== 23:30自动日报 ==\n" + get_report("今日", steamids)
+        )
+
+@scheduler.scheduled_job("cron", day_of_week="sun", hour="23", minute="45", id="weekreport")
+async def send_week_report():
+    bot = get_bot(str(config.cs_botid))
+    for groupid in config.cs_group_list:
+        steamids = db.get_member_steamid("group_" + groupid)
+        await bot.send_msg(
+            message_type="group",
+            group_id=groupid,
+            message="== 周日23:45自动周报 ==\n" + get_report("本周", steamids)
+        )
+
+lastmsg = {}
+
+@allmsg.handle()
+async def allmsg_function(message: MessageEvent):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    msg = message.get_message()
+    mid = message.message_id
+    logging.info(f"{uid} send {msg}")
+    if not sid.startswith("group"):
+        return
+    gid = sid.split('_')[1]
+    bot = get_bot(str(config.cs_botid))
+    msglst = []
+    if gid in lastmsg:
+        msglst = lastmsg[gid]
+    if len(msglst) == 1 and msglst[0][0] == config.cs_botid and msglst[0][1] == msg:
+        await bot.delete_msg(message_id = mid)
+    elif len(msglst) > 0 and msglst[0][1] == msg and (uid in [a[0] for a in msglst]):
+        await bot.delete_msg(message_id = mid)
+    else:
+        msglst.append((uid, msg, mid))
+        if len(msglst) > 1 and msglst[-1][1] != msglst[-2][1]:
+            msglst = msglst[-1:]
+        logging.info(f"[msglst] {msglst}")
+        if len(msglst) > 2:
+            for uid, msg, mid in msglst[1:]:
+                await bot.delete_msg(message_id = mid)
+            mid = (await allmsg.send(msglst[0][1]))['message_id']
+            msglst = [(config.cs_botid, msglst[0][1], mid)]
+    lastmsg[gid] = msglst
+
+def get_live_status(liveid):
+    time.sleep(1)
+    if liveid.startswith("dy_"):
+        res = requests.get("https://m.douyu.com/"+liveid.split('_')[1])
+        islive = int('"isLive":1' in res.text)
+        nickname = re.findall(r'"nickname":"([^"]+)"', res.text)[0]
+        return islive, nickname
+    if liveid.startswith("bili_"):
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.111 Safari/537.36"}
+        res = requests.get("https://api.live.bilibili.com/room/v1/Room/room_init?id="+liveid.split('_')[1], headers=headers)
+        islive = int(res.json()['data']['live_status'] == 1)
+        uid = res.json()['data']['uid']
+        res = requests.get("https://api.live.bilibili.com/live_user/v1/Master/info?uid="+str(uid), headers=headers)
+        nickname = res.json()['data']['info']['uname']
+        return islive, nickname
+
+
+@scheduler.scheduled_job("cron", minute="*/2", id="livewatcher")
+async def live_watcher():
+    bot = get_bot(str(config.cs_botid))
+    for liveid in config.cs_live_list:
+        islive, nickname = get_live_status(liveid)
+        logging.info(f"[live_watcher] {nickname} {islive}")
+        if islive == 1 and db.get_live_status(liveid) == 0:
+            for groupid in config.cs_group_list:
+                await bot.send_msg(
+                    message_type="group",
+                    group_id=groupid,
+                    message=f"{nickname} 开播了"
+                )
+        db.set_live_status(liveid, islive)
