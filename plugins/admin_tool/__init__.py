@@ -7,7 +7,7 @@ from nonebot import logger
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
-    name="admintool",
+    name="admin_tool",
     description="",
     usage="",
     config=Config,

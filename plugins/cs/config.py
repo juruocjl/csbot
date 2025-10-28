@@ -12,6 +12,5 @@ class Config(BaseModel):
     cs_ai_url: str
     cs_ai_api_key: str
     cs_ai_model: str
-    cs_live_list: List[str]
     cs_group_list: List[int]
     cs_csqaq_api: str

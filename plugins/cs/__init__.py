@@ -396,13 +396,6 @@ class DataManager:
         ''')
 
         
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS live_status (
-            liveid TEXT,
-            islive INT,
-            PRIMARY KEY (liveid)
-        )
-        ''')
 
     def bind(self, uid, steamid):
         cursor = get_cursor()
@@ -1188,24 +1181,7 @@ class DataManager:
                 'INSERT OR REPLACE INTO  ai_mem (gid, mem) VALUES (?, ?)',
                 (gid, mem)
             )
-             
-    def get_live_status(self, liveid):
-        cursor = get_cursor()
-        cursor.execute(
-            'SELECT islive FROM live_status WHERE liveid = ?',
-            (liveid, )
-        )
-        if result := cursor.fetchone():
-            return result[0]
-        return 0
-
-    def set_live_status(self, liveid, status):
-        cursor = get_cursor()
-        cursor.execute(
-            'INSERT OR REPLACE INTO live_status (liveid, islive) VALUES (?, ?)',
-            (liveid, status)
-        )
-        
+          
     def get_username(self, uid):
         if steamid := self.get_steamid(uid):
             if result := self.get_stats(steamid):
@@ -1344,7 +1320,6 @@ addgoods = on_command("加仓", priority=10, block=True)
 
 langeng = on_command("烂梗", priority=10, block=True)
 
-livestate = on_command("直播状态", priority=10, block=True)
 
 class MinAdd:
     def __init__(self, val):
@@ -2016,47 +1991,3 @@ async def send_week_report():
             group_id=groupid,
             message="== 周日23:45自动周报 ==\n" + get_report("本周", steamids)
         )
-
-
-async def get_live_status(liveid):
-    await asyncio.sleep(1)
-    if liveid.startswith("dy_"):
-        res = requests.get("https://www.doseeing.com/room/"+liveid.split('_')[1])
-        islive = int('<span>直播中</span>' in res.text)
-        nickname = re.findall(r'<title>(.*?)</title>', res.text, re.IGNORECASE)[1][:-10]
-        return islive, nickname
-    if liveid.startswith("bili_"):
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.111 Safari/537.36"}
-        res = requests.get("https://api.live.bilibili.com/room/v1/Room/room_init?id="+liveid.split('_')[1], headers=headers)
-        await asyncio.sleep(1)
-        islive = int(res.json()['data']['live_status'] == 1)
-        uid = res.json()['data']['uid']
-        res = requests.get("https://api.live.bilibili.com/live_user/v1/Master/info?uid="+str(uid), headers=headers)
-        nickname = res.json()['data']['info']['uname']
-        return islive, nickname
-
-
-now_live_state = "无数据"
-@scheduler.scheduled_job("cron", minute="*/2", id="livewatcher")
-async def live_watcher():
-    bot = get_bot(str(config.cs_botid))
-    new_live_state = ""
-    for liveid in config.cs_live_list:
-        islive, nickname = await get_live_status(liveid)
-        logger.info(f"[live_watcher] {nickname} {islive}")
-        new_live_state += f"{nickname} {islive}\n"
-        if islive == 1 and db.get_live_status(liveid) == 0:
-            for groupid in config.cs_group_list:
-                await bot.send_msg(
-                    message_type="group",
-                    group_id=groupid,
-                    message=f"{nickname} 开播了"
-                )
-        db.set_live_status(liveid, islive)
-    global now_live_state
-    now_live_state = new_live_state.strip()
-
-
-@livestate.handle()
-async def livestate_function():
-    await livestate.finish(now_live_state)
