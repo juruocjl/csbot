@@ -4,5 +4,5 @@ from typing import List
 
 class Config(BaseModel):
     """Plugin Config Here"""
-    cs_live_list: List[str]
+    live_watch_list: List[str]
     cs_group_list: List[int]

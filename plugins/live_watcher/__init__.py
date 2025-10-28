@@ -81,7 +81,7 @@ now_live_state = "无数据"
 async def live_watcher():
     bot = get_bot()
     new_live_state = ""
-    for liveid in config.cs_live_list:
+    for liveid in config.live_watch_list:
         islive, nickname = await get_live_status(liveid)
         logger.info(f"[live_watcher] {nickname} {islive}")
         new_live_state += f"{nickname} {islive}\n"
