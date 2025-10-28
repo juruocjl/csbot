@@ -1169,15 +1169,6 @@ class DataManager:
                     result += "<未找到用户>"
         return result.strip()
 
-    def query(self, sql):
-        cursor = get_cursor()
-        cursor.execute(sql)
-        
-        url_pattern = re.compile(
-            r'\'https?://\S+?\''
-        )
-        return url_pattern.sub('url deleted', str(cursor.fetchall()))
-
 
 if not os.path.exists("avatar"):
     os.makedirs("avatar", exist_ok=True)
@@ -1212,8 +1203,6 @@ matches = on_command("记录", priority=10, block=True)
 weekreport = on_command("周报", priority=10, block=True)
 
 dayreport = on_command("日报", priority=10, block=True)
-
-sql = on_command("sql", priority=10, block=True, permission=SUPERUSER)
 
 aiask = on_command("ai", priority=10, block=True)
 
@@ -1455,10 +1444,6 @@ async def updateall_function():
         if result[0] and result[2] != 0:
             qwq.append(result[1:])
     await updateall.finish(f"更新完成 {qwq}")
-
-@sql.handle()
-async def sql_function(args: Message = CommandArg()):
-    await sql.finish(db.query(args.extract_plain_text()))
 
 model_name = config.cs_ai_model
 

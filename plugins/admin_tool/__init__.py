@@ -1,10 +1,19 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot import on_command
+from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
-from nonebot import logger
+from nonebot import require
+
+scheduler = require("nonebot_plugin_apscheduler").scheduler
+
+get_cursor = require("utils").get_cursor
 
 from .config import Config
+
+import subprocess
+import re
 
 __plugin_meta__ = PluginMetadata(
     name="admin_tool",
@@ -15,7 +24,6 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-import subprocess
 
 def git_pull(repo_path: str = ".") -> str:
     try:
@@ -53,7 +61,21 @@ def git_pull(repo_path: str = ".") -> str:
 
 
 pull = on_command("pull", priority=10, block=True, permission=SUPERUSER)
+sql = on_command("sql", priority=10, block=True, permission=SUPERUSER)
 
 @pull.handle()
 async def pull_function():
     await pull.finish(git_pull())
+
+def query(sql):
+    cursor = get_cursor()
+    cursor.execute(sql)
+    
+    url_pattern = re.compile(
+        r'\'https?://\S+?\''
+    )
+    return url_pattern.sub('url deleted', str(cursor.fetchall()))
+
+@sql.handle()
+async def sql_function(args: Message = CommandArg()):
+    await sql.finish(query(args.extract_plain_text()))
