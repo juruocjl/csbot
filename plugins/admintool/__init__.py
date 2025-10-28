@@ -2,6 +2,7 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot import on_command
 from nonebot.permission import SUPERUSER
+from nonebot import logger
 
 from .config import Config
 
@@ -26,15 +27,17 @@ def git_pull(repo_path: str = ".") -> str:
             text=True
         )
         
+        output_lines = result.stdout.strip().splitlines()
+
+        logger.info(output_lines)
+
         if result.returncode == 0:
-            output_lines = result.stdout.strip().splitlines()
             assert(output_lines)
             if output_lines:
                 summary = output_lines[-1]
                 return f"成功：{summary}"
         else:
-            error_lines = result.stderr.strip().splitlines()
-            error_msg = error_lines[-1] if error_lines else "未知错误"
+            error_msg = output_lines[-1] if output_lines else "未知错误"
             return f"失败：{error_msg}"
     
     except Exception as e:
