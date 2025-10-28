@@ -2,14 +2,11 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.params import CommandArg
-from nonebot import on_command, on
+from nonebot import on_command
 from nonebot.permission import SUPERUSER
 from nonebot import get_bot
 from nonebot import require
 from nonebot import logger
-from nonebot.log import default_format
-
-logger.add("app.log", level="INFO", format=default_format, rotation="1 week")
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 

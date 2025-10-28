@@ -130,7 +130,6 @@ async def allmsg_function(bot: Bot, message: MessageEvent):
     uid = message.get_user_id()
     sid = message.get_session_id()
     msg = message.get_message()
-    mid = message.message_id
     mhs = process_message_segments(msg)
     nowpoint = 0
     logger.info(f"{uid} send {msg} with {mhs}")
@@ -169,7 +168,6 @@ async def allmsg_function(bot: Bot, message: MessageEvent):
         msglst.append((uid, msg, mhs))
         if len(msglst) > 1 and msglst[-1][2] != msglst[-2][2]:
             msglst = msglst[-1:]
-        logger.info(f"[msglst] {msglst}")
         nowpoint = len(msglst) - 1
         if len(msglst) > 2:
             await allmsg.send(msglst[0][1])

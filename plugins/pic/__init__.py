@@ -5,9 +5,6 @@ from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.params import Arg
 from nonebot import on_command
 from nonebot import logger
-from nonebot.log import default_format
-logger.add("app.log", level="INFO", format=default_format, rotation="1 week")
-
 
 from .config import Config
 
