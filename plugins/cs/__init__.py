@@ -2,12 +2,15 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
-from nonebot.params import CommandArg, Arg
+from nonebot.params import CommandArg
 from nonebot import on_command, on
-from nonebot.rule import to_me
 from nonebot.permission import SUPERUSER
 from nonebot import get_bot
 from nonebot import require
+from nonebot import logger
+from nonebot.log import default_format
+
+logger.add("app.log", level="INFO", format=default_format, rotation="1 week")
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
@@ -16,7 +19,6 @@ from .config import Config
 config = get_plugin_config(Config)
 
 import math
-import uuid
 import hashlib
 from unicodedata import normalize
 from pathlib import Path
@@ -32,20 +34,12 @@ from io import BytesIO
 import tempfile
 import time
 import datetime
-import logging
 from openai import OpenAI
 import psutil
 import json
 from fuzzywuzzy import process
 import asyncio
 from meme_generator import Image, get_meme
-
-
-logging.basicConfig(
-    filename='app.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 
 
 SeasonId = config.cs_season_id
@@ -457,13 +451,13 @@ class DataManager:
         return result[0] if result else None
 
     def update_match(self, mid, timeStamp, season):
-        logging.info(f"[update_match] start {mid}")
+        logger.info(f"[update_match] start {mid}")
         cursor = self.conn.cursor()
         cursor.execute('''SELECT COUNT(mid) as cnt FROM matches WHERE mid == ?
         ''',(mid, ))
         result = cursor.fetchone()
         if result[0] > 0:
-            logging.info(f"[update_match] {mid} in db")
+            logger.info(f"[update_match] {mid} in db")
             return 0
         url = "https://api.wmpvp.com/api/v1/csgo/match"
         payload = {
@@ -476,7 +470,7 @@ class DataManager:
         result = requests.post(url,headers=header,json=payload, verify=False)
         data = result.json()
         if data["statusCode"] != 0:
-            logging.error(f"爬取失败  {mid} {data}")
+            logger.error(f"爬取失败  {mid} {data}")
             raise RuntimeError("爬取失败：" + data["errorMessage"])
         base = data['data']['base']
         count = {}
@@ -559,7 +553,7 @@ class DataManager:
         result = requests.post(url,headers=header,json=payload, verify=False)
         data = result.json()
         if data["statusCode"] != 0:
-            logging.error(f"爬取失败 {steamid} {data}")
+            logger.error(f"爬取失败 {steamid} {data}")
             return (False, "爬取失败：" + data["errorMessage"])
         cursor = self.conn.cursor()
         cursor.execute('''
@@ -600,7 +594,7 @@ class DataManager:
                     result = requests.post(url, json=payload, headers=headers,verify=False)
                     ddata = result.json()
                     if ddata["statusCode"] != 0:
-                        logging.error(f"爬取失败 {steamid} {SeasonID} {page} {data}")
+                        logger.error(f"爬取失败 {steamid} {SeasonID} {page} {data}")
                         return (False, "爬取失败：" + data["errorMessage"])
                     time.sleep(0.1)
                     for match in ddata['data']['matchList']:
@@ -1287,7 +1281,7 @@ class DataManager:
                     )
                     self.conn.commit()
             else:
-                logging.error("[update_goods] "+data['msg'])
+                logger.error("[update_goods] "+data['msg'])
             await asyncio.sleep(1.1)
 
     def getallgoods(self):
@@ -1349,12 +1343,6 @@ if not os.path.exists("avatar"):
 if not os.path.exists("temp"):
     os.makedirs("temp", exist_ok=True)
 
-def get_file_hash(file_path, chunk_size=8192, algorithm='sha256'):
-    hash_obj = hashlib.new(algorithm)
-    with open(file_path, 'rb') as f:
-        while chunk := f.read(chunk_size):
-            hash_obj.update(chunk)
-    return hash_obj.hexdigest()
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -1386,37 +1374,6 @@ def process_message_segments(segments):
                 hash_source += f"image:{data}".encode("utf-8") + b"|"
 
     return get_bytes_hash(hash_source)
-
-class PicDir:
-    def __init__(self, dirname):
-        self.dirname = dirname
-        if not os.path.exists(dirname):
-            os.makedirs(dirname, exist_ok=True)
-        self.hashset = set()
-        files = [f for f in Path(self.dirname).iterdir() if f.is_file()]
-        for f in files:
-            hashval = get_file_hash(f)
-            if hashval in self.hashset:
-                f.unlink()
-            self.hashset.add(hashval)
-    
-    def getpic(self):
-        files = [f for f in Path(self.dirname).iterdir() if f.is_file()]
-        if len(files) == 0:
-            return None
-        return random.choice(files)
-    
-    def addpic(self, filename, url):
-        filepath = Path(self.dirname) / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
-        urllib.request.urlretrieve(url, filepath)
-        hashval = get_file_hash(filepath)
-        if hashval in self.hashset:
-            logging.info(f"[add{self.dirname}]  {filename} existed")
-            filepath.unlink()
-            return 0
-        logging.info(f"[add{self.dirname}] {filename}")
-        self.hashset.add(hashval)
-        return 1
 
 __plugin_meta__ = PluginMetadata(
     name="cs",
@@ -1464,14 +1421,6 @@ aiasktest = on_command("aitest", priority=10, block=True, permission=SUPERUSER)
 aimem = on_command("ai记忆", priority=10, block=True)
 
 getstatus = on_command("状态", priority=10, block=True)
-
-getpic = on_command("getpic", priority=10, block=True)
-
-addpic = on_command("addpic", priority=10, block=True)
-
-getmgz = on_command("getmgz", priority=10, block=True)
-
-addmgz = on_command("addmgz", priority=10, block=True)
 
 caigou = on_command("采购", priority=10, block=True)
 
@@ -1823,7 +1772,7 @@ def ai_ask2(uid, sid, type, text):
             messages=msgs,
         )
         first_result = response.choices[0].message.content
-        logging.info(first_result)
+        logger.info(first_result)
         msgs = [{"role": "system", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
         if type == "贴吧":
             msgs.append({"role": "system", "content": "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"})
@@ -1846,7 +1795,7 @@ def ai_ask2(uid, sid, type, text):
             except:
                 import sys
                 exc_type, exc_value, _ = sys.exc_info()
-                logging.warning(f"{data} 解析失败 {exc_type} {exc_value}")
+                logger.warning(f"{data} 解析失败 {exc_type} {exc_value}")
         for steamid in steamids:
             if (steamid in steamid_username) and len(need_times[steamid_username[steamid]]) > 0:
                 print(steamid_username[steamid], need_times[steamid_username[steamid]])
@@ -1885,11 +1834,11 @@ def ai_ask2(uid, sid, type, text):
             except:
                 import sys
                 exc_type, exc_value, _ = sys.exc_info()
-                logging.warning(f"{data} 解析失败 {exc_type} {exc_value}")
+                logger.warning(f"{data} 解析失败 {exc_type} {exc_value}")
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
         msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
         msgs.append({"role": "user","content": text,})
-        # logging.info(f"{msgs}")
+        # logger.info(f"{msgs}")
         response = client.chat.completions.create(
             model=model_name,
             messages=msgs,
@@ -2008,61 +1957,10 @@ async def getstatus_function(message: MessageEvent):
     }
     await getstatus.finish(Message([
         MessageSegment.at(message.get_user_id()),
-        f"""\n=== 系统状态 ({status['timestamp']}) ===
-    CPU 总使用率: {status['cpu_usage_percent']}%
-    内存总容量: {status['memory']['total_gb']}GB
-    已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
-    可用内存: {status['memory']['available_gb']}GB
-    ----------------------------------------"""]))
-
-
-Pic1 = PicDir("pic")
-lastpic = None
-Pic2 = PicDir("mgz")
-
-@getpic.handle()
-async def getpic_function(bot: Bot, message: MessageEvent):
-    global lastpic
-    imgpath = Pic1.getpic()
-    if not imgpath:
-        await getpic.finish("没有图片")
-    lastpic = imgpath
-    msg = await getpic.send(MessageSegment.image(imgpath))
-    await asyncio.sleep(600)
-    await bot.delete_msg(message_id = msg['message_id'])
-@addpic.handle()
-async def addpic_handle_function():
-    pass
-@addpic.got("imgs", prompt="请发送图片")
-async def addpic_got_imgs(imgs: Message = Arg()):
-    addcnt = 0
-    for seg in imgs:
-        if seg.type == 'image':
-            addcnt += Pic1.addpic(seg.data['file'], seg.data["url"])
-    if addcnt > 0:
-        await addpic.finish(f"成功添加 {addcnt} 张图片")
-    await addpic.finish(f"添加失败")
-
-@getmgz.handle()
-async def getmgz_function(bot: Bot, message: MessageEvent):
-    imgpath = Pic2.getpic()
-    if not imgpath:
-        await getpic.finish("没有图片")
-    msg = await getpic.send(MessageSegment.image(imgpath))
-    await asyncio.sleep(600)
-    await bot.delete_msg(message_id = msg['message_id'])
-@addmgz.handle()
-async def addmgz_handle_function():
-    pass
-@addmgz.got("imgs", prompt="请发送图片")
-async def addmgz_got_imgs(imgs: Message = Arg()):
-    addcnt = 0
-    for seg in imgs:
-        if seg.type == 'image':
-            addcnt += Pic2.addpic(seg.data['file'], seg.data["url"])
-    if addcnt > 0:
-        await addmgz.finish(f"成功添加 {addcnt} 张图片")
-    await addmgz.finish(f"添加失败")
+        f"""\nCPU 总使用率: {status['cpu_usage_percent']}%
+内存总容量: {status['memory']['total_gb']}GB
+已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
+可用内存: {status['memory']['available_gb']}GB"""]))
 
 
 @caigou.handle()
@@ -2072,7 +1970,7 @@ async def caigou_function(message: MessageEvent):
 
 def get_baojia(title = "当前底价"):
     allgoods = db.getallgoods()
-    logging.info(allgoods)
+    logger.info(allgoods)
     data = []
     for goods in allgoods:
         info = db.getgoodsinfo(goods)
@@ -2234,7 +2132,7 @@ async def allmsg_function(message: MessageEvent):
     mid = message.message_id
     mhs = process_message_segments(msg)
     nowpoint = 0
-    logging.info(f"{uid} send {msg} with {mhs}")
+    logger.info(f"{uid} send {msg} with {mhs}")
     if not sid.startswith("group"):
         return
     gid = sid.split('_')[1]
@@ -2271,7 +2169,7 @@ async def allmsg_function(message: MessageEvent):
         msglst.append((uid, msg, mhs))
         if len(msglst) > 1 and msglst[-1][2] != msglst[-2][2]:
             msglst = msglst[-1:]
-        logging.info(f"[msglst] {msglst}")
+        logger.info(f"[msglst] {msglst}")
         nowpoint = len(msglst) - 1
         if len(msglst) > 2:
             await allmsg.send(msglst[0][1])
@@ -2311,7 +2209,7 @@ async def live_watcher():
     new_live_state = ""
     for liveid in config.cs_live_list:
         islive, nickname = await get_live_status(liveid)
-        logging.info(f"[live_watcher] {nickname} {islive}")
+        logger.info(f"[live_watcher] {nickname} {islive}")
         new_live_state += f"{nickname} {islive}\n"
         if islive == 1 and db.get_live_status(liveid) == 0:
             for groupid in config.cs_group_list:
