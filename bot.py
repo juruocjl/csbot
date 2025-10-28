@@ -7,6 +7,7 @@ nonebot.init()
 driver = nonebot.get_driver()
 driver.register_adapter(OneBotAdapter)
  
+nonebot.load_plugin(Path("plugins") / "utils")
 nonebot.load_plugin(Path("plugins") / "ts")
 nonebot.load_plugin(Path("plugins") / "pic")
 nonebot.load_plugin(Path("plugins") / "restart")

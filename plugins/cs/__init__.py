@@ -1,6 +1,5 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.params import CommandArg
 from nonebot import on_command, on
@@ -16,19 +15,19 @@ scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 get_pic_status = require("pic").get_pic_status
 
+get_cursor = require("utils").get_cursor
+
+get_today_start_timestamp = require("utils").get_today_start_timestamp
+
 from .config import Config
 config = get_plugin_config(Config)
 
-import math
-import hashlib
 from unicodedata import normalize
 from pathlib import Path
 import re
-import sqlite3
 import requests
 import urllib.request
 import os
-import random
 import asyncio
 from pyppeteer import launch
 from io import BytesIO
@@ -40,7 +39,6 @@ import psutil
 import json
 from fuzzywuzzy import process
 import asyncio
-from meme_generator import Image, get_meme
 
 
 SeasonId = config.cs_season_id
@@ -55,12 +53,6 @@ with open(Path("assets") / "rank.html", 'r', encoding='utf-8') as file:
 with open(Path("assets") / "matches.html", 'r', encoding='utf-8') as file:
     matches_content = file.read().split("<!--SPLIT--->")
 
-
-def get_today_start_timestamp():
-    today = datetime.date.today()
-    today_start = datetime.datetime.combine(today, datetime.time.min)
-    timestamp = int(time.mktime(today_start.timetuple()))
-    return timestamp
 
 def path_to_file_url(path):
     absolute_path = os.path.abspath(path)
@@ -278,12 +270,8 @@ def red_to_green_color(score):
     return f"rgb({round(red*255)},{round(green*255)},{round(blue*255)})"
 
 class DataManager:
-    def __init__(self, db_name: str = "groups.db"):
-        self.conn = sqlite3.connect(db_name)
-        self._create_tables()
-
-    def _create_tables(self):
-        cursor = self.conn.cursor()
+    def __init__(self):
+        cursor = get_cursor()
         
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS group_members (
@@ -419,32 +407,20 @@ class DataManager:
         )
         ''')
 
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS fudu_points (
-            uid TEXT,
-            timeStamp INT,
-            point INT
-        )
-        ''')
-
-        self.conn.commit()
-    
     def bind(self, uid, steamid):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('''
         INSERT OR REPLACE INTO members_steamid (uid, steamid) VALUES (?, ?)
         ''', (uid, steamid))
-        self.conn.commit()
-
+        
     def unbind(self, uid):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('''
         DELETE FROM members_steamid WHERE uid == ?;
         ''', (uid,))
-        self.conn.commit()
-
+        
     def get_steamid(self, uid):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('''
         SELECT steamid FROM members_steamid WHERE uid = ?
         ''', (uid,))
@@ -453,7 +429,7 @@ class DataManager:
 
     def update_match(self, mid, timeStamp, season):
         logger.info(f"[update_match] start {mid}")
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('''SELECT COUNT(mid) as cnt FROM matches WHERE mid == ?
         ''',(mid, ))
         result = cursor.fetchone()
@@ -538,7 +514,7 @@ class DataManager:
                 player['vs5'], player['dmgArmor'], player['dmgHealth'], player['adpr'], player['rws'],
                 player['teamId'], player['throwsCnt'], player['snipeNum'], player['firstDeath'])
             )
-        self.conn.commit()
+        
         return 1
 
     def update_stats(self, steamid):
@@ -556,7 +532,7 @@ class DataManager:
         if data["statusCode"] != 0:
             logger.error(f"爬取失败 {steamid} {data}")
             return (False, "爬取失败：" + data["errorMessage"])
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('''
         SELECT avatarlink, lasttime FROM steamid_detail WHERE steamid = ?
         ''', (steamid,))
@@ -654,11 +630,11 @@ class DataManager:
               newLastTime,
               data["data"]["seasonId"],
               ))
-        self.conn.commit()
+        
         return (True, name, addMatches)
     
     def get_stats(self, steamid):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('''
         SELECT * FROM steamid_detail WHERE steamid = ?
         ''', (steamid,))
@@ -702,7 +678,7 @@ class DataManager:
             return None
 
     def search_user(self, name, id = 1):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('''SELECT steamid, name FROM steamid_detail 
             WHERE name LIKE ? 
             ORDER BY steamid
@@ -710,24 +686,23 @@ class DataManager:
         return cursor.fetchone()
 
     def get_all_steamid(self):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('SELECT steamid FROM members_steamid',)
         return [row[0] for row in cursor.fetchall()]
     
     def add_member(self, gid, uid):
         if gid.startswith("group_"):
             gid = gid.split("_")[1]
-            cursor = self.conn.cursor()
+            cursor = get_cursor()
             cursor.execute(
                 'INSERT OR IGNORE INTO group_members (gid, uid) VALUES (?, ?)',
                 (gid, uid)
             )
-            self.conn.commit()
-
+            
     def get_member(self, gid):
         if gid.startswith("group_"):
             gid = gid.split("_")[1]
-            cursor = self.conn.cursor()
+            cursor = get_cursor()
             cursor.execute(
                 'SELECT uid FROM group_members WHERE gid = ?',
                 (gid, )
@@ -765,7 +740,7 @@ class DataManager:
     def get_value(self, steamid, query_type, time_type):
         time_sql = self.get_time_sql(time_type)
         steamid_sql = f"steamid == '{steamid}'"
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         
         if query_type == "ELO":
             assert(time_type == "本赛季")
@@ -1116,7 +1091,7 @@ class DataManager:
     def get_all_value(self, steamid, time_type):
         time_sql = self.get_time_sql(time_type)
         steamid_sql = f"steamid == '{steamid}'"
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute(f'''SELECT 
                             AVG(pwRating) as avgRating,
                             MAX(pwRating) as maxRating,
@@ -1183,7 +1158,7 @@ class DataManager:
         return prompt
 
     async def get_matches_image(self, steamid, time_type, LIMIT = 20):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute(f'''SELECT * FROM 'matches'
                             WHERE 
                             {self.get_time_sql(time_type)} and steamid == ?
@@ -1199,7 +1174,7 @@ class DataManager:
     def get_mem(self, gid):
         if gid.startswith("group_"):
             gid = gid.split("_")[1]
-            cursor = self.conn.cursor()
+            cursor = get_cursor()
             cursor.execute(
                 'SELECT mem FROM ai_mem WHERE gid = ?',
                 (gid, )
@@ -1211,15 +1186,14 @@ class DataManager:
     def set_mem(self, gid, mem):
         if gid.startswith("group_"):
             gid = gid.split("_")[1]
-            cursor = self.conn.cursor()
+            cursor = get_cursor()
             cursor.execute(
                 'INSERT OR REPLACE INTO  ai_mem (gid, mem) VALUES (?, ?)',
                 (gid, mem)
             )
-            self.conn.commit()
-   
+             
     def get_live_status(self, liveid):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute(
             'SELECT islive FROM live_status WHERE liveid = ?',
             (liveid, )
@@ -1229,13 +1203,12 @@ class DataManager:
         return 0
 
     def set_live_status(self, liveid, status):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute(
             'INSERT OR REPLACE INTO live_status (liveid, islive) VALUES (?, ?)',
             (liveid, status)
         )
-        self.conn.commit()
-
+        
     def get_username(self, uid):
         if steamid := self.get_steamid(uid):
             if result := self.get_stats(steamid):
@@ -1255,15 +1228,14 @@ class DataManager:
         return result.strip()
 
     def addgoods(self, uid, name):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute(
             'INSERT OR IGNORE INTO  member_goods (uid, marketHashName) VALUES (?, ?)',
             (uid, name)
         )
-        self.conn.commit()
-
+        
     async def update_goods(self, goods_list):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
             goods_list = goods_list[50:]
@@ -1280,58 +1252,31 @@ class DataManager:
                         round(good_info['steamSellPrice'] * 100), good_info['steamSellNum']
                         )
                     )
-                    self.conn.commit()
+                    
             else:
                 logger.error("[update_goods] "+data['msg'])
             await asyncio.sleep(1.1)
 
     def getallgoods(self):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('SELECT DISTINCT marketHashName FROM member_goods')
         res = cursor.fetchall()
         return [a[0] for a in res]
     
     def getgoodsinfo(self, marketHashName):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? ORDER BY timeStamp DESC LIMIT 1', (marketHashName, ))
         return cursor.fetchone()
 
     def getgoodsinfo_time(self, marketHashName, TimeStamp):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? and timeStamp >= ? ORDER BY timeStamp ASC LIMIT 1', (marketHashName, TimeStamp))
         return cursor.fetchone()
 
-    def add_point(self, uid, point):
-        timestamp = int(time.time())
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "INSERT INTO fudu_points (uid, timeStamp, point) VALUES (?, ?, ?)",
-            (uid, timestamp, point)
-        )
-        self.conn.commit()
-    
-    def get_point(self, uid):
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT SUM(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ?",
-            (uid, get_today_start_timestamp())
-        )
-        result = cursor.fetchone()
-        return result[0] if result[0] is not None else 0
-
-    def get_zero_point(self, uid):
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ? AND point == 0",
-            (uid, get_today_start_timestamp())
-        )
-        result = cursor.fetchone()
-        return result[0] if result[0] is not None else 0
-
     def query(self, sql):
-        cursor = self.conn.cursor()
+        cursor = get_cursor()
         cursor.execute(sql)
-        self.conn.commit()
+        
         url_pattern = re.compile(
             r'\'https?://\S+?\''
         )
@@ -1344,37 +1289,6 @@ if not os.path.exists("avatar"):
 if not os.path.exists("temp"):
     os.makedirs("temp", exist_ok=True)
 
-
-def get_bytes_hash(data, algorithm='sha256'):
-    hash_obj = hashlib.new(algorithm)
-    hash_obj.update(data)
-    return hash_obj.hexdigest()
-
-def process_message_segments(segments):
-    """处理消息段，提取信息并计算哈希"""
-    processed_data = []
-    hash_source = b""
-    
-    for seg in segments:
-        if seg.type == "text":
-            text = get_bytes_hash(seg.data["text"].encode("utf-8"))
-            hash_source += f"text:{text}".encode("utf-8") + b"|"
-            
-        elif seg.type == "at":
-            user_id = seg.data["qq"]
-            hash_source += f"at:{user_id}".encode("utf-8") + b"|"
-            
-        elif seg.type == "face":
-            face_id = seg.data["id"]
-            hash_source += f"face:{face_id}".encode("utf-8") + b"|"
-            
-        elif seg.type == "image":
-            url = seg.data["url"]
-            with urllib.request.urlopen(url) as response:
-                data = get_bytes_hash(response.read())
-                hash_source += f"image:{data}".encode("utf-8") + b"|"
-
-    return get_bytes_hash(hash_source)
 
 __plugin_meta__ = PluginMetadata(
     name="cs",
@@ -1433,11 +1347,7 @@ addgoods = on_command("加仓", priority=10, block=True)
 
 langeng = on_command("烂梗", priority=10, block=True)
 
-fudupoint = on_command("复读点数", priority=10, block=True)
-
 livestate = on_command("直播状态", priority=10, block=True)
-
-allmsg = on(priority=100, block=True)
 
 class MinAdd:
     def __init__(self, val):
@@ -2110,84 +2020,6 @@ async def send_week_report():
             message="== 周日23:45自动周报 ==\n" + get_report("本周", steamids)
         )
 
-def sigmoid_step(x):
-    t = (x - 50) / 500.0
-    return max(0.02, math.tanh(t))
-
-@fudupoint.handle()
-async def fudupoint_function(message: MessageEvent):
-    uid = message.get_user_id()
-    point = db.get_point(uid)
-    prob1 = sigmoid_step(point + 1)
-    prob2 = sigmoid_step((point + 2) * 2)
-    prob3 = sigmoid_step((point + 3) * 3)
-    prob5 = sigmoid_step((point + 5) * 5)
-    tm = db.get_zero_point(uid) + 1
-    await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
-
-
-lastmsg = {}
-
-@allmsg.handle()
-async def allmsg_function(message: MessageEvent):
-    global lastpic
-    uid = message.get_user_id()
-    sid = message.get_session_id()
-    msg = message.get_message()
-    mid = message.message_id
-    mhs = process_message_segments(msg)
-    nowpoint = 0
-    logger.info(f"{uid} send {msg} with {mhs}")
-    if not sid.startswith("group"):
-        return
-    gid = sid.split('_')[1]
-    bot = get_bot(str(config.cs_botid))
-    text = msg.extract_plain_text().lower().strip()
-    if text == "wlp" and lastpic:
-        meme = get_meme("my_wife")
-        with open(lastpic, "rb") as f:
-            data = f.read()
-        result = meme.generate([Image("test", data)], [], {})
-        lastpic = None
-        if isinstance(result, bytes):
-            await allmsg.send(MessageSegment.image(result))
-    if text == "nlg" and lastpic:
-        meme = get_meme("dog_dislike")
-        with open(lastpic, "rb") as f:
-            data = f.read()
-        result = meme.generate([Image("test", data)], [], {})
-        lastpic = None
-        if isinstance(result, bytes):
-            await allmsg.send(MessageSegment.image(result))
-    if text == "gsm" or text == "干什么":
-        await allmsg.send(MessageSegment.record(Path("assets") / "gsm.mp3"))
-    if text == "mbf" or text == "没办法":
-        await allmsg.send(MessageSegment.record(Path("assets") / "mbf.mp3"))
-    msglst = []
-    if gid in lastmsg:
-        msglst = lastmsg[gid]
-    if len(msglst) == 1 and msglst[0][0] == config.cs_botid and msglst[0][2] == mhs:
-        nowpoint = 3
-    elif len(msglst) > 0 and msglst[0][2] == mhs and (uid in [a[0] for a in msglst]):
-        nowpoint = 5
-    else:
-        msglst.append((uid, msg, mhs))
-        if len(msglst) > 1 and msglst[-1][2] != msglst[-2][2]:
-            msglst = msglst[-1:]
-        logger.info(f"[msglst] {msglst}")
-        nowpoint = len(msglst) - 1
-        if len(msglst) > 2:
-            await allmsg.send(msglst[0][1])
-            msglst = [(config.cs_botid, msglst[0][1], mhs)]
-    lastmsg[gid] = msglst
-    if nowpoint > 0:
-        db.add_point(uid, nowpoint)
-        prob = sigmoid_step(nowpoint * db.get_point(uid))
-        if random.random() < prob:
-            db.add_point(uid, 0)
-            tm = db.get_zero_point(uid)
-            await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * db.get_zero_point(uid))
-            await allmsg.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
 async def get_live_status(liveid):
     await asyncio.sleep(1)
