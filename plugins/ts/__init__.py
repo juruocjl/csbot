@@ -16,7 +16,7 @@ config = get_plugin_config(Config)
 import ts3
 
 
-URI = "telnet://serveradmin:" + config.cs_ts_pswd + "@localhost:10011"
+URI = "telnet://serveradmin:" + config.ts_pswd + "@localhost:10011"
 
 SID = 1
 
