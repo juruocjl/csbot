@@ -369,34 +369,6 @@ class DataManager:
         )
         ''')
 
-        
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS member_goods (
-            uid TEXT,
-            marketHashName TEXT,
-            PRIMARY KEY (uid, marketHashName)
-        )
-        ''')
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS goods_info (
-            marketHashName TEXT,
-            timeStamp INT,
-            goodId INT,
-            name TEXT,
-            buffSellPrice INT,
-            buffSellNum INT,
-            yyypSellPrice INT,
-            yyypSellNum INT,
-            steamSellPrice INT,
-            steamSellNum INT,
-            PRIMARY KEY (marketHashName, timeStamp)
-        )
-        ''')
-
-        
-
     def bind(self, uid, steamid):
         cursor = get_cursor()
         cursor.execute('''
@@ -1200,52 +1172,6 @@ class DataManager:
                     result += "<未找到用户>"
         return result.strip()
 
-    def addgoods(self, uid, name):
-        cursor = get_cursor()
-        cursor.execute(
-            'INSERT OR IGNORE INTO  member_goods (uid, marketHashName) VALUES (?, ?)',
-            (uid, name)
-        )
-        
-    async def update_goods(self, goods_list):
-        cursor = get_cursor()
-        while len(goods_list) > 0:
-            now_goods = goods_list[:50]
-            goods_list = goods_list[50:]
-            res = requests.post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.cs_csqaq_api})
-            data = res.json()
-            timeStamp = time.time()
-            if data['code'] == 200:
-                for marketHashName, good_info in data['data']['success'].items():
-                    cursor.execute(
-                        'INSERT INTO goods_info (marketHashName,timeStamp,goodId,name,buffSellPrice,buffSellNum,yyypSellPrice,yyypSellNum,steamSellPrice,steamSellNum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (marketHashName, time.time(), good_info['goodId'], good_info['name'],
-                        round(good_info['buffSellPrice'] * 100), good_info['buffSellNum'],
-                        round(good_info['yyypSellPrice'] * 100), good_info['yyypSellNum'],
-                        round(good_info['steamSellPrice'] * 100), good_info['steamSellNum']
-                        )
-                    )
-                    
-            else:
-                logger.error("[update_goods] "+data['msg'])
-            await asyncio.sleep(1.1)
-
-    def getallgoods(self):
-        cursor = get_cursor()
-        cursor.execute('SELECT DISTINCT marketHashName FROM member_goods')
-        res = cursor.fetchall()
-        return [a[0] for a in res]
-    
-    def getgoodsinfo(self, marketHashName):
-        cursor = get_cursor()
-        cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? ORDER BY timeStamp DESC LIMIT 1', (marketHashName, ))
-        return cursor.fetchone()
-
-    def getgoodsinfo_time(self, marketHashName, TimeStamp):
-        cursor = get_cursor()
-        cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? and timeStamp >= ? ORDER BY timeStamp ASC LIMIT 1', (marketHashName, TimeStamp))
-        return cursor.fetchone()
-
     def query(self, sql):
         cursor = get_cursor()
         cursor.execute(sql)
@@ -1311,12 +1237,6 @@ aimem = on_command("ai记忆", priority=10, block=True)
 getstatus = on_command("状态", priority=10, block=True)
 
 caigou = on_command("采购", priority=10, block=True)
-
-baojia = on_command("报价", priority=10, block=True)
-
-search = on_command("搜索", priority=10, block=True)
-
-addgoods = on_command("加仓", priority=10, block=True)
 
 langeng = on_command("烂梗", priority=10, block=True)
 
@@ -1583,43 +1503,6 @@ async def sql_function(args: Message = CommandArg()):
 
 model_name = config.cs_ai_model
 
-def ai_ask(uid, sid, type, text):
-    steamids = db.get_member_steamid(sid)
-    mysteamid = db.get_steamid(uid)
-    try:
-        # 创建聊天完成请求
-        client = OpenAI(
-            api_key=config.cs_ai_api_key,
-            base_url=config.cs_ai_url,
-        )
-        msgs = [{"role": "system", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
-        if type == "贴吧":
-            msgs.append({"role": "system", "content": "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"})
-        elif type == "xmm":
-            msgs.append({"role": "system", "content": "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"})
-        elif type == "xhs":
-            msgs.append({"role": "system", "content": "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"})
-        elif type == "tmr":
-            msgs.append({"role": "system", "content": "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"})
-        if mysteamid != None:
-            result = db.get_stats(mysteamid)
-            if result:
-                msgs.append({"role": "system", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
-        for steamid in steamids:
-            if result := db.get_propmt(steamid):
-                msgs.append({"role": "system", "content": result})
-        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db.get_mem(sid)}"})
-        msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
-        msgs.append({"role": "user","content": text,})
-        print(msgs)
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=msgs,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"发生错误: {str(e)}"
-
 def ai_ask2(uid, sid, type, text):
     steamids = db.get_member_steamid(sid)
     mysteamid = db.get_steamid(uid)
@@ -1852,66 +1735,7 @@ async def getstatus_function(message: MessageEvent):
 
 @caigou.handle()
 async def caigou_function(message: MessageEvent):
-    uid = message.get_user_id()
     await caigou.finish(MessageSegment.face(317))
-
-def get_baojia(title = "当前底价"):
-    allgoods = db.getallgoods()
-    logger.info(allgoods)
-    data = []
-    for goods in allgoods:
-        info = db.getgoodsinfo(goods)
-        info1d = db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
-        info7d = db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
-        delta1d = str((info[6] - info1d[6]) / 100) if info[1] - info1d[1] >= 20 * 3600 else "无数据"
-        delta7d = str((info[6] - info7d[6]) / 100) if info[1] - info7d[1] >= 6 * 24 * 3600 else "无数据"
-        
-        data.append((info[3], info[6], delta1d, delta7d))
-    data = sorted(data, key = lambda x: x[1])
-    return (title + "\n" + "\n".join([a[0] + "\n> " + str(a[1]/100) + "   Δ1d=" + a[2] + "   Δ7d=" + a[3] for a in data])).strip()
-
-@baojia.handle()
-async def baojia_function():
-    await baojia.finish(get_baojia())
-
-@search.handle()
-async def search_function(args: Message = CommandArg()):
-    res = requests.get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers={'ApiToken': config.cs_csqaq_api})
-    data = res.json()
-    if data['code'] == 200:
-        await search.finish(("搜索结果\n" + "\n".join([f"{item['id']}. {item['value']}" for item in data['data'][:10]])).strip())
-    else:
-        await search.finish("搜索出错 " + data['msg'])
-
-@addgoods.handle()
-async def addgoods_function(message: MessageEvent, args: Message = CommandArg()):
-    uid = message.get_user_id()
-    res = ""
-    try:
-        res = requests.get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.cs_csqaq_api})
-        data = res.json()
-        time.sleep(1.1)
-        await db.update_goods([data['data']['goods_info']['market_hash_name']])
-        db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
-        res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
-    except Exception as e:
-        res = f"加仓失败 {e}"
-    await addgoods.finish(res)
-
-@scheduler.scheduled_job("cron", hour="0-9,11-23", id="hourupdate")
-async def hour_update_baojia():
-    await db.update_goods(db.getallgoods())
-
-@scheduler.scheduled_job("cron", hour="10", id="baojia")
-async def send_baojia():
-    await db.update_goods(db.getallgoods())
-    bot = get_bot(str(config.cs_botid))
-    for groupid in config.cs_group_list:
-        await bot.send_msg(
-            message_type="group",
-            group_id=groupid,
-            message=get_baojia(title = "10点自动更新")
-        )
 
 def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
     prize_name = "🥇🥈🥉456789"
