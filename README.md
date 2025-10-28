@@ -2,9 +2,13 @@
 
 ## How to start
 
-1. `python -m venv venv` .
-2. `pip install -r requirement.txt` .
-3. `nb run` .
+1. `uv venv` .
+2. `source .venv/bin/activate` .
+3. `uv sync` .
+4. `nb run` .
+
+## Export Env
+1. `uv pip freeze > requirements.txt`
 
 ## Documentation
 
