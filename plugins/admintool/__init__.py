@@ -35,7 +35,7 @@ def git_pull(repo_path: str = ".") -> str:
             elif "Already up to date" in detailed_lines[-1]:
                 summary = "已是最新版本，无需更新"
             elif "Fast-forward" in detailed_lines:
-                stats_line = next((line for line in detailed_lines if "files changed" in line), None)
+                stats_line = next((line for line in detailed_lines if "files changed" in line or "file changed" in line), None)
                 if stats_line:
                     summary = f"更新成功：{stats_line}"
                 else:
