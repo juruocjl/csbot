@@ -10,8 +10,6 @@ from nonebot import logger
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
-get_pic_status = require("pic").get_pic_status
-
 get_cursor = require("utils").get_cursor
 
 get_today_start_timestamp = require("utils").get_today_start_timestamp
@@ -32,7 +30,6 @@ import tempfile
 import time
 import datetime
 from openai import OpenAI
-import psutil
 import json
 from fuzzywuzzy import process
 import asyncio
@@ -1198,8 +1195,6 @@ __plugin_meta__ = PluginMetadata(
 
 db = DataManager()
 
-help = on_command("帮助", priority=20, block=True)
-
 bind = on_command("绑定", priority=10, block=True)
 
 unbind = on_command("解绑", priority=10, block=True)
@@ -1233,12 +1228,6 @@ aiasktmr = on_command("aitmr", priority=10, block=True)
 aiasktest = on_command("aitest", priority=10, block=True, permission=SUPERUSER)
 
 aimem = on_command("ai记忆", priority=10, block=True)
-
-getstatus = on_command("状态", priority=10, block=True)
-
-caigou = on_command("采购", priority=10, block=True)
-
-langeng = on_command("烂梗", priority=10, block=True)
 
 
 class MinAdd:
@@ -1300,36 +1289,6 @@ rank_config = [
 
 valid_rank = [a[0] for a in rank_config]
 
-
-@help.handle()
-async def help_function():
-    await help.finish(f"""可用指令：
-/绑定 steamid64
-/解绑
-/更新数据
-/查看数据 (用户名匹配)
-默认查看自己数据。你可以使用用户名匹配查看第一个匹配到用户的数据。
-/记录 (用户名匹配) (时间)
-默认查看自己记录。最多 20 条。如果只有一个参数，会优先判断是否为时间。默认时间为全部。
-/排名 [选项] (时间)
-查看指定时间指定排名，具体可选项可以使用 /排名 查看。
-/ai /aitb /aixmm /aixhs [内容]
-向ai提问，风格为 普通ai，贴吧老哥，可爱女友，小红书
-/ai记忆 [内容]
-向ai增加记忆内容
-/搜索 [饰品名称]
-/加仓 [饰品id]
-/报价
-/状态
-查询服务器状态。
-/复读点数
-查看当前复读点数以及禁言概率
-禁言概率公式：max(0.02,tanh((本句点数*累计点数-50)/500))
-                 
-(用户名匹配) 使用语法为 % 匹配任意长度串，_ 匹配长度为 1 串。
-可选 (时间)：{valid_time}
-在 /查看数据 /记录 /ai* 时你的@消息会被替换成对应的用户名，找不到则会被替换为<未找到用户>
-""")
 
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
@@ -1699,43 +1658,6 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
         result
     ]))
 
-@getstatus.handle()
-async def getstatus_function(message: MessageEvent):
-    cpu_usage = psutil.cpu_percent()
-    
-    # 获取内存信息
-    memory = psutil.virtual_memory()
-    total_mem = memory.total / (1024 **3)  # 转换为GB
-    used_mem = memory.used / (1024** 3)
-    available_mem = memory.available / (1024 **3)
-    mem_usage = memory.percent
-    
-    # 组织结果
-    status = {
-        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'cpu_usage_percent': cpu_usage,
-        'memory': {
-            'total_gb': round(total_mem, 2),
-            'used_gb': round(used_mem, 2),
-            'available_gb': round(available_mem, 2),
-            'usage_percent': mem_usage
-        }
-    }
-
-    tuku = get_pic_status()
-
-    await getstatus.finish(Message([
-        MessageSegment.at(message.get_user_id()),
-        f"""\nCPU 总使用率: {status['cpu_usage_percent']}%
-内存总容量: {status['memory']['total_gb']}GB
-已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
-可用内存: {status['memory']['available_gb']}GB
-当前图库: {tuku}"""]))
-
-
-@caigou.handle()
-async def caigou_function(message: MessageEvent):
-    await caigou.finish(MessageSegment.face(317))
 
 def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
     prize_name = "🥇🥈🥉456789"
@@ -1786,11 +1708,6 @@ async def dayreport_function(message: MessageEvent):
     sid = message.get_session_id()
     steamids = db.get_member_steamid(sid)
     await weekreport.finish("== 日报 ==\n" + get_report("今日", steamids))
-
-@langeng.handle()
-async def langeng_function():
-    res = requests.get("https://hguofichp.cn:10086/machine/getRandOne")
-    await langeng.finish(res.json()['data']['barrage'])
 
 @scheduler.scheduled_job("cron", hour="23", minute="30", id="dayreport")
 async def send_day_report():
