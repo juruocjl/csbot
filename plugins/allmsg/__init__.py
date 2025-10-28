@@ -69,9 +69,9 @@ class DataManager:
 
 db = DataManager()
 
-allmsg = on(priority=100, block=True)
-
 fudupoint = on_command("复读点数", priority=10, block=True)
+
+allmsg = on(priority=100, block=True)
 
 
 def get_bytes_hash(data, algorithm='sha256'):
@@ -81,7 +81,6 @@ def get_bytes_hash(data, algorithm='sha256'):
 
 def process_message_segments(segments):
     """处理消息段，提取信息并计算哈希"""
-    processed_data = []
     hash_source = b""
     
     for seg in segments:

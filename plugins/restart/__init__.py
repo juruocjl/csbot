@@ -2,7 +2,6 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot import get_driver, on_command
 from nonebot.permission import SUPERUSER
-from nonebot.rule import to_me
 
 import inspect
 import socket
@@ -74,8 +73,8 @@ def _uvicorn_stop():
     server.should_exit = True
 
 
-stop_m = on_command("stop", rule=to_me(), aliases={"shutdown", "停机"}, permission=SUPERUSER)
-restart_m = on_command("restart", rule=to_me(), aliases={"reboot", "重启"}, permission=SUPERUSER)
+stop_m = on_command("stop", aliases={"shutdown", "停机"}, permission=SUPERUSER)
+restart_m = on_command("restart", aliases={"reboot", "重启"}, permission=SUPERUSER)
 
 
 @stop_m.handle()
