@@ -3,8 +3,10 @@ matplotlib
 numpy
 requests
 nb-cli
-ts3>=2.0.0b2
 openai
-nonebot-adapter-onebot
+psutil
+fuzzywuzzy
+meme_generator
+nonebot-adapter-qq
+nonebot_plugin_apscheduler 
 nonebot2[fastapi]
-nonebot2[websockets]

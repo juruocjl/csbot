@@ -1,7 +1,8 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
+from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
-from nonebot.params import CommandArg
+from nonebot.params import CommandArg, Arg
 from nonebot import on_command, on
 from nonebot.rule import to_me
 from nonebot.permission import SUPERUSER
@@ -14,6 +15,10 @@ scheduler = require("nonebot_plugin_apscheduler").scheduler
 from .config import Config
 config = get_plugin_config(Config)
 
+import math
+import uuid
+import hashlib
+from unicodedata import normalize
 from pathlib import Path
 import re
 import sqlite3
@@ -33,7 +38,9 @@ import psutil
 import json
 from fuzzywuzzy import process
 import ts3
-from bs4 import BeautifulSoup
+import asyncio
+from meme_generator import Image, get_meme
+
 
 logging.basicConfig(
     filename='app.log',
@@ -231,7 +238,7 @@ async def gen_matches_html(datas, steamid, name):
     gray = "#9E9E9E"
     html = matches_content[0]
     html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
-    html = html.replace("_name_", name)
+    html = html.replace("_name_", normalize('NFKC', name))
     for match in datas:
         (mid,steamid,seasonId,mapName,team,winTeam,score1,score2,pwRating,we,timeStamp,kill,death,assist,duration,mode,pvpScore,pvpStars,pvpScoreChange,pvpMvp,isgroup,greenMatch,entryKill,headShot,headShotRatio,flashTeammate,flashSuccess,twoKill,threeKill,fourKill,fiveKill,vs1,vs2,vs3,vs4,vs5,dmgArmor,dmgHealth,adpr,rws,teamId,throwsCnt,snipeNum,firstDeath) = match
         temp_html = matches_content[1]
@@ -415,6 +422,14 @@ class DataManager:
             liveid TEXT,
             islive INT,
             PRIMARY KEY (liveid)
+        )
+        ''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS fudu_points (
+            uid TEXT,
+            timeStamp INT,
+            point INT
         )
         ''')
 
@@ -661,7 +676,7 @@ class DataManager:
             (steamid, _, name, pvpScore, cnt, kd, winRate, pwRating, avgWe, kills, deaths, assists, rws, adr, headShotRatio, entryKillRatio, vs1WinRate, lasttime, _) = result
             html = data_content
             html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
-            html = html.replace("_name_", name)
+            html = html.replace("_name_", normalize('NFKC', name))
             html = html.replace("_WE_", f"{avgWe: .1f}")
             html = html.replace("_Rating_",f"{pwRating: .2f}")
             html = html.replace("_ELO_", f"{pvpScore}")
@@ -949,7 +964,7 @@ class DataManager:
             if result[0] > 0:
                return result
             raise ValueError(f"no {query_type}")
-        if query_type == "馁站":
+        if query_type == "内战":
             cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
                                 FROM 'matches'
                                 WHERE 
@@ -1253,7 +1268,7 @@ class DataManager:
         )
         self.conn.commit()
 
-    def update_goods(self, goods_list):
+    async def update_goods(self, goods_list):
         cursor = self.conn.cursor()
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
@@ -1274,7 +1289,7 @@ class DataManager:
                     self.conn.commit()
             else:
                 logging.error("[update_goods] "+data['msg'])
-            time.sleep(1.1)
+            await asyncio.sleep(1.1)
 
     def getallgoods(self):
         cursor = self.conn.cursor()
@@ -1292,6 +1307,33 @@ class DataManager:
         cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? and timeStamp >= ? ORDER BY timeStamp ASC LIMIT 1', (marketHashName, TimeStamp))
         return cursor.fetchone()
 
+    def add_point(self, uid, point):
+        timestamp = int(time.time())
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT INTO fudu_points (uid, timeStamp, point) VALUES (?, ?, ?)",
+            (uid, timestamp, point)
+        )
+        self.conn.commit()
+    
+    def get_point(self, uid):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT SUM(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ?",
+            (uid, get_today_start_timestamp())
+        )
+        result = cursor.fetchone()
+        return result[0] if result[0] is not None else 0
+
+    def get_zero_point(self, uid):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ? AND point == 0",
+            (uid, get_today_start_timestamp())
+        )
+        result = cursor.fetchone()
+        return result[0] if result[0] is not None else 0
+
     def query(self, sql):
         cursor = self.conn.cursor()
         cursor.execute(sql)
@@ -1308,8 +1350,74 @@ if not os.path.exists("avatar"):
 if not os.path.exists("temp"):
     os.makedirs("temp", exist_ok=True)
 
-if not os.path.exists("pic"):
-    os.makedirs("pic", exist_ok=True)
+def get_file_hash(file_path, chunk_size=8192, algorithm='sha256'):
+    hash_obj = hashlib.new(algorithm)
+    with open(file_path, 'rb') as f:
+        while chunk := f.read(chunk_size):
+            hash_obj.update(chunk)
+    return hash_obj.hexdigest()
+
+def get_bytes_hash(data, algorithm='sha256'):
+    hash_obj = hashlib.new(algorithm)
+    hash_obj.update(data)
+    return hash_obj.hexdigest()
+
+def process_message_segments(segments):
+    """处理消息段，提取信息并计算哈希"""
+    processed_data = []
+    hash_source = b""
+    
+    for seg in segments:
+        if seg.type == "text":
+            text = get_bytes_hash(seg.data["text"].encode("utf-8"))
+            hash_source += f"text:{text}".encode("utf-8") + b"|"
+            
+        elif seg.type == "at":
+            user_id = seg.data["qq"]
+            hash_source += f"at:{user_id}".encode("utf-8") + b"|"
+            
+        elif seg.type == "face":
+            face_id = seg.data["id"]
+            hash_source += f"face:{face_id}".encode("utf-8") + b"|"
+            
+        elif seg.type == "image":
+            url = seg.data["url"]
+            with urllib.request.urlopen(url) as response:
+                data = get_bytes_hash(response.read())
+                hash_source += f"image:{data}".encode("utf-8") + b"|"
+
+    return get_bytes_hash(hash_source)
+
+class PicDir:
+    def __init__(self, dirname):
+        self.dirname = dirname
+        if not os.path.exists(dirname):
+            os.makedirs(dirname, exist_ok=True)
+        self.hashset = set()
+        files = [f for f in Path(self.dirname).iterdir() if f.is_file()]
+        for f in files:
+            hashval = get_file_hash(f)
+            if hashval in self.hashset:
+                f.unlink()
+            self.hashset.add(hashval)
+    
+    def getpic(self):
+        files = [f for f in Path(self.dirname).iterdir() if f.is_file()]
+        if len(files) == 0:
+            return None
+        return random.choice(files)
+    
+    def addpic(self, filename, url):
+        filepath = Path(self.dirname) / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
+        urllib.request.urlretrieve(url, filepath)
+        hashval = get_file_hash(filepath)
+        if hashval in self.hashset:
+            logging.info(f"[add{self.dirname}]  {filename} existed")
+            filepath.unlink()
+            return 0
+        logging.info(f"[add{self.dirname}] {filename}")
+        self.hashset.add(hashval)
+        return 1
 
 __plugin_meta__ = PluginMetadata(
     name="cs",
@@ -1362,6 +1470,12 @@ getts = on_command("getts", priority=10, block=True)
 
 getpic = on_command("getpic", priority=10, block=True)
 
+addpic = on_command("addpic", priority=10, block=True)
+
+getmgz = on_command("getmgz", priority=10, block=True)
+
+addmgz = on_command("addmgz", priority=10, block=True)
+
 caigou = on_command("采购", priority=10, block=True)
 
 baojia = on_command("报价", priority=10, block=True)
@@ -1370,7 +1484,11 @@ search = on_command("搜索", priority=10, block=True)
 
 addgoods = on_command("加仓", priority=10, block=True)
 
-langeng = on_command("烂梗",priority=10, block=True )
+langeng = on_command("烂梗", priority=10, block=True)
+
+fudupoint = on_command("复读点数", priority=10, block=True)
+
+livestate = on_command("直播状态", priority=10, block=True)
 
 allmsg = on(priority=100, block=True)
 
@@ -1396,11 +1514,11 @@ class ZeroIn:
 
 
 valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
-# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最值，输出格式，调用模板)
+# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最值，输出格式，调用模板，支持gp)
 rank_config = [
     ("ELO", "天梯分数", "本赛季", True, True, MinAdd(-10), "d0", 1),
     ("rt", "rating", "本赛季", False, True, MinAdd(-0.05), "d2", 1),
-    ("WE", "WE", "本赛季", False, True, MinAdd(-1), "d2", 1),
+    ("WE", "WE", "本赛季", False, True, MinAdd(-1), "d2", 1, ),
     ("ADR", "ADR", "本赛季", False, True, MinAdd(-10), "d2", 1),
     ("场次", "场次", "本赛季", False, True, Fix(0), "d0", 1),
     ("胜率", "胜率", "本赛季", False, True, Fix(0), "p2", 1),
@@ -1450,9 +1568,15 @@ async def help_function():
 向ai提问，风格为 普通ai，贴吧老哥，可爱女友，小红书
 /ai记忆 [内容]
 向ai增加记忆内容
+/搜索 [饰品名称]
+/加仓 [饰品id]
+/报价
 /状态
-查询服务器状态
-                      
+查询服务器状态。
+/复读点数
+查看当前复读点数以及禁言概率
+禁言概率公式：max(0.02,tanh((本句点数*累计点数-50)/500))
+                 
 (用户名匹配) 使用语法为 % 匹配任意长度串，_ 匹配长度为 1 串。
 可选 (时间)：{valid_time}
 在 /查看数据 /记录 /ai* 时你的@消息会被替换成对应的用户名，找不到则会被替换为<未找到用户>
@@ -2091,16 +2215,54 @@ async def getts_function():
         tree = ChannelTreeNode.build_tree(ts3conn, SID)
         await getts.finish(tree.print())
 
+Pic1 = PicDir("pic")
+lastpic = None
+Pic2 = PicDir("mgz")
 
 @getpic.handle()
-async def getpic_function(message: MessageEvent):
-    uid = message.get_user_id()
-    pic_folder = Path("pic")
-    files = [f for f in pic_folder.iterdir() if f.is_file()]
-    if not files:
+async def getpic_function(bot: Bot, message: MessageEvent):
+    global lastpic
+    imgpath = Pic1.getpic()
+    if not imgpath:
         await getpic.finish("没有图片")
-    image_path = random.choice(files)
-    await getpic.finish(MessageSegment.image(image_path))
+    lastpic = imgpath
+    msg = await getpic.send(MessageSegment.image(imgpath))
+    await asyncio.sleep(600)
+    await bot.delete_msg(message_id = msg['message_id'])
+@addpic.handle()
+async def addpic_handle_function():
+    pass
+@addpic.got("imgs", prompt="请发送图片")
+async def addpic_got_imgs(imgs: Message = Arg()):
+    addcnt = 0
+    for seg in imgs:
+        if seg.type == 'image':
+            addcnt += Pic1.addpic(seg.data['file'], seg.data["url"])
+    if addcnt > 0:
+        await addpic.finish(f"成功添加 {addcnt} 张图片")
+    await addpic.finish(f"添加失败")
+
+@getmgz.handle()
+async def getmgz_function(bot: Bot, message: MessageEvent):
+    imgpath = Pic2.getpic()
+    if not imgpath:
+        await getpic.finish("没有图片")
+    msg = await getpic.send(MessageSegment.image(imgpath))
+    await asyncio.sleep(600)
+    await bot.delete_msg(message_id = msg['message_id'])
+@addmgz.handle()
+async def addmgz_handle_function():
+    pass
+@addmgz.got("imgs", prompt="请发送图片")
+async def addmgz_got_imgs(imgs: Message = Arg()):
+    addcnt = 0
+    for seg in imgs:
+        if seg.type == 'image':
+            addcnt += Pic2.addpic(seg.data['file'], seg.data["url"])
+    if addcnt > 0:
+        await addmgz.finish(f"成功添加 {addcnt} 张图片")
+    await addmgz.finish(f"添加失败")
+
 
 @caigou.handle()
 async def caigou_function(message: MessageEvent):
@@ -2115,10 +2277,10 @@ def get_baojia(title = "当前底价"):
         info = db.getgoodsinfo(goods)
         info1d = db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
         info7d = db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
-        delta1d = str((info[4] - info1d[4]) / 100) if info[1] - info1d[1] >= 24 * 3600 - 7200 else "无数据"
-        delta7d = str((info[4] - info7d[4]) / 100) if info[1] - info7d[1] >= 7 * 24 * 3600 - 7200 else "无数据"
+        delta1d = str((info[6] - info1d[6]) / 100) if info[1] - info1d[1] >= 20 * 3600 else "无数据"
+        delta7d = str((info[6] - info7d[6]) / 100) if info[1] - info7d[1] >= 6 * 24 * 3600 else "无数据"
         
-        data.append((info[3], info[4], delta1d, delta7d))
+        data.append((info[3], info[6], delta1d, delta7d))
     data = sorted(data, key = lambda x: x[1])
     return (title + "\n" + "\n".join([a[0] + "\n> " + str(a[1]/100) + "   Δ1d=" + a[2] + "   Δ7d=" + a[3] for a in data])).strip()
 
@@ -2143,7 +2305,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
         res = requests.get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.cs_csqaq_api})
         data = res.json()
         time.sleep(1.1)
-        db.update_goods([data['data']['goods_info']['market_hash_name']])
+        await db.update_goods([data['data']['goods_info']['market_hash_name']])
         db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
         res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
     except Exception as e:
@@ -2151,12 +2313,12 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
     await addgoods.finish(res)
 
 @scheduler.scheduled_job("cron", hour="0-9,11-23", id="hourupdate")
-async def send_day_report():
-    db.update_goods(db.getallgoods())
+async def hour_update_baojia():
+    await db.update_goods(db.getallgoods())
 
 @scheduler.scheduled_job("cron", hour="10", id="baojia")
 async def send_baojia():
-    db.update_goods(db.getallgoods())
+    await db.update_goods(db.getallgoods())
     bot = get_bot(str(config.cs_botid))
     for groupid in config.cs_group_list:
         await bot.send_msg(
@@ -2226,7 +2388,7 @@ async def send_day_report():
         result = db.update_stats(steamid)
     bot = get_bot(str(config.cs_botid))
     for groupid in config.cs_group_list:
-        steamids = db.get_member_steamid("group_" + groupid)
+        steamids = db.get_member_steamid(f"group_{groupid}")
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
@@ -2237,55 +2399,103 @@ async def send_day_report():
 async def send_week_report():
     bot = get_bot(str(config.cs_botid))
     for groupid in config.cs_group_list:
-        steamids = db.get_member_steamid("group_" + groupid)
+        steamids = db.get_member_steamid(f"group_{groupid}")
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
             message="== 周日23:45自动周报 ==\n" + get_report("本周", steamids)
         )
 
+def sigmoid_step(x):
+    t = (x - 50) / 500.0
+    return max(0.02, math.tanh(t))
+
+@fudupoint.handle()
+async def fudupoint_function(message: MessageEvent):
+    uid = message.get_user_id()
+    point = db.get_point(uid)
+    prob1 = sigmoid_step(point + 1)
+    prob2 = sigmoid_step((point + 2) * 2)
+    prob3 = sigmoid_step((point + 3) * 3)
+    prob5 = sigmoid_step((point + 5) * 5)
+    tm = db.get_zero_point(uid) + 1
+    await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
+
+
 lastmsg = {}
 
 @allmsg.handle()
 async def allmsg_function(message: MessageEvent):
+    global lastpic
     uid = message.get_user_id()
     sid = message.get_session_id()
     msg = message.get_message()
     mid = message.message_id
-    logging.info(f"{uid} send {msg}")
+    mhs = process_message_segments(msg)
+    nowpoint = 0
+    logging.info(f"{uid} send {msg} with {mhs}")
     if not sid.startswith("group"):
         return
     gid = sid.split('_')[1]
     bot = get_bot(str(config.cs_botid))
+    text = msg.extract_plain_text().lower().strip()
+    if text == "wlp" and lastpic:
+        meme = get_meme("my_wife")
+        with open(lastpic, "rb") as f:
+            data = f.read()
+        result = meme.generate([Image("test", data)], [], {})
+        lastpic = None
+        if isinstance(result, bytes):
+            await allmsg.send(MessageSegment.image(result))
+    if text == "nlg" and lastpic:
+        meme = get_meme("dog_dislike")
+        with open(lastpic, "rb") as f:
+            data = f.read()
+        result = meme.generate([Image("test", data)], [], {})
+        lastpic = None
+        if isinstance(result, bytes):
+            await allmsg.send(MessageSegment.image(result))
+    if text == "gsm" or text == "干什么":
+        await allmsg.send(MessageSegment.record(Path("assets") / "gsm.mp3"))
+    if text == "mbf" or text == "没办法":
+        await allmsg.send(MessageSegment.record(Path("assets") / "mbf.mp3"))
     msglst = []
     if gid in lastmsg:
         msglst = lastmsg[gid]
-    if len(msglst) == 1 and msglst[0][0] == config.cs_botid and msglst[0][1] == msg:
-        await bot.delete_msg(message_id = mid)
-    elif len(msglst) > 0 and msglst[0][1] == msg and (uid in [a[0] for a in msglst]):
-        await bot.delete_msg(message_id = mid)
+    if len(msglst) == 1 and msglst[0][0] == config.cs_botid and msglst[0][2] == mhs:
+        nowpoint = 3
+    elif len(msglst) > 0 and msglst[0][2] == mhs and (uid in [a[0] for a in msglst]):
+        nowpoint = 5
     else:
-        msglst.append((uid, msg, mid))
-        if len(msglst) > 1 and msglst[-1][1] != msglst[-2][1]:
+        msglst.append((uid, msg, mhs))
+        if len(msglst) > 1 and msglst[-1][2] != msglst[-2][2]:
             msglst = msglst[-1:]
         logging.info(f"[msglst] {msglst}")
+        nowpoint = len(msglst) - 1
         if len(msglst) > 2:
-            for uid, msg, mid in msglst[1:]:
-                await bot.delete_msg(message_id = mid)
-            mid = (await allmsg.send(msglst[0][1]))['message_id']
-            msglst = [(config.cs_botid, msglst[0][1], mid)]
+            await allmsg.send(msglst[0][1])
+            msglst = [(config.cs_botid, msglst[0][1], mhs)]
     lastmsg[gid] = msglst
+    if nowpoint > 0:
+        db.add_point(uid, nowpoint)
+        prob = sigmoid_step(nowpoint * db.get_point(uid))
+        if random.random() < prob:
+            db.add_point(uid, 0)
+            tm = db.get_zero_point(uid)
+            await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * db.get_zero_point(uid))
+            await allmsg.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
-def get_live_status(liveid):
-    time.sleep(1)
+async def get_live_status(liveid):
+    await asyncio.sleep(1)
     if liveid.startswith("dy_"):
-        res = requests.get("https://m.douyu.com/"+liveid.split('_')[1])
-        islive = int('"isLive":1' in res.text)
-        nickname = re.findall(r'"nickname":"([^"]+)"', res.text)[0]
+        res = requests.get("https://www.doseeing.com/room/"+liveid.split('_')[1])
+        islive = int('<span>直播中</span>' in res.text)
+        nickname = re.findall(r'<title>(.*?)</title>', res.text, re.IGNORECASE)[1][:-10]
         return islive, nickname
     if liveid.startswith("bili_"):
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.111 Safari/537.36"}
         res = requests.get("https://api.live.bilibili.com/room/v1/Room/room_init?id="+liveid.split('_')[1], headers=headers)
+        await asyncio.sleep(1)
         islive = int(res.json()['data']['live_status'] == 1)
         uid = res.json()['data']['uid']
         res = requests.get("https://api.live.bilibili.com/live_user/v1/Master/info?uid="+str(uid), headers=headers)
@@ -2293,12 +2503,15 @@ def get_live_status(liveid):
         return islive, nickname
 
 
+now_live_state = "无数据"
 @scheduler.scheduled_job("cron", minute="*/2", id="livewatcher")
 async def live_watcher():
     bot = get_bot(str(config.cs_botid))
+    new_live_state = ""
     for liveid in config.cs_live_list:
-        islive, nickname = get_live_status(liveid)
+        islive, nickname = await get_live_status(liveid)
         logging.info(f"[live_watcher] {nickname} {islive}")
+        new_live_state += f"{nickname} {islive}\n"
         if islive == 1 and db.get_live_status(liveid) == 0:
             for groupid in config.cs_group_list:
                 await bot.send_msg(
@@ -2307,3 +2520,10 @@ async def live_watcher():
                     message=f"{nickname} 开播了"
                 )
         db.set_live_status(liveid, islive)
+    global now_live_state
+    now_live_state = new_live_state.strip()
+
+
+@livestate.handle()
+async def livestate_function():
+    await livestate.finish(now_live_state)
