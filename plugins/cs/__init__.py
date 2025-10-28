@@ -14,6 +14,7 @@ logger.add("app.log", level="INFO", format=default_format, rotation="1 week")
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
+get_pic_status = require("pic").get_pic_status
 
 from .config import Config
 config = get_plugin_config(Config)
@@ -1955,12 +1956,16 @@ async def getstatus_function(message: MessageEvent):
             'usage_percent': mem_usage
         }
     }
+
+    tuku = get_pic_status()
+
     await getstatus.finish(Message([
         MessageSegment.at(message.get_user_id()),
         f"""\nCPU 总使用率: {status['cpu_usage_percent']}%
 内存总容量: {status['memory']['total_gb']}GB
 已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
-可用内存: {status['memory']['available_gb']}GB"""]))
+可用内存: {status['memory']['available_gb']}GB
+当前图库: {tuku}"""]))
 
 
 @caigou.handle()

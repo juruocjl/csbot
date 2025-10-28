@@ -57,6 +57,9 @@ class PicDir:
                 f.unlink()
             self.hashset.add(hashval)
     
+    def __len__(self):
+        return len(self.hashset)
+
     def getpic(self):
         files = [f for f in Path(self.dirname).iterdir() if f.is_file()]
         if len(files) == 0:
@@ -68,10 +71,10 @@ class PicDir:
         urllib.request.urlretrieve(url, filepath)
         hashval = get_file_hash(filepath)
         if hashval in self.hashset:
-            logger.info(f"[add{self.dirname}]  {filename} existed")
+            logger.info(f"add{self.dirname}  {filename} existed")
             filepath.unlink()
             return 0
-        logger.info(f"[add{self.dirname}] {filename}")
+        logger.info(f"add{self.dirname} {filename}")
         self.hashset.add(hashval)
         return 1
 
@@ -123,4 +126,7 @@ async def addmgz_got_imgs(imgs: Message = Arg()):
     if addcnt > 0:
         await addmgz.finish(f"成功添加 {addcnt} 张图片")
     await addmgz.finish(f"添加失败")
+
+def get_pic_status():
+    return "pic {}, mgz {}".format(len(Pic1), len(Pic2))
 
