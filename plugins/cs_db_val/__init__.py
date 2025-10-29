@@ -525,7 +525,7 @@ class DataManager:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "gp尽力":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
+            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
                                 WHERE 
                                 winTeam != team  
                                 and {time_sql} and {steamid_sql}
@@ -535,7 +535,7 @@ class DataManager:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "gp带飞":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
+            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
                                 WHERE 
                                 winTeam == team  
                                 and {time_sql} and {steamid_sql}
@@ -545,7 +545,7 @@ class DataManager:
                 return result
             raise ValueError(f"no {query_type}")
         if query_type == "gp炸鱼":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
+            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
                                 WHERE 
                                 winTeam == team  
                                 and min(score1, score2) <= 6
@@ -782,7 +782,7 @@ rank_config = [
     RankConfig("gp尽力", "官匹未胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
     RankConfig("gp带飞", "官匹胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
     RankConfig("gp炸鱼", "官匹小分平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("皮蛋", "场均下包数", "全部", gp_time, True, Fix(0), "d2", 1),
+    RankConfig("皮蛋", "官匹场均下包数", "全部", gp_time, True, Fix(0), "d2", 1),
 ]
 
 valid_rank = [a.name for a in rank_config]
