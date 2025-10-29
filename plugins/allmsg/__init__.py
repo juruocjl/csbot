@@ -77,7 +77,7 @@ db = DataManager()
 
 fudupoint = on_command("复读点数", priority=10, block=True)
 
-roll = on_command("roll", priority=10, block=True, rule=SUPERUSER)
+roll = on_command("roll", priority=10, block=True, permission=SUPERUSER)
 
 allmsg = on(priority=100, block=True)
 
