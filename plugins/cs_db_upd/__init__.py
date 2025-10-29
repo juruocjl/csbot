@@ -388,7 +388,7 @@ class DataManager:
                     for match in ddata['data']['matchList']:
                         newLastTime = max(newLastTime, match["timeStamp"])
                         if match["timeStamp"] > LastTime:
-                            addMatches += self.update_match(match["matchId"], match["timeStamp"],SeasonID)
+                            addMatches += await self.update_match(match["matchId"], match["timeStamp"],SeasonID)
                         else:
                             return
                     if len(ddata['data']['matchList']) == 0:
@@ -415,7 +415,7 @@ class DataManager:
                 raise RuntimeError(ddata["errorMessage"])
             await asyncio.sleep(0.2)
             for match in ddata['data']['matchList']:
-                addMatchesGP += self.update_matchgp(match["matchId"], match["timeStamp"])
+                addMatchesGP += await self.update_matchgp(match["matchId"], match["timeStamp"])
         try:
             await work()
             await work_gp()
