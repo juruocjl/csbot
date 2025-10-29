@@ -190,14 +190,13 @@ class DataManager:
         DELETE FROM members_steamid WHERE uid == ?;
         ''', (uid,))
         
-    def update_match(self, mid, timeStamp, season):
-        logger.info(f"update_match start {mid}")
+    async def update_match(self, mid, timeStamp, season):
         cursor = get_cursor()
         cursor.execute('''SELECT COUNT(*) as cnt FROM matches WHERE mid == ?
         ''',(mid, ))
         result = cursor.fetchone()
         if result[0] > 0:
-            logger.info(f"update_match {mid} in db")
+            # logger.info(f"update_match {mid} in db")
             return 0
         url = "https://api.wmpvp.com/api/v1/csgo/match"
         payload = {
@@ -208,10 +207,11 @@ class DataManager:
             "token":config.cs_wmtoken
         }
         result = requests.post(url,headers=header,json=payload)
+        await asyncio.sleep(0.2)
         data = result.json()
         if data["statusCode"] != 0:
             logger.error(f"爬取失败  {mid} {data}")
-            raise RuntimeError("爬取失败：" + data["errorMessage"])
+            raise RuntimeError("爬取失败：" + data.get("errorMessage", "未知错误"))
         base = data['data']['base']
         count = {}
         for player in data['data']['players']:
@@ -242,15 +242,14 @@ class DataManager:
         logger.info(f"update_match {mid} success")
         return 1
 
-    def update_matchgp(self, mid, timeStamp):
-        logger.info(f"update_matchgp start {mid}")
+    async def update_matchgp(self, mid, timeStamp):
         cursor = get_cursor()
         cursor.execute('''
             SELECT COUNT(*) as cnt FROM matches_gp WHERE mid == ?
         ''', (mid,))
         result = cursor.fetchone()
         if result[0] > 0:
-            logger.info(f"update_matchgp {mid} already in db")
+            # logger.info(f"update_matchgp {mid} already in db")
             return 0
 
         url = "https://api.wmpvp.com/api/v1/csgo/match"
@@ -260,6 +259,7 @@ class DataManager:
             "token": config.cs_wmtoken
         }
         result = requests.post(url, headers=header, json=payload)
+        await asyncio.sleep(0.2)
         data = result.json()
 
         if data["statusCode"] != 0:
@@ -389,7 +389,6 @@ class DataManager:
                         newLastTime = max(newLastTime, match["timeStamp"])
                         if match["timeStamp"] > LastTime:
                             addMatches += self.update_match(match["matchId"], match["timeStamp"],SeasonID)
-                            await asyncio.sleep(0.2)
                         else:
                             return
                     if len(ddata['data']['matchList']) == 0:
@@ -417,7 +416,6 @@ class DataManager:
             await asyncio.sleep(0.2)
             for match in ddata['data']['matchList']:
                 addMatchesGP += self.update_matchgp(match["matchId"], match["timeStamp"])
-                await asyncio.sleep(0.2)
         try:
             await work()
             await work_gp()
