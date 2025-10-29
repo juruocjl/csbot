@@ -217,7 +217,8 @@ async def roll_function(message: MessageEvent):
         await roll_admin(sid.split('_')[1])
     
 
-@scheduler.scheduled_job("cron", hour="23", minute="30", id="roll")
+@scheduler.scheduled_job("cron", hour="00", minute="00", id="roll")
 async def autoroll():
+    logger.info("start roll")
     for group in config.cs_group_list:
         await roll_admin(group)
