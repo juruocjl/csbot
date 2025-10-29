@@ -668,7 +668,7 @@ rank_config = [
     RankConfig("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0", 1),
     RankConfig("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0", 2),
 
-    RankConfig("gprt", "官匹rt", "本周", gp_time, True, ZeroIn(-0.01), "p0", 2),
+    RankConfig("gprt", "官匹rating", "本周", gp_time, True, ZeroIn(-0.01), "d2", 2),
     RankConfig("gp场次", "官匹场次", "本周", gp_time, True, Fix(0), "d0", 1),
 ]
 
