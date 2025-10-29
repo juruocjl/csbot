@@ -10,6 +10,7 @@ import requests
 import urllib
 from pathlib import Path
 import time
+import asyncio
 
 from .config import Config
 
@@ -121,6 +122,55 @@ class DataManager:
         ''')
 
         cursor.execute('''
+        CREATE TABLE IF NOT EXISTS matches_gp (
+            mid TEXT,
+            steamid TEXT,
+            mapName TEXT,
+            team INT,
+            winTeam INT,
+            score1 INT,
+            score2 INT,
+            timeStamp INT,
+            mode TEXT,
+            duration INT,
+            kill INT,
+            handGunKill INT,
+            entryKill INT,
+            awpKill INT,
+            death INT,
+            entryDeath INT,
+            assist INT,
+            headShot INT,
+            rating FLOAT,
+            itemThrow INT,
+            flash INT,
+            flashTeammate INT,
+            flashSuccess INT,
+            twoKill INT,
+            threeKill INT,
+            fourKill INT,
+            fiveKill INT,
+            vs1 INT,
+            vs2 INT,
+            vs3 INT,
+            vs4 INT,
+            vs5 INT,
+            adpr FLOAT,
+            rws FLOAT,
+            kast FLOAT,
+            rank INT,
+            throwsCnt INT,
+            bombPlanted INT,
+            bombDefused INT,
+            smokeThrows INT,
+            grenadeDamage INT,
+            infernoDamage INT,
+            mvp INT,
+            PRIMARY KEY (mid, steamid)
+        )
+        ''')
+
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS ai_mem (
             gid TEXT,
             mem TEXT,
@@ -141,13 +191,13 @@ class DataManager:
         ''', (uid,))
         
     def update_match(self, mid, timeStamp, season):
-        logger.info(f"[update_match] start {mid}")
+        logger.info(f"update_match start {mid}")
         cursor = get_cursor()
-        cursor.execute('''SELECT COUNT(mid) as cnt FROM matches WHERE mid == ?
+        cursor.execute('''SELECT COUNT(*) as cnt FROM matches WHERE mid == ?
         ''',(mid, ))
         result = cursor.fetchone()
         if result[0] > 0:
-            logger.info(f"[update_match] {mid} in db")
+            logger.info(f"update_match {mid} in db")
             return 0
         url = "https://api.wmpvp.com/api/v1/csgo/match"
         payload = {
@@ -170,50 +220,12 @@ class DataManager:
             count[player['teamId']] += 1
         for player in data['data']['players']:
             cursor.execute('''INSERT OR REPLACE INTO matches
-                (mid,
-                steamid,
-                seasonId,
-                mapName,
-                team,
-                winTeam,
-                score1,
-                score2,
-                pwRating,
-                we,
-                timeStamp,
-                kill,
-                death,
-                assist,
-                duration,
-                mode,
-                pvpScore,
-                pvpStars,
-                pvpScoreChange,
-                pvpMvp,
-                isgroup,
-                greenMatch,
-                entryKill,
-                headShot,
-                headShotRatio,
-                flashTeammate,
-                flashSuccess,
-                twoKill,
-                threeKill,
-                fourKill,
-                fiveKill,
-                vs1,
-                vs2,
-                vs3,
-                vs4,
-                vs5,
-                dmgArmor,
-                dmgHealth,
-                adpr,
-                rws,
-                teamId,
-                throwsCnt,
-                snipeNum,
-                firstDeath
+                (mid, steamid, seasonId, mapName, team, winTeam, score1, score2,
+                pwRating, we, timeStamp, kill, death, assist, duration, mode, pvpScore, pvpStars, pvpScoreChange, pvpMvp,
+                isgroup, greenMatch, entryKill, headShot, headShotRatio,
+                 flashTeammate, flashSuccess,
+                twoKill, threeKill, fourKill, fiveKill, vs1, vs2, vs3, vs4, vs5,
+                dmgArmor, dmgHealth, adpr, rws, teamId, throwsCnt, snipeNum, firstDeath
                 ) VALUES
                 (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)  
             ''', 
@@ -227,10 +239,97 @@ class DataManager:
                 player['vs5'], player['dmgArmor'], player['dmgHealth'], player['adpr'], player['rws'],
                 player['teamId'], player['throwsCnt'], player['snipeNum'], player['firstDeath'])
             )
-        
+        logger.info(f"update_match {mid} success")
         return 1
 
-    def update_stats(self, steamid):
+    def update_matchgp(self, mid, timeStamp):
+        logger.info(f"update_matchgp start {mid}")
+        cursor = get_cursor()
+        cursor.execute('''
+            SELECT COUNT(*) as cnt FROM matches_gp WHERE mid == ?
+        ''', (mid,))
+        result = cursor.fetchone()
+        if result[0] > 0:
+            logger.info(f"update_matchgp {mid} already in db")
+            return 0
+
+        url = "https://api.wmpvp.com/api/v1/csgo/match"
+        payload = {"matchId": mid}
+        header = {
+            "appversion": "3.5.4.172",
+            "token": config.cs_wmtoken
+        }
+        result = requests.post(url, headers=header, json=payload, verify=False)
+        data = result.json()
+
+        if data["statusCode"] != 0:
+            logger.error(f"爬取失败 {mid} {data}")
+            raise RuntimeError("爬取失败：" + data.get("errorMessage", "未知错误"))
+
+        base = data['data']['base']
+        players = data['data']['players']
+
+        for player in players:
+            cursor.execute('''
+                INSERT OR REPLACE INTO matches_gp (
+                    mid, steamid, mapName, team, winTeam, score1, score2,
+                    timeStamp, mode, duration, kill, handGunKill, entryKill,
+                    awpKill, death, entryDeath, assist, headShot, rating,
+                    itemThrow, flash, flashTeammate, flashSuccess, twoKill,
+                    threeKill, fourKill, fiveKill, vs1, vs2, vs3, vs4, vs5,
+                    adpr, rws, kast, rank, throwsCnt, bombPlanted, bombDefused,
+                    smokeThrows, grenadeDamage, infernoDamage, mvp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                mid,
+                player['playerId'],
+                base['map'],
+                player['team'],
+                base['winTeam'],
+                base['score1'],
+                base['score2'],
+                timeStamp,
+                base['mode'],
+                base['duration'],
+                player['kill'],
+                player['handGunKill'],
+                player['entryKill'],
+                player['awpKill'],
+                player['death'],
+                player['entryDeath'],
+                player['assist'],
+                player['headShot'],
+                player['rating'],
+                player['itemThrow'],
+                player['flash'],
+                player['flashTeammate'],
+                player['flashSuccess'],
+                player['twoKill'],
+                player['threeKill'],
+                player['fourKill'],
+                player['fiveKill'],
+                player['vs1'],
+                player['vs2'],
+                player['vs3'],
+                player['vs4'],
+                player['vs5'],
+                player['adpr'],
+                player['rws'],
+                player['kast'],
+                player['rank'],
+                player['throwsCnt'],
+                player['bombPlanted'],
+                player['bombDefused'],
+                player['smokeThrows'],
+                player['grenadeDamage'],
+                player['infernoDamage'],
+                int(player['mvp'])
+            ))
+
+        logger.info(f"update_matchgp {mid} success")
+        return 1
+
+    async def update_stats(self, steamid):
         url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats"
         payload = {
             "mySteamId": config.cs_mysteam_id,
@@ -258,19 +357,18 @@ class DataManager:
         newLastTime = LastTime
         name = data["data"]["name"]
         addMatches = 0
-        def work():
+        addMatchesGP = 0
+        async def work():
             nonlocal newLastTime
             nonlocal addMatches
             for SeasonID in [SeasonId, lastSeasonId]:
                 page = 1
                 while True:
                     url = "https://api.wmpvp.com/api/csgo/home/match/list"  
-
                     headers = {
                         "appversion": "3.5.4.172",
                         "token": config.cs_wmtoken
                     }
-
                     payload = {
                         "csgoSeasonId": SeasonID,
                         "dataSource": 3,
@@ -284,44 +382,51 @@ class DataManager:
                     result = requests.post(url, json=payload, headers=headers,verify=False)
                     ddata = result.json()
                     if ddata["statusCode"] != 0:
-                        logger.error(f"爬取失败 {steamid} {SeasonID} {page} {data}")
-                        return (False, "爬取失败：" + data["errorMessage"])
-                    time.sleep(0.1)
+                        logger.error(f"爬取失败 {steamid} {SeasonID} {page} {ddata}")
+                        raise RuntimeError(ddata["errorMessage"])
+                    await asyncio.sleep(0.2)
                     for match in ddata['data']['matchList']:
                         newLastTime = max(newLastTime, match["timeStamp"])
                         if match["timeStamp"] > LastTime:
-                            try:
-                                self.update_match(match["matchId"], match["timeStamp"], SeasonID)
-                                addMatches += 1
-                            except RuntimeError as e:
-                                return (False, f"爬取失败 {e}")
+                            addMatches += self.update_match(match["matchId"], match["timeStamp"],SeasonID)
+                            await asyncio.sleep(0.2)
                         else:
                             return
                     if len(ddata['data']['matchList']) == 0:
                         break
                     page += 1
-        work()
+        async def work_gp():
+            nonlocal addMatchesGP
+            url = "https://api.wmpvp.com/api/csgo/home/match/list"  
+            headers = {
+                "appversion": "3.5.4.172",
+                "token": config.cs_wmtoken
+            }
+            payload = {
+                "dataSource": 0,
+                "mySteamId": config.cs_mysteam_id,
+                "pageSize": 50,
+                "toSteamId": steamid
+            }
+
+            result = requests.post(url, json=payload, headers=headers,verify=False)
+            ddata = result.json()
+            if ddata["statusCode"] != 0:
+                logger.error(f"gp爬取失败 {steamid}  {data}")
+                raise RuntimeError(ddata["errorMessage"])
+            await asyncio.sleep(0.2)
+            for match in ddata['data']['matchList']:
+                addMatchesGP += self.update_matchgp(match["matchId"], match["timeStamp"])
+                await asyncio.sleep(0.2)
+        try:
+            await work()
+            await work_gp()
+        except RuntimeError as e:
+            return (False, "爬取失败：" + str(e))
         cursor.execute('''
         INSERT OR REPLACE INTO steamid_detail 
-            (steamid,
-            avatarlink,
-            name,
-            pvpScore,
-            cnt,
-            kd,
-            winRate,
-            pwRating,
-            avgWe,
-            kills,
-            deaths,
-            assists,
-            rws,
-            adr,
-            headShotRatio,
-            entryKillRatio,
-            vs1WinRate,
-            lasttime,
-            seasonId) 
+            (steamid, avatarlink, name, pvpScore, cnt, kd, winRate, pwRating, 
+            avgWe, kills, deaths, assists, rws, adr, headShotRatio, entryKillRatio, vs1WinRate, lasttime, seasonId) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (steamid, 
               data["data"]["avatar"],
@@ -344,7 +449,7 @@ class DataManager:
               data["data"]["seasonId"],
               ))
         
-        return (True, name, addMatches)
+        return (True, name, addMatches, addMatchesGP)
     
     def add_member(self, gid, uid):
         if gid.startswith("group_"):

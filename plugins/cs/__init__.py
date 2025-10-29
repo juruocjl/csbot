@@ -90,9 +90,9 @@ async def update_function(message: MessageEvent):
     steamid = db_val.get_steamid(uid)
     if steamid != None:
         print(f"更新{steamid}战绩")
-        result = db_upd.update_stats(steamid)
+        result = await db_upd.update_stats(steamid)
         if result[0]:
-            await update.send(f"{result[1]} 成功更新 {result[2]} 场数据")
+            await update.send(f"{result[1]} 成功更新 {result[2]} 场完美数据, {result[3]} 场官匹数据")
             result = db_val.get_stats(steamid)
             image = await gen_stats_image(result)
             await update.finish(MessageSegment.image(image))
@@ -221,10 +221,11 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
 @updateall.handle()
 async def updateall_function():
     await updateall.send("开始更新所有数据")
-    qwq = []
+    cntwm = 0
+    cntgp = 0
     for steamid in db_val.get_all_steamid():
-        result = db_upd.update_stats(steamid)
-        if result[0] and result[2] != 0:
-            qwq.append(result[1:])
-    await updateall.finish(f"更新完成 {qwq}")
+        result = await db_upd.update_stats(steamid)
+        cntwm += result[2]
+        cntgp += result[3]
+    await updateall.finish(f"更新完成 {cntwm} 场完美数据 {cntgp} 场官匹数据")
 
