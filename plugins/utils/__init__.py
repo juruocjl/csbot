@@ -27,3 +27,9 @@ def get_today_start_timestamp():
     today_start = datetime.datetime.combine(today, datetime.time.min)
     timestamp = int(time.mktime(today_start.timetuple()))
     return timestamp
+
+def output(val, format):
+    if format.startswith("d"):
+        return f"{val: .{int(format[1:])}f}"
+    elif format.startswith("p"):
+        return f"{val * 100: .{int(format[1:])}f}%"
