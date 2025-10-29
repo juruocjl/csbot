@@ -189,15 +189,15 @@ async def allmsg_function(bot: Bot, message: MessageEvent):
             await allmsg.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
 
-def roll_admin(groupid: str):
+async def roll_admin(groupid: str):
     bot = get_bot()
     if localstorage.get('adminqq'):
-        bot.set_group_admin(group_id=int(groupid), user_id=int(localstorage.get('adminqq')), enable=False)
-    print(bot.call_api("get_group_member_list", group_id=groupid))
+        await bot.set_group_admin(group_id=groupid, user_id=localstorage.get('adminqq'), enable=False)
+    print(await bot.get_group_member_list(group_id=groupid))
 
 @roll.handle()
 async def roll_function(message: MessageEvent):
     sid = message.get_session_id()
     if sid.startswith("group"):
-        roll_admin(sid.split('_')[1])
+        await roll_admin(sid.split('_')[1])
     
