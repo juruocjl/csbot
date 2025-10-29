@@ -193,8 +193,21 @@ async def roll_admin(groupid: str):
     bot = get_bot()
     if localstorage.get('adminqq'):
         await bot.set_group_admin(group_id=groupid, user_id=localstorage.get('adminqq'), enable=False)
-    print(await bot.get_group_member_list(group_id=groupid))
-    print(await bot.get_login_info())
+    member_list = await bot.get_group_member_list(group_id=groupid)
+    myid = await bot.get_login_info()['user_id']
+    users = []
+    weights = []
+    for user in member_list:
+        if not user['is_robot'] and user['user_id'] != myid:
+            point = db.get_point(user['user_id']) + 1
+            users.append((user['user_id'], point))
+            weights.append(point)
+    print(users, weights)
+    newadmin, point = random.choices(user, weights=weights, k=1)
+    totsum = sum(weights)
+    bot.send_group_msg(group_id=groupid, message=['恭喜', MessageSegment.at(newadmin), f" 以{point}/{totsum}选为管理员"])
+    localstorage.set('adminqq', newadmin)
+    await bot.set_group_admin(group_id=groupid, user_id=localstorage.get('adminqq'), enable=True)
 
 @roll.handle()
 async def roll_function(message: MessageEvent):
