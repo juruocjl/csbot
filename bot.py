@@ -25,6 +25,7 @@ nonebot.load_plugin(Path("plugins") / "cs_img")
 nonebot.load_plugin(Path("plugins") / "cs_db_upd")
 nonebot.load_plugin(Path("plugins") / "cs_db_val")
 nonebot.load_plugin(Path("plugins") / "cs_ai")
+nonebot.load_plugin(Path("plugins") / "cs_report")
 nonebot.load_plugin(Path("plugins") / "cs")
 nonebot.load_plugin(Path("plugins") / "small_funcs")
  
