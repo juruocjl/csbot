@@ -195,7 +195,7 @@ async def roll_admin(groupid: str):
     if localstorage.get(keyname):
         await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(keyname), enable=False)
     member_list = await bot.get_group_member_list(group_id=groupid)
-    myid = await bot.get_login_info()['user_id']
+    myid = (await bot.get_login_info())['user_id']
     users = []
     weights = []
     for user in member_list:
