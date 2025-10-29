@@ -5,6 +5,7 @@ from pathlib import Path
 from nonebot import logger
 from nonebot.log import default_format
 logger.add("app.log", level="INFO", format=default_format, rotation="1 week")
+logger.add("err.log", level="ERROR", format=default_format, rotation="1 week")
 
 
 nonebot.init()
