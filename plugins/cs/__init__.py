@@ -1079,7 +1079,7 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
             await show.finish(f"未找到用户")
     if steamid != None:
         print(f"查询{steamid}战绩")
-        result = await db.get_stats(steamid)
+        result = db.get_stats(steamid)
         if result:
             image = await gen_stats_image(result)
             await show.finish(MessageSegment.image(image))
@@ -1170,7 +1170,7 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
                 time_type = cmd[1]
     if steamid != None:
         print(steamid, time_type)
-        result = await db.get_matches(steamid, time_type)
+        result = db.get_matches(steamid, time_type)
         if result:
             image = await gen_matches_image(result, steamid, db.get_stats(steamid)[2])
             await matches.finish(MessageSegment.image(image))
