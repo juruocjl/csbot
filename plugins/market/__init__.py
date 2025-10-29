@@ -67,7 +67,7 @@ class DataManager:
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
             goods_list = goods_list[50:]
-            res = requests.post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.cs_csqaq_api})
+            res = requests.post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.csqaq_api})
             data = res.json()
             if data['code'] == 200:
                 for marketHashName, good_info in data['data']['success'].items():
@@ -130,7 +130,7 @@ async def baojia_function():
 
 @search.handle()
 async def search_function(args: Message = CommandArg()):
-    res = requests.get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers={'ApiToken': config.cs_csqaq_api})
+    res = requests.get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api})
     data = res.json()
     if data['code'] == 200:
         await search.finish(("搜索结果\n" + "\n".join([f"{item['id']}. {item['value']}" for item in data['data'][:10]])).strip())
@@ -142,7 +142,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
     uid = message.get_user_id()
     res = ""
     try:
-        res = requests.get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.cs_csqaq_api})
+        res = requests.get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api})
         data = res.json()
         time.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
