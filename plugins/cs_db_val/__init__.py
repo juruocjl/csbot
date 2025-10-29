@@ -497,6 +497,73 @@ class DataManager:
             if result[2] > 0:
                 return (result[0] / result[1], result[2])
             raise ValueError(f"no {query_type}")
+        if query_type == "gp击杀":
+            cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt FROM 'matches_gp'
+                                WHERE 
+                                {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp死亡":
+            cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt FROM 'matches_gp'
+                                WHERE 
+                                {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp助攻":
+            cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt FROM 'matches_gp'
+                                WHERE 
+                                {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp尽力":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
+                                WHERE 
+                                winTeam != team  
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp带飞":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
+                                WHERE 
+                                winTeam == team  
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp炸鱼":
+            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
+                                WHERE 
+                                winTeam == team  
+                                and min(score1, score2) <= 6
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "皮蛋":
+            cursor.execute(f'''SELECT AVG(bombPlanted) as avgBombPlanted, COUNT(mid) as cnt FROM 'matches_gp'
+                                WHERE 
+                                {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
         raise ValueError(f"unknown {query_type}")
 
 
@@ -705,10 +772,17 @@ rank_config = [
 
     RankConfig("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2),
     RankConfig("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0", 1),
-    RankConfig("gp回均首杀", "平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("gp回均首死", "平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("gp回均狙杀", "平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("gp白给", "平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2", 2),
+    RankConfig("gp回均首杀", "官匹平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("gp回均首死", "官匹平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("gp回均狙杀", "官匹平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("gp白给", "官匹平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2", 2),
+    RankConfig("gp击杀", "官匹场均击杀", "全部", gp_time, True, MinAdd(-0.1), "d2", 1),
+    RankConfig("gp死亡", "官匹场均死亡", "全部", gp_time, True, MinAdd(-0.1), "d2", 1),
+    RankConfig("gp助攻", "官匹场均助攻", "全部", gp_time, True, MinAdd(-0.1), "d2", 1),
+    RankConfig("gp尽力", "官匹未胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("gp带飞", "官匹胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("gp炸鱼", "官匹小分平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("皮蛋", "场均下包数", "全部", gp_time, True, Fix(0), "d2", 1),
 ]
 
 valid_rank = [a.name for a in rank_config]
