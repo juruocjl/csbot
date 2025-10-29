@@ -5,6 +5,12 @@ from nonebot import on_command, on
 from nonebot import logger
 from nonebot import require
 from nonebot.adapters import Bot
+from nonebot.permission import SUPERUSER
+from nonebot import get_bot
+
+scheduler = require("nonebot_plugin_apscheduler").scheduler
+
+localstorage = require("utils").localstorage
 
 from .config import Config
 
@@ -71,8 +77,9 @@ db = DataManager()
 
 fudupoint = on_command("复读点数", priority=10, block=True)
 
-allmsg = on(priority=100, block=True)
+roll = on_command("roll", priority=10, block=True, rule=SUPERUSER)
 
+allmsg = on(priority=100, block=True)
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -180,3 +187,17 @@ async def allmsg_function(bot: Bot, message: MessageEvent):
             tm = db.get_zero_point(uid)
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * db.get_zero_point(uid))
             await allmsg.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
+
+
+def roll_admin(groupid: str):
+    bot = get_bot()
+    if localstorage.get('adminqq'):
+        bot.set_group_admin(group_id=groupid, user_id=localstorage.get('adminqq'), enable=False)
+    print(bot.get_group_member_list(group_id=groupid))
+
+@roll.handle()
+async def roll_function(message: MessageEvent):
+    sid = message.get_session_id()
+    if sid.startswith("group"):
+        roll_admin(sid.split('_')[1])
+    
