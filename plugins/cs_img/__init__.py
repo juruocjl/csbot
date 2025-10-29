@@ -24,6 +24,8 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+if not os.path.exists("temp"):
+    os.makedirs("temp", exist_ok=True)
 
 with open(Path("assets") / "data.html", 'r', encoding='utf-8') as file:
     data_content = file.read()

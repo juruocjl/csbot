@@ -21,6 +21,7 @@ nonebot.load_plugin(Path("plugins") / "market")
 nonebot.load_plugin(Path("plugins") / "admin_tool")
 nonebot.load_plugin(Path("plugins") / "live_watcher")
 nonebot.load_plugin(Path("plugins") / "cs_img")
+nonebot.load_plugin(Path("plugins") / "cs_db")
 nonebot.load_plugin(Path("plugins") / "cs")
 nonebot.load_plugin(Path("plugins") / "small_funcs")
  
