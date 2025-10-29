@@ -10,6 +10,8 @@ get_pic_status = require("pic").get_pic_status
 import requests
 import time
 import psutil
+import random
+import asyncio
 
 from .config import Config
 
@@ -65,10 +67,10 @@ async def help_function():
 @caigou.handle()
 async def caigou_function(bot: Bot, message: MessageEvent):
     sid = message.get_session_id()
+    await caigou.send(MessageSegment.face(317))
     if sid.startswith('group'):
-        print(sid.split('_'))
+        await asyncio.sleep(random.random() * 5)
         await bot.call_api("group_poke", group_id=sid.split('_')[1], user_id=sid.split('_')[2])
-    await caigou.finish(MessageSegment.face(317))
 
 @getstatus.handle()
 async def getstatus_function(message: MessageEvent):
