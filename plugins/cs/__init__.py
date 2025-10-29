@@ -142,37 +142,36 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
             if rank_type in valid_rank:
                 index = valid_rank.index(rank_type)
                 config = rank_config[index]
-                time_type = config[2]
+                time_type = config.default_time
                 if len(cmd) >= 2:
                     time_type = cmd[1]
-                if time_type in valid_time:
-                    if config[3] and time_type != config[2]:
-                        await rank.finish(f"{rank_type} 仅支持 {config[2]}")
-                    datas = []
-                    for steamid in steamids:
-                        try:
-                            val = db_val.get_value(steamid, rank_type, time_type)
-                            print(val)
-                            datas.append((steamid, val))
-                        except ValueError as e:
-                            print(e)
-                            pass
-                    print(datas)
-                    datas = sorted(datas, key=lambda x: x[1][0], reverse=config[4])
-                    if len(datas) == 0:
-                        await rank.finish("没有人类了")
-                    max_value = datas[0][1][0] if config[4] else datas[-1][1][0]
-                    min_value = datas[-1][1][0] if config[4] else datas[0][1][0]
-                    if max_value == 0 and rank_type == "胜率":
-                        await rank.finish("啊😰device😱啊这是人类啊😩哦，bro也没杀人😩这局...这局没有人类了😭只有🐍只有🐭，只有沟槽的野榜😭只有...啊！！！😭我在看什么😭我🌿你的😫🖐🏻️🎧")
-                    min_value, max_value = config[5].getval(min_value, max_value)
-                    print(min_value, max_value)
-                    image = None
-                    if config[7] == 1:
-                        image = await gen_rank_image1(datas, min_value, max_value, f"{time_type} {config[1]}", config[6])
-                    elif config[7] == 2:
-                        image = await gen_rank_image2(datas, min_value, max_value, f"{time_type} {config[1]}", config[6])
-                    await rank.finish(MessageSegment.image(image))
+                if time_type not in config.allowed_time:
+                    await rank.finish(f"{rank_type} 仅支持 {config.allowed_time}")
+                datas = []
+                for steamid in steamids:
+                    try:
+                        val = db_val.get_value(steamid, rank_type, time_type)
+                        print(val)
+                        datas.append((steamid, val))
+                    except ValueError as e:
+                        print(e)
+                        pass
+                print(datas)
+                datas = sorted(datas, key=lambda x: x[1][0], reverse=config.reversed)
+                if len(datas) == 0:
+                    await rank.finish("没有人类了")
+                max_value = datas[0][1][0] if config.reversed else datas[-1][1][0]
+                min_value = datas[-1][1][0] if config.reversed else datas[0][1][0]
+                if max_value == 0 and rank_type == "胜率":
+                    await rank.finish("啊😰device😱啊这是人类啊😩哦，bro也没杀人😩这局...这局没有人类了😭只有🐍只有🐭，只有沟槽的野榜😭只有...啊！！！😭我在看什么😭我🌿你的😫🖐🏻️🎧")
+                min_value, max_value = config.range_gen.getval(min_value, max_value)
+                print(min_value, max_value)
+                image = None
+                if config.template == 1:
+                    image = await gen_rank_image1(datas, min_value, max_value, f"{time_type} {config.title}", config.outputfmt)
+                elif config.template == 2:
+                    image = await gen_rank_image2(datas, min_value, max_value, f"{time_type} {config.title}", config.outputfmt)
+                await rank.finish(MessageSegment.image(image))
 
     await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可选 [选项]：{valid_rank}\n可用 (时间)：{valid_time}")
         

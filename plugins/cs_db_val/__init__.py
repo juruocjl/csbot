@@ -6,6 +6,9 @@ from nonebot import logger
 get_cursor = require("utils").get_cursor
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List
 import time
 
 from .config import Config
@@ -438,7 +441,29 @@ class DataManager:
             if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")
+        if query_type == "gprt":
+            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
+                                FROM 'matches_gp'
+                                WHERE 
+                                {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp场次":
+            cursor.execute(f'''SELECT COUNT(*) as cnt
+                                FROM 'matches_gp'
+                                WHERE 
+                                {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[0] > 0:
+                return result
+            raise ValueError(f"no {query_type}")
+            
         raise ValueError(f"unknown {query_type}")
+
 
     def get_all_value(self, steamid, time_type):
         time_sql = self.get_time_sql(time_type)
@@ -566,17 +591,22 @@ class DataManager:
 db = DataManager()
 
 
-class MinAdd:
+class RangeGen(ABC):
+    @abstractmethod
+    def getval(self, a: int, b: int) -> tuple[int, int]:
+        pass
+
+class MinAdd(RangeGen):
     def __init__(self, val):
         self.val = val
     def getval(self, minvalue, maxvalue):
         return minvalue + self.val, maxvalue
-class Fix:
+class Fix(RangeGen):
     def __init__(self, val):
         self.val = val
     def getval(self, minvalue, maxvalue):
         return self.val, maxvalue
-class ZeroIn:
+class ZeroIn(RangeGen):
     def __init__(self, val):
         self.val = val
     def getval(self, minvalue, maxvalue):
@@ -588,40 +618,58 @@ class ZeroIn:
 
 
 valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
+gp_time = ["今日", "昨日", "本周", "全部"]
 
-# (指令名，标题，默认时间，是否唯一时间，排序是否reversed，最值，输出格式，调用模板)
+@dataclass
+class RankConfig:
+    name: str
+    title: str
+    default_time: str
+    allowed_time: List[str]
+    reversed: bool
+    range_gen: RangeGen
+    outputfmt: str
+    template: int
+    
+    def __post_init__(self):
+        if self.allowed_time is None:
+            self.allowed_time = [self.default_time]
+
 rank_config = [
-    ("ELO", "天梯分数", "本赛季", True, True, MinAdd(-10), "d0", 1),
-    ("rt", "rating", "本赛季", False, True, MinAdd(-0.05), "d2", 1),
-    ("WE", "WE", "本赛季", False, True, MinAdd(-1), "d2", 1, ),
-    ("ADR", "ADR", "本赛季", False, True, MinAdd(-10), "d2", 1),
-    ("场次", "场次", "本赛季", False, True, Fix(0), "d0", 1),
-    ("胜率", "胜率", "本赛季", False, True, Fix(0), "p2", 1),
-    ("首杀", "首杀率", "本赛季", True, True, Fix(0), "p0", 1),
-    ("爆头", "爆头率", "本赛季", False, True, Fix(0), "p0", 1),
-    ("1v1", "1v1胜率", "本赛季", True, True, Fix(0), "p0", 1),
-    ("击杀", "场均击杀", "本赛季", False, True, MinAdd(-0.1), "d2", 1),
-    ("死亡", "场均死亡", "本赛季", False, True, MinAdd(-0.1), "d2", 1),
-    ("助攻", "场均助攻", "本赛季", False, True, MinAdd(-0.1), "d2", 1),
-    ("尽力", "未胜利平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
-    ("带飞", "胜利平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
-    ("炸鱼", "小分平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
-    ("演员", "组排平均rt", "两赛季", False, False, MinAdd(-0.05), "d2", 1),
-    ("鼓励", "单排场次", "两赛季", False, True, Fix(0), "d0", 1),
-    ("悲情", ">1.2rt未胜利场次", "两赛季", False, True, Fix(0), "d0", 1),
-    ("内战", "pvp自定义（内战）平均rt", "两赛季", False, True, MinAdd(-0.05), "d2", 1),
-    ("上分", "上分", "本周", False, True, ZeroIn(-1), "d0", 2),
-    ("回均首杀", "平均每回合首杀", "本赛季", False, True, MinAdd(-0.01), "d2", 1),
-    ("回均首死", "平均每回合首死", "本赛季", False, True, MinAdd(-0.01), "d2", 1),
-    ("回均狙杀", "平均每回合狙杀", "本赛季", False, True, MinAdd(-0.01), "d2", 1),
-    ("多杀", "多杀回合占比", "本赛季", False, True, MinAdd(-0.01), "p0", 1),
-    ("内鬼", "场均闪白队友", "本赛季", False, True, MinAdd(-0.5), "d1", 1),
-    ("投掷", "场均道具投掷数", "本赛季", False, True, MinAdd(-0.5), "d1", 1),
-    ("闪白", "场均闪白数", "本赛季", False, True, MinAdd(-0.5), "d1", 1),
-    ("白给", "平均每回合首杀-首死", "本赛季", False, False, ZeroIn(-0.01), "d2", 2),
-    ("方差rt", "rt方差", "两赛季", False, True, Fix(0) , "d2", 1),
-    ("方差ADR", "ADR方差", "两赛季", False, True, Fix(0) , "d0", 1),
-    ("受益", "胜率-期望胜率", "两赛季", False, True, ZeroIn(-0.01), "p0", 2)
+    RankConfig("ELO", "天梯分数", "本赛季", None, True, MinAdd(-10), "d0", 1),
+    RankConfig("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2", 1, ),
+    RankConfig("ADR", "ADR", "本赛季", valid_time, True, MinAdd(-10), "d2", 1),
+    RankConfig("场次", "场次", "本赛季", valid_time, True, Fix(0), "d0", 1),
+    RankConfig("胜率", "胜率", "本赛季", valid_time, True, Fix(0), "p2", 1),
+    RankConfig("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0", 1),
+    RankConfig("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0", 1),
+    RankConfig("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0", 1),
+    RankConfig("击杀", "场均击杀", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1),
+    RankConfig("死亡", "场均死亡", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1),
+    RankConfig("助攻", "场均助攻", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1),
+    RankConfig("尽力", "未胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("带飞", "胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("炸鱼", "小分平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("演员", "组排平均rt", "两赛季", valid_time, False, MinAdd(-0.05), "d2", 1),
+    RankConfig("鼓励", "单排场次", "两赛季", valid_time, True, Fix(0), "d0", 1),
+    RankConfig("悲情", ">1.2rt未胜利场次", "两赛季", valid_time, True, Fix(0), "d0", 1),
+    RankConfig("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("上分", "上分", "本周", valid_time, True, ZeroIn(-1), "d0", 2),
+    RankConfig("回均首杀", "平均每回合首杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("回均狙杀", "平均每回合狙杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("多杀", "多杀回合占比", "本赛季", valid_time, True, MinAdd(-0.01), "p0", 1),
+    RankConfig("内鬼", "场均闪白队友", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1),
+    RankConfig("投掷", "场均道具投掷数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1),
+    RankConfig("闪白", "场均闪白数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1),
+    RankConfig("白给", "平均每回合首杀-首死", "本赛季", valid_time, False, ZeroIn(-0.01), "d2", 2),
+    RankConfig("方差rt", "rt方差", "两赛季", valid_time, True, Fix(0) , "d2", 1),
+    RankConfig("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0", 1),
+    RankConfig("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0", 2),
+
+    RankConfig("gprt", "官匹rt", "本周", gp_time, True, ZeroIn(-0.01), "p0", 2),
+    RankConfig("gp场次", "官匹场次", "本周", gp_time, True, Fix(0), "d0", 1),
 ]
 
-valid_rank = [a[0] for a in rank_config]
+valid_rank = [a.name for a in rank_config]
