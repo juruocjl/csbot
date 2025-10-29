@@ -1,8 +1,8 @@
 .env.prod
 __pycache__
 temp
-groups.db
+*.db
 .venv
 avatar
-app.log
+*.log
 test*
