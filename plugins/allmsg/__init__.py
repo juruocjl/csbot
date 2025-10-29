@@ -206,7 +206,7 @@ async def roll_admin(groupid: str):
     print(users)
     newadmin, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
-    bot.send_group_msg(group_id=groupid, message=['恭喜', MessageSegment.at(newadmin), f" 以{point}/{totsum}选为管理员"])
+    await bot.send_group_msg(group_id=groupid, message=['恭喜', MessageSegment.at(newadmin), f" 以{point}/{totsum}选为管理员"])
     localstorage.set(keyname, newadmin)
     await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(keyname), enable=True)
 
