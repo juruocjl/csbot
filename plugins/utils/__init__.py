@@ -33,3 +33,32 @@ def output(val, format):
         return f"{val: .{int(format[1:])}f}"
     elif format.startswith("p"):
         return f"{val * 100: .{int(format[1:])}f}%"
+
+
+class LocalStorage:
+    def __init__(self):
+        cursor = get_cursor()
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS local_storage (
+            key TEXT,
+            val TEXT,
+            PRIMARY KEY (key)
+        )
+        ''')
+    
+    def set(self, key: str, val: str) -> None:
+        cursor = get_cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO local_storage (key, val)
+            VALUES (?, ?)
+        ''', (key, val))
+    
+    def get(self, key: str) -> str | None:
+        cursor = get_cursor()
+        cursor.execute('''
+            SELECT val FROM local_storage WHERE key == ?
+        ''', (key,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+
+localstorage = LocalStorage()
