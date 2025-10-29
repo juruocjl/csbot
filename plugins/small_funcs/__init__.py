@@ -1,6 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.adapters import Bot
 from nonebot import on_command
 from nonebot import require
 
@@ -63,6 +64,9 @@ async def help_function():
 
 @caigou.handle()
 async def caigou_function(message: MessageEvent):
+    sid = message.get_session_id()
+    if sid.startswith('group'):
+        print(sid.split('_'))
     await caigou.finish(MessageSegment.face(317))
 
 @getstatus.handle()
