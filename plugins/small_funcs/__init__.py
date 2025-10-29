@@ -63,10 +63,11 @@ async def help_function():
 
 
 @caigou.handle()
-async def caigou_function(message: MessageEvent):
+async def caigou_function(bot: Bot, message: MessageEvent):
     sid = message.get_session_id()
     if sid.startswith('group'):
         print(sid.split('_'))
+        bot.call_api("group_poke", group_id=sid.split('_')[1], user_id=sid.split('_')[2])
     await caigou.finish(MessageSegment.face(317))
 
 @getstatus.handle()
