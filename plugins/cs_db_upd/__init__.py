@@ -207,7 +207,7 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token":config.cs_wmtoken
         }
-        result = requests.post(url,headers=header,json=payload, verify=False)
+        result = requests.post(url,headers=header,json=payload)
         data = result.json()
         if data["statusCode"] != 0:
             logger.error(f"爬取失败  {mid} {data}")
@@ -259,7 +259,7 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token": config.cs_wmtoken
         }
-        result = requests.post(url, headers=header, json=payload, verify=False)
+        result = requests.post(url, headers=header, json=payload)
         data = result.json()
 
         if data["statusCode"] != 0:
@@ -339,7 +339,7 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token":config.cs_wmtoken
         }
-        result = requests.post(url,headers=header,json=payload, verify=False)
+        result = requests.post(url,headers=header,json=payload)
         data = result.json()
         if data["statusCode"] != 0:
             logger.error(f"爬取失败 {steamid} {data}")
@@ -379,7 +379,7 @@ class DataManager:
                         "toSteamId": steamid
                     }
 
-                    result = requests.post(url, json=payload, headers=headers,verify=False)
+                    result = requests.post(url, json=payload, headers=headers)
                     ddata = result.json()
                     if ddata["statusCode"] != 0:
                         logger.error(f"爬取失败 {steamid} {SeasonID} {page} {ddata}")
@@ -409,7 +409,7 @@ class DataManager:
                 "toSteamId": steamid
             }
 
-            result = requests.post(url, json=payload, headers=headers,verify=False)
+            result = requests.post(url, json=payload, headers=headers)
             ddata = result.json()
             if ddata["statusCode"] != 0:
                 logger.error(f"gp爬取失败 {steamid}  {data}")
