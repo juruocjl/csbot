@@ -52,7 +52,7 @@ async def screenshot_html_to_png(url, width, height):
     await browser.close()
     return image
 
-def get_elo_info(pvpScore, seasonId = 21):
+def get_elo_info(pvpScore, seasonId = "S21"):
     if int(seasonId[1:]) >= 21:
         pool = "S"
         color = "#87CEFA"
