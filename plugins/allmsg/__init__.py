@@ -194,6 +194,7 @@ async def roll_admin(groupid: str):
     if localstorage.get('adminqq'):
         await bot.set_group_admin(group_id=groupid, user_id=localstorage.get('adminqq'), enable=False)
     print(await bot.get_group_member_list(group_id=groupid))
+    print(await bot.get_login_info())
 
 @roll.handle()
 async def roll_function(message: MessageEvent):
