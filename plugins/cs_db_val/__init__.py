@@ -461,7 +461,42 @@ class DataManager:
             if result[0] > 0:
                 return result
             raise ValueError(f"no {query_type}")
-            
+        if query_type == "gp回均首杀":
+            cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
+                            WHERE 
+                            {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp回均首死":
+            cursor.execute(f'''SELECT SUM(entryDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
+                            WHERE 
+                            {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp回均狙杀":
+            cursor.execute(f'''SELECT SUM(awpKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
+                            WHERE 
+                            {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
+        if query_type == "gp白给":
+            cursor.execute(f'''SELECT SUM(entryKill - entryDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt  FROM 'matches_gp'
+                            WHERE 
+                            {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[2] > 0:
+                return (result[0] / result[1], result[2])
+            raise ValueError(f"no {query_type}")
         raise ValueError(f"unknown {query_type}")
 
 
@@ -668,8 +703,12 @@ rank_config = [
     RankConfig("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0", 1),
     RankConfig("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0", 2),
 
-    RankConfig("gprt", "官匹rating", "本周", gp_time, True, ZeroIn(-0.01), "d2", 2),
-    RankConfig("gp场次", "官匹场次", "本周", gp_time, True, Fix(0), "d0", 1),
+    RankConfig("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2),
+    RankConfig("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0", 1),
+    RankConfig("gp回均首杀", "平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("gp回均首死", "平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("gp回均狙杀", "平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
+    RankConfig("gp白给", "平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2", 2),
 ]
 
 valid_rank = [a.name for a in rank_config]
