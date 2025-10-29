@@ -1,11 +1,13 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent
+from nonebot.permission import SUPERUSER
 from nonebot.params import CommandArg
 from nonebot import on_command
 from nonebot import get_bot
 from nonebot import require
 from nonebot import logger
+from typing import List
 
 import requests
 import json
@@ -55,14 +57,14 @@ class DataManager:
         )
         ''')
     
-    def addgoods(self, uid, name):
+    def addgoods(self, uid: str, name: str):
         cursor = get_cursor()
         cursor.execute(
             'INSERT OR IGNORE INTO  member_goods (uid, marketHashName) VALUES (?, ?)',
             (uid, name)
         )
         
-    async def update_goods(self, goods_list):
+    async def update_goods(self, goods_list: List[str]):
         cursor = get_cursor()
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
@@ -84,18 +86,18 @@ class DataManager:
                 logger.error("update_goods "+data['msg'])
             await asyncio.sleep(1.1)
 
-    def getallgoods(self):
+    def getallgoods(self) -> List[str]:
         cursor = get_cursor()
         cursor.execute('SELECT DISTINCT marketHashName FROM member_goods')
         res = cursor.fetchall()
         return [a[0] for a in res]
     
-    def getgoodsinfo(self, marketHashName):
+    def getgoodsinfo(self, marketHashName: str):
         cursor = get_cursor()
         cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? ORDER BY timeStamp DESC LIMIT 1', (marketHashName, ))
         return cursor.fetchone()
 
-    def getgoodsinfo_time(self, marketHashName, TimeStamp):
+    def getgoodsinfo_time(self, marketHashName: str, TimeStamp: int):
         cursor = get_cursor()
         cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? and timeStamp >= ? ORDER BY timeStamp ASC LIMIT 1', (marketHashName, TimeStamp))
         return cursor.fetchone()
@@ -108,8 +110,9 @@ search = on_command("搜索", priority=10, block=True)
 
 addgoods = on_command("加仓", priority=10, block=True)
 
+updallgoods = on_command("更新饰品", priority=10, block=True, permission=SUPERUSER)
 
-def get_baojia(title = "当前底价"):
+def get_baojia(title: str = "当前底价"):
     allgoods = db.getallgoods()
     logger.info(allgoods)
     data = []
@@ -167,3 +170,12 @@ async def send_baojia():
             message=get_baojia(title = "10点自动更新")
         )
 
+@updallgoods.handle()
+async def updallgoods_function():
+    goods = db.getallgoods()
+    msg = "成功更新 {} 件饰品".format(len(goods))
+    try:
+        await db.update_goods(goods)
+    except:
+        msg = "更新失败"
+    await updallgoods.finish(msg)
