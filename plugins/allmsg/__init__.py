@@ -172,8 +172,8 @@ def insert_msg(message):
 async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
-    logger.info(await bot.get_msg(message_id=message.message_id))
-    # insert_msg(await bot.get_msg(message_id=message.message_id))
+    # logger.info(await bot.get_msg(message_id=message.message_id))
+    insert_msg(await bot.get_msg(message_id=message.message_id))
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
