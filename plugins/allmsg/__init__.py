@@ -14,6 +14,7 @@ localstorage = require("utils").localstorage
 
 from .config import Config
 
+import msgpack
 import time
 import math
 import hashlib
@@ -113,6 +114,20 @@ def process_message_segments(segments):
 
     return get_bytes_hash(hash_source)
 
+def encode_msg(segments):
+    msglist = []
+    for seg in segments:
+        if seg.type == "text":
+            msglist.append(("text", seg.data["text"]))
+        elif seg.type == "at":
+            msglist.append(("at", seg.data["qq"]))
+        elif seg.type == "face":
+            msglist.append(("face", seg.data["id"]))
+        elif seg.type == "image":
+            msglist.append(("image"))
+    return msgpack.dumps(msglist)
+
+
 
 def sigmoid_step(x):
     t = (x - 50) / 500.0
@@ -122,10 +137,8 @@ def sigmoid_step(x):
 async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
-    msg = message.get_message()
-    print(message)
-    print(await bot.get_msg(message_id=message.message_id))
-    print(str(msg))
+    data = encode_msg((await bot.get_msg(message_id=message.message_id))["message"])
+    print(msgpack.loads(data))
 
 
 @fudupoint.handle()
