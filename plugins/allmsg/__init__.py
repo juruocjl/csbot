@@ -161,7 +161,6 @@ def encode_msg(segments):
     return msgpack.dumps(msglist)
 
 def insert_msg(message):
-    logger.info(message)
     db.insert_groupmsg(
         message["message_id"],
         "group_{}_{}".format(message["group_id"], message["user_id"]),
@@ -173,6 +172,7 @@ def insert_msg(message):
 async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
+    logger.info(await bot.get_msg(message_id=message.message_id))
     # insert_msg(await bot.get_msg(message_id=message.message_id))
 
 @debug_updmsg.handle()
