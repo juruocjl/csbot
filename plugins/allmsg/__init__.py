@@ -224,7 +224,8 @@ async def report_function(message: GroupMessageEvent):
     result += " -> "
     result += MessageSegment.at(maxatpair[0][1])
     result += f" {maxatpair[1]}次\n"
-        
+    
+    await report.finish(result)
 
 
 @debug_updmsg.handle()
