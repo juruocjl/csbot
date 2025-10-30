@@ -318,6 +318,9 @@ async def wordcloud_function(message: GroupMessageEvent):
     sid = message.get_session_id()
     uid = message.get_user_id()
     assert(sid.startswith("group"))
+    for seg in message.get_message():
+        if seg.type == "at":
+            uid = seg.data["qq"]
     msgdict = db.get_all_msg(sid.split('_')[1], userid=uid)
     await mywordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
 
