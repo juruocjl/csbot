@@ -288,7 +288,7 @@ def extra_plain_text(msg):
 
 def get_wordcloud(msgdict):
     stopwords = {
-        "怎么", "感觉", "什么", "真是", "不是"
+        "怎么", "感觉", "什么", "真是", "不是", "一个", "可以", "没有", "你们", "但是", "现在"
     }
     raw_text = " ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))
     seg_list = list(jieba.cut(raw_text, cut_all=False))
