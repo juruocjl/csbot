@@ -220,7 +220,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
 
     maxatto = sorted(attocnt.items(), key=lambda x: x[1])[-1]
     result += "最多被 at 次数：" 
-    result += await getcard(bot, gid, maxatto[1])
+    result += await getcard(bot, gid, maxatto[0])
     result += f" {maxatto[1]}次\n"
 
     maxatpair = sorted(atpaircnt.items(), key=lambda x: x[1])[-1]
