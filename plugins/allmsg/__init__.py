@@ -169,7 +169,7 @@ def encode_msg(segments):
         elif seg["type"] == "face":
             msglist.append(("face", seg["data"]["id"]))
         elif seg["type"] == "image":
-            msglist.append(("image"))
+            msglist.append(("image", ))
     return msgpack.dumps(msglist)
 
 def insert_msg(message):
