@@ -1,7 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
-from nonebot import on_command, on
+from nonebot import on_command, on_message
 from nonebot import logger
 from nonebot import require
 from nonebot.adapters import Bot
@@ -79,7 +79,9 @@ fudupoint = on_command("复读点数", priority=10, block=True)
 
 roll = on_command("roll", priority=10, block=True, permission=SUPERUSER)
 
-allmsg = on(priority=100, block=True)
+allmsg = on_message(priority=0, block=False)
+
+fuducheck = on_message(priority=100, block=True)
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -116,6 +118,15 @@ def sigmoid_step(x):
     t = (x - 50) / 500.0
     return max(0.02, math.tanh(t))
 
+@allmsg.handle()
+async def allmsg_function(message: GroupMessageEvent):
+    sid = message.get_session_id()
+    msg = message.get_message()
+    assert(sid.startswith("group"))
+    print(msg.to_rich_text())
+    print(str(msg))
+
+
 @fudupoint.handle()
 async def fudupoint_function(message: GroupMessageEvent):
     uid = message.get_user_id()
@@ -134,8 +145,8 @@ async def fudupoint_function(message: GroupMessageEvent):
 
 lastmsg = {}
 
-@allmsg.handle()
-async def allmsg_function(bot: Bot, message: GroupMessageEvent):
+@fuducheck.handle()
+async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
     global lastpic
     uid = message.get_user_id()
     sid = message.get_session_id()
@@ -153,7 +164,7 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
         result = meme.generate([Image("test", data)], [], {})
         lastpic = None
         if isinstance(result, bytes):
-            await allmsg.send(MessageSegment.image(result))
+            await fuducheck.send(MessageSegment.image(result))
     if text == "nlg" and lastpic:
         meme = get_meme("dog_dislike")
         with open(lastpic, "rb") as f:
@@ -161,11 +172,11 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
         result = meme.generate([Image("test", data)], [], {})
         lastpic = None
         if isinstance(result, bytes):
-            await allmsg.send(MessageSegment.image(result))
+            await fuducheck.send(MessageSegment.image(result))
     if text == "gsm" or text == "干什么":
-        await allmsg.send(MessageSegment.record(Path("assets") / "gsm.mp3"))
+        await fuducheck.send(MessageSegment.record(Path("assets") / "gsm.mp3"))
     if text == "mbf" or text == "没办法":
-        await allmsg.send(MessageSegment.record(Path("assets") / "mbf.mp3"))
+        await fuducheck.send(MessageSegment.record(Path("assets") / "mbf.mp3"))
     msglst = []
     if gid in lastmsg:
         msglst = lastmsg[gid]
@@ -179,7 +190,7 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
             msglst = msglst[-1:]
         nowpoint = len(msglst) - 1
         if len(msglst) > 2:
-            await allmsg.send(msglst[0][1])
+            await fuducheck.send(msglst[0][1])
             msglst = [(-1, msglst[0][1], mhs)]
     lastmsg[gid] = msglst
     if nowpoint > 0:
@@ -190,7 +201,7 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
             db.add_point(sid, 0)
             tm = db.get_zero_point(sid)
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * db.get_zero_point(uid))
-            await allmsg.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
+            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
 
 async def roll_admin(groupid: str):
