@@ -1,6 +1,6 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
 from nonebot import on_command, on
 from nonebot import logger
 from nonebot import require
@@ -117,11 +117,10 @@ def sigmoid_step(x):
     return max(0.02, math.tanh(t))
 
 @fudupoint.handle()
-async def fudupoint_function(message: MessageEvent):
+async def fudupoint_function(message: GroupMessageEvent):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    if not sid.startswith("group"):
-        return
+    assert(sid.startswith("group"))
     gid = sid.split('_')[1]
     point = db.get_point(sid)
     admincoef = 2 if uid == localstorage.get(f'adminqq{gid}') else 1
@@ -136,16 +135,15 @@ async def fudupoint_function(message: MessageEvent):
 lastmsg = {}
 
 @allmsg.handle()
-async def allmsg_function(bot: Bot, message: MessageEvent):
+async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     global lastpic
     uid = message.get_user_id()
     sid = message.get_session_id()
+    assert(sid.startswith("group"))
     msg = message.get_message()
     mhs = process_message_segments(msg)
     nowpoint = 0
     logger.info(f"{uid} send {msg} with {mhs}")
-    if not sid.startswith("group"):
-        return
     gid = sid.split('_')[1]
     text = msg.extract_plain_text().lower().strip()
     if text == "wlp" and lastpic:
@@ -218,10 +216,10 @@ async def roll_admin(groupid: str):
     await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(keyname), enable=True)
 
 @roll.handle()
-async def roll_function(message: MessageEvent):
+async def roll_function(message: GroupMessageEvent):
     sid = message.get_session_id()
-    if sid.startswith("group"):
-        await roll_admin(sid.split('_')[1])
+    assert(sid.startswith("group"))
+    await roll_admin(sid.split('_')[1])
     
 
 @scheduler.scheduled_job("cron", hour="23", minute="55", id="roll")
