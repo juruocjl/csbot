@@ -268,7 +268,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     for data in waittime:
         if data[0] != myid:
             result += await getcard(bot, gid, data[0])
-            result += f"{data[1][0]}/{data[1][1]}={data[1][0]/data[1][1]}"
+            result += f" {data[1][0]}/{data[1][1]}={data[1][0]/data[1][1]:.2f}"
             result += "\n"
     await report.send(result.strip())
 
