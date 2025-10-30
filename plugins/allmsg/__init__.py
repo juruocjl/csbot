@@ -291,16 +291,16 @@ async def wordcloud_function(message: GroupMessageEvent):
     msgdict = db.get_all_msg(sid.split('_')[1])
     text = " ".join(jieba.cut(" ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))))
 
-    res = WordCloud(
+    buffer = BytesIO()
+    WordCloud(
         width=800,
         height=600,
         background_color='white',
         font_path=Path("./assets") / "SimHei.ttf",
         max_words=200,
         colormap='viridis'
-    ).generate(text)
-
-    await wordcloud.finish(MessageSegment.image(BytesIO(res.to_image())))
+    ).generate(text).to_image().save(buffer, format='PNG') 
+    await wordcloud.finish(MessageSegment.image(buffer))
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
