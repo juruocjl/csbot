@@ -289,8 +289,10 @@ async def wordcloud_function(message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     msgdict = db.get_all_msg(sid.split('_')[1])
-    text = " ".join(jieba.cut(" ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))))
-
+    raw_text = " ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))
+    seg_list = list(jieba.cut(raw_text, cut_all=False))
+    text = " ".join([word for word in seg_list if len(word) > 1])
+    
     buffer = BytesIO()
     WordCloud(
         width=800,
@@ -298,7 +300,8 @@ async def wordcloud_function(message: GroupMessageEvent):
         background_color='white',
         font_path=Path("./assets") / "SimHei.ttf",
         max_words=200,
-        colormap='viridis'
+        colormap='viridis',
+        collocations=False
     ).generate(text).to_image().save(buffer, format='PNG') 
     await wordcloud.finish(MessageSegment.image(buffer))
 
