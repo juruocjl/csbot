@@ -203,7 +203,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     atfromcnt = defaultdict(int)
     atpaircnt = defaultdict(int)
     msgdict = db.get_all_msg(sid.split('_')[1])
-    for sid, time, msg in msgdict.values():
+    for sid, _, msg in msgdict.values():
         atset = set()
         for seg in msg:
             if seg[0] == "at":
