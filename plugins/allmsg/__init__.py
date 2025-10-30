@@ -258,6 +258,11 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
                 waittime[toid][0] += 600
                 waittime[toid][1] += 1
                 lastattime[toid] = tm
+    for uid in lastattime:
+        if uid not in waittime:
+            waittime[uid] = [0, 0]
+        waittime[uid][0] += min(600, int(time.time()) - lastattime[uid])
+        waittime[uid][1] += 1
     result = "平均at回复时间\n"
     waittime = sorted(waittime.items(), key=lambda x: x[1][0] / x[1][1], reverse=True)
     for data in waittime:
