@@ -106,9 +106,9 @@ class DataManager:
         result = cursor.fetchone()
         return result[0] if result else -1
 
-    def get_all_msg(self, groupid):
+    def get_all_msg(self, groupid, userid = "%"):
         cursor = get_cursor()
-        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ?", (f"group_{groupid}_%",))
+        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ?", (f"group_{groupid}_{userid}",))
         result = cursor.fetchall()
         msgdict = {}
         for id, _, sid, tm, msg in result:
@@ -131,6 +131,8 @@ debug_updmsg = on_command("updmsg", priority=10, block=True, permission=SUPERUSE
 report = on_command("统计", priority=10, block=True)
 
 wordcloud = on_command("词云", priority=10, block=True)
+
+mywordcloud = on_command("我的词云", priority=10, block=True)
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -284,11 +286,7 @@ def extra_plain_text(msg):
             result += seg[1]
     return result
 
-@wordcloud.handle()
-async def wordcloud_function(message: GroupMessageEvent):
-    sid = message.get_session_id()
-    assert(sid.startswith("group"))
-    msgdict = db.get_all_msg(sid.split('_')[1])
+def get_wordcloud(msgdict):
     stopwords = {
         "怎么", "感觉", "什么", "真是", "不是"
     }
@@ -306,7 +304,22 @@ async def wordcloud_function(message: GroupMessageEvent):
         colormap='viridis',
         collocations=False
     ).generate(text).to_image().save(buffer, format='PNG') 
-    await wordcloud.finish(MessageSegment.image(buffer))
+    return buffer
+
+@wordcloud.handle()
+async def wordcloud_function(message: GroupMessageEvent):
+    sid = message.get_session_id()
+    assert(sid.startswith("group"))
+    msgdict = db.get_all_msg(sid.split('_')[1])
+    await wordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
+
+@mywordcloud.handle()
+async def wordcloud_function(message: GroupMessageEvent):
+    sid = message.get_session_id()
+    uid = message.get_user_id()
+    assert(sid.startswith("group"))
+    msgdict = db.get_all_msg(sid.split('_')[1], userid=uid)
+    await wordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
