@@ -289,9 +289,12 @@ async def wordcloud_function(message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     msgdict = db.get_all_msg(sid.split('_')[1])
+    stopwords = {
+        "怎么", "感觉", "什么", "真是", "不是"
+    }
     raw_text = " ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))
     seg_list = list(jieba.cut(raw_text, cut_all=False))
-    text = " ".join([word for word in seg_list if len(word) > 1])
+    text = " ".join([word for word in seg_list if word not in stopwords and len(word) > 1])
     
     buffer = BytesIO()
     WordCloud(
