@@ -117,13 +117,13 @@ def process_message_segments(segments):
 def encode_msg(segments):
     msglist = []
     for seg in segments:
-        if seg.type == "text":
-            msglist.append(("text", seg.data["text"]))
-        elif seg.type == "at":
-            msglist.append(("at", seg.data["qq"]))
-        elif seg.type == "face":
-            msglist.append(("face", seg.data["id"]))
-        elif seg.type == "image":
+        if seg["type"] == "text":
+            msglist.append(("text", seg["data"]["text"]))
+        elif seg["type"] == "at":
+            msglist.append(("at", seg["data"]["qq"]))
+        elif seg["type"] == "face":
+            msglist.append(("face", seg["data"]["id"]))
+        elif seg["type"] == "image":
             msglist.append(("image"))
     return msgpack.dumps(msglist)
 
