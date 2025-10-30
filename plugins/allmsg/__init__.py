@@ -90,7 +90,8 @@ class DataManager:
             INSERT INTO groupmsg (mid, sid, timeStamp, data)
             VALUES (?, ?, ?, ?)
         ''', (mid, sid, timestamp, data_bytes))
-    def get_id_by_mid(mid: int):
+    
+    def get_id_by_mid(self, mid: int):
         cursor = get_cursor()
         cursor.execute('''
             SELECT id FROM groupmsg 
