@@ -210,19 +210,19 @@ async def report_function(message: GroupMessageEvent):
 
     maxatfrom = sorted(atfromcnt.items(), key=lambda x: x[1])[-1]
     result += "最多 at 次数：" 
-    result += Message.at(maxatfrom[0])
+    result += MessageSegment.at(maxatfrom[0])
     result += f" {maxatfrom[1]}次\n"
 
     maxatto = sorted(attocnt.items(), key=lambda x: x[1])[-1]
     result += "最多被 at 次数：" 
-    result += Message.at(maxatto[0])
+    result += MessageSegment.at(maxatto[0])
     result += f" {maxatto[1]}次\n"
 
     maxatpair = sorted(atpaircnt.items(), key=lambda x: x[1])[-1]
     result += "最多 at 对次数：" 
-    result += Message.at(maxatpair[0][0])
+    result += MessageSegment.at(maxatpair[0][0])
     result += " -> "
-    result += Message.at(maxatpair[0][1])
+    result += MessageSegment.at(maxatpair[0][1])
     result += f" {maxatpair[1]}次\n"
         
 
