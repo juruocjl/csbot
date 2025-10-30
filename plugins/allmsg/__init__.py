@@ -25,6 +25,7 @@ import random
 from meme_generator import Image, get_meme
 import jieba
 from wordcloud import WordCloud
+from io import BytesIO
 
 __plugin_meta__ = PluginMetadata(
     name="allmsg",
@@ -299,7 +300,7 @@ async def wordcloud_function(message: GroupMessageEvent):
         colormap='viridis'
     ).generate(text)
 
-    await wordcloud.finish(MessageSegment.image(res.to_image()))
+    await wordcloud.finish(MessageSegment.image(BytesIO(res.to_image())))
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
