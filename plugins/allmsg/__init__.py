@@ -109,7 +109,7 @@ class DataManager:
 
     def get_all_msg(self, groupid, userid = "%", tm = 0):
         cursor = get_cursor()
-        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? WHERE timeStamp >= ?", (f"group_{groupid}_{userid}", tm, ))
+        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and timeStamp >= ?", (f"group_{groupid}_{userid}", tm, ))
         result = cursor.fetchall()
         msgdict = {}
         for id, _, sid, tm, msg in result:
