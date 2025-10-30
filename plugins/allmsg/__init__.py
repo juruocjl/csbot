@@ -119,12 +119,17 @@ def sigmoid_step(x):
 @fudupoint.handle()
 async def fudupoint_function(message: MessageEvent):
     uid = message.get_user_id()
-    point = db.get_point(uid)
-    prob1 = sigmoid_step(point + 1)
-    prob2 = sigmoid_step((point + 2) * 2)
-    prob3 = sigmoid_step((point + 3) * 3)
-    prob5 = sigmoid_step((point + 5) * 5)
-    tm = db.get_zero_point(uid) + 1
+    sid = message.get_session_id()
+    if not sid.startswith("group"):
+        return
+    gid = sid.split('_')[1]
+    point = db.get_point(sid)
+    admincoef = 2 if uid == localstorage.get(f'adminqq{gid}') else 1
+    prob1 = sigmoid_step(admincoef * (point + 1))
+    prob2 = sigmoid_step(admincoef * (point + 2) * 2)
+    prob3 = sigmoid_step(admincoef * (point + 3) * 3)
+    prob5 = sigmoid_step(admincoef * (point + 5) * 5)
+    tm = db.get_zero_point(sid) + 1
     await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
 
 
@@ -180,11 +185,12 @@ async def allmsg_function(bot: Bot, message: MessageEvent):
             msglst = [(-1, msglst[0][1], mhs)]
     lastmsg[gid] = msglst
     if nowpoint > 0:
-        db.add_point(uid, nowpoint)
-        prob = sigmoid_step(nowpoint * db.get_point(uid))
+        db.add_point(sid, nowpoint)
+        admincoef = 2 if uid == localstorage.get(f'adminqq{gid}') else 1
+        prob = sigmoid_step(admincoef * nowpoint * db.get_point(sid))
         if random.random() < prob:
-            db.add_point(uid, 0)
-            tm = db.get_zero_point(uid)
+            db.add_point(sid, 0)
+            tm = db.get_zero_point(sid)
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * db.get_zero_point(uid))
             await allmsg.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
@@ -200,7 +206,8 @@ async def roll_admin(groupid: str):
     weights = []
     for user in member_list:
         if not user['is_robot'] and user['user_id'] != myid:
-            point = db.get_point(user['user_id']) / (db.get_zero_point(user['user_id']) + 1) + 1
+            sid = "group_" + groupid + "_" + user['user_id']
+            point = db.get_point(sid) / (db.get_zero_point(sid) + 1) + 1
             users.append((user['user_id'], point))
             weights.append(point)
     print(users)
