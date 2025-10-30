@@ -14,6 +14,7 @@ localstorage = require("utils").localstorage
 
 from .config import Config
 
+from collections import defaultdict
 import msgpack
 import time
 import math
@@ -102,6 +103,15 @@ class DataManager:
         result = cursor.fetchone()
         return result[0] if result else -1
 
+    def get_all_msg(self, groupid):
+        cursor = get_cursor()
+        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ?", (f"group_{groupid}_%",))
+        result = cursor.fetchall()
+        msgdict = {}
+        for id, _, sid, tm, msg in result:
+            msgdict[id] = (sid, tm, msgpack.loads(msg))
+        return msgdict
+
 
 db = DataManager()
 
@@ -114,6 +124,8 @@ allmsg = on_message(priority=0, block=False)
 fuducheck = on_message(priority=100, block=True)
 
 debug_updmsg = on_command("updmsg", priority=10, block=True, permission=SUPERUSER)
+
+report = on_command("统计", priority=10, block=True)
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -174,6 +186,46 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     assert(sid.startswith("group"))
     # logger.info(await bot.get_msg(message_id=message.message_id))
     insert_msg(await bot.get_msg(message_id=message.message_id))
+
+@report.handle()
+async def report_function(message: GroupMessageEvent):
+    sid = message.get_session_id()
+    assert(sid.startswith("group"))
+    attocnt = defaultdict(int)
+    atfromcnt = defaultdict(int)
+    atpaircnt = defaultdict(int)
+    msgdict = db.get_all_msg(sid.split('_')[1])
+    for sid, time, msg in msgdict.values():
+        atset = set()
+        for seg in msg:
+            if seg[0] == "at":
+                atset.add(int(seg[1]))
+        uid = int(sid.split('_')[2])
+        for toid in atset:
+            attocnt[toid] += 1
+            atpaircnt[(uid, toid)] += 1
+        if len(atset):
+            atfromcnt[uid] += 1
+    result = Message()
+
+    maxatfrom = sorted(atfromcnt.items(), key=lambda x: x[1])[-1]
+    result += "最多 at 次数：" 
+    result += Message.at(maxatfrom[0])
+    result += f" {maxatfrom[1]}次\n"
+
+    maxatto = sorted(attocnt.items(), key=lambda x: x[1])[-1]
+    result += "最多被 at 次数：" 
+    result += Message.at(maxatto[0])
+    result += f" {maxatto[1]}次\n"
+
+    maxatpair = sorted(atpaircnt.items(), key=lambda x: x[1])[-1]
+    result += "最多 at 对次数：" 
+    result += Message.at(maxatpair[0][0])
+    result += " -> "
+    result += Message.at(maxatpair[0][1])
+    result += f" {maxatpair[1]}次\n"
+        
+
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
