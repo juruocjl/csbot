@@ -319,7 +319,7 @@ async def wordcloud_function(message: GroupMessageEvent):
     uid = message.get_user_id()
     assert(sid.startswith("group"))
     msgdict = db.get_all_msg(sid.split('_')[1], userid=uid)
-    await wordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
+    await mywordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
