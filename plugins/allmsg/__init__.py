@@ -187,10 +187,15 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     # logger.info(await bot.get_msg(message_id=message.message_id))
     insert_msg(await bot.get_msg(message_id=message.message_id))
 
+async def getcard(bot, gid, uid):
+    return (await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False))["card"]
+
 @report.handle()
-async def report_function(message: GroupMessageEvent):
+async def report_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
+    gid = sid.split('_')[1]
+    myid = (await bot.get_login_info())['user_id']
     attocnt = defaultdict(int)
     atfromcnt = defaultdict(int)
     atpaircnt = defaultdict(int)
@@ -210,22 +215,54 @@ async def report_function(message: GroupMessageEvent):
 
     maxatfrom = sorted(atfromcnt.items(), key=lambda x: x[1])[-1]
     result += "最多 at 次数：" 
-    result += MessageSegment.at(maxatfrom[0])
+    result += await getcard(bot, gid, maxatfrom[0])
     result += f" {maxatfrom[1]}次\n"
 
     maxatto = sorted(attocnt.items(), key=lambda x: x[1])[-1]
     result += "最多被 at 次数：" 
-    result += MessageSegment.at(maxatto[0])
+    result += await getcard(bot, gid, maxatto[1])
     result += f" {maxatto[1]}次\n"
 
     maxatpair = sorted(atpaircnt.items(), key=lambda x: x[1])[-1]
     result += "最多 at 对次数：" 
-    result += MessageSegment.at(maxatpair[0][0])
+    result += await getcard(bot, gid, maxatpair[0][0])
     result += " -> "
-    result += MessageSegment.at(maxatpair[0][1])
+    result += await getcard(bot, gid, maxatpair[0][1])
     result += f" {maxatpair[1]}次\n"
     
-    await report.finish(result)
+    await report.send(result)
+
+    lastattime = {}
+    waittime = {}
+    for sid, tm, msg in msgdict.values():
+        uid = int(sid.split('_')[2])
+        if uid in lastattime:
+            if uid not in waittime:
+                waittime[uid] = [0, 0]
+            waittime[uid][0] += min(600, tm - lastattime[uid])
+            waittime[uid][1] += 1
+            del lastattime[uid]
+        atset = set()
+        for seg in msg:
+            if seg[0] == "at" and int(seg[1]) != uid:
+                atset.add(int(seg[1]))
+        for toid in atset:
+            if toid not in lastattime:
+                lastattime[toid] = tm
+            elif tm - lastattime[toid] >= 600:
+                if toid not in waittime:
+                    waittime[toid] = [0, 0]
+                waittime[toid][0] += 600
+                waittime[toid][1] += 1
+                lastattime[toid] = tm
+    result = "平均at回复时间\n"
+    waittime = sorted(waittime.items(), key=lambda x: x[1][0] / x[1][1], reverse=True)
+    for data in waittime:
+        if data[0] != myid:
+            result += await getcard(bot, gid, data[0])
+            result += f"{data[1][0]}/{data[1][1]}={data[1][0]/data[1][1]}"
+            result += "\n"
+    await report.send(result.strip())
 
 
 @debug_updmsg.handle()
