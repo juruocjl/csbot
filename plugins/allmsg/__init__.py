@@ -188,7 +188,10 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     insert_msg(await bot.get_msg(message_id=message.message_id))
 
 async def getcard(bot, gid, uid):
-    return (await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False))["card"]
+    info = await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False)
+    if info["card"]:
+        return info["card"]
+    return info["nickname"]
 
 @report.handle()
 async def report_function(bot: Bot, message: GroupMessageEvent):
