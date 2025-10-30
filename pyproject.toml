@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.9, <4.0"
 dependencies = [
     "fuzzywuzzy>=0.18.0",
+    "jieba>=0.42.1",
     "meme-generator>=0.2.2",
     "msgpack>=1.1.2",
     "nb-cli>=1.4.2",
@@ -16,6 +17,7 @@ dependencies = [
     "psutil>=7.1.2",
     "pyppeteer>=2.0.0",
     "ts3>=2.0.0b2",
+    "wordcloud>=1.9.4",
 ]
 
 [tool.nonebot]

@@ -23,6 +23,8 @@ import urllib
 from pathlib import Path
 import random
 from meme_generator import Image, get_meme
+import jieba
+from wordcloud import WordCloud
 
 __plugin_meta__ = PluginMetadata(
     name="allmsg",
@@ -126,6 +128,8 @@ fuducheck = on_message(priority=100, block=True)
 debug_updmsg = on_command("updmsg", priority=10, block=True, permission=SUPERUSER)
 
 report = on_command("统计", priority=10, block=True)
+
+wordcloud = on_command("词云", priority=10, block=True)
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -272,6 +276,30 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
             result += "\n"
     await report.send(result.strip())
 
+def extra_plain_text(msg):
+    result = ""
+    for seg in msg:
+        if seg[0] == "text":
+            result += seg[1]
+    return result
+
+@wordcloud.handle()
+async def wordcloud_function(message: GroupMessageEvent):
+    sid = message.get_session_id()
+    assert(sid.startswith("group"))
+    msgdict = db.get_all_msg(sid.split('_')[1])
+    text = " ".join(jieba.cut(" ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))))
+
+    res = WordCloud(
+        width=800,
+        height=600,
+        background_color='white',
+        font_path=Path("./assets") / "SimHei.ttf",
+        max_words=200,
+        colormap='viridis'
+    ).generate(text)
+
+    await wordcloud.finish(MessageSegment.Image(res.to_image()))
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
