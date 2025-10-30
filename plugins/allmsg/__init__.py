@@ -11,6 +11,7 @@ from nonebot import get_bot
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 localstorage = require("utils").localstorage
+get_today_start_timestamp = require("utils").get_today_start_timestamp
 
 from .config import Config
 
@@ -106,9 +107,9 @@ class DataManager:
         result = cursor.fetchone()
         return result[0] if result else -1
 
-    def get_all_msg(self, groupid, userid = "%"):
+    def get_all_msg(self, groupid, userid = "%", tm = 0):
         cursor = get_cursor()
-        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ?", (f"group_{groupid}_{userid}",))
+        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? WHERE timeStamp >= tm", (f"group_{groupid}_{userid}",))
         result = cursor.fetchall()
         msgdict = {}
         for id, _, sid, tm, msg in result:
@@ -323,6 +324,14 @@ async def wordcloud_function(message: GroupMessageEvent):
             uid = seg.data["qq"]
     msgdict = db.get_all_msg(sid.split('_')[1], userid=uid)
     await mywordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
+
+@scheduler.scheduled_job("cron", hour="23", minute="30", id="todaywc")
+async def todaywc():
+    bot = get_bot()
+    for group in config.cs_group_list:
+        image = get_wordcloud(db.get_all_msg(group, tm = time.time() - 24 * 3600))
+        await bot.send_group_msg(group_id=group, message=MessageSegment.image(image))
+        
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
