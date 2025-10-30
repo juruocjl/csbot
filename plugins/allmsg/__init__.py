@@ -179,7 +179,7 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
-    data = await bot.call_api("get_group_msg_history", group_id=sid.split('_')[1], count=40)
+    data = await bot.call_api("get_group_msg_history", group_id=sid.split('_')[1], count=5000)
     myid = (await bot.get_login_info())['user_id']
     for msg in data["messages"]:
         if msg['user_id'] != myid:
