@@ -204,7 +204,7 @@ async def roll_admin(groupid: str):
     weights = []
     for user in member_list:
         if not user['is_robot'] and user['user_id'] != myid:
-            sid = "group_" + groupid + "_" + user['user_id']
+            sid = "group_" + groupid + "_" + str(user['user_id'])
             point = db.get_point(sid) / (db.get_zero_point(sid) + 1) + 1
             users.append((user['user_id'], point))
             weights.append(point)
