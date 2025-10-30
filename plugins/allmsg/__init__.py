@@ -47,6 +47,16 @@ class DataManager:
             point INT
         )
         ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS groupmsg (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mid INTEGER NOT NULL,
+            sid TEXT NOT NULL,
+            timeStamp INTEGER NOT NULL,
+            data BLOB NOT NULL
+        )
+        ''')
 
     def add_point(self, uid, point):
         timestamp = int(time.time())
@@ -74,6 +84,24 @@ class DataManager:
         result = cursor.fetchone()
         return result[0] if result[0] is not None else 0
 
+    def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes):
+        cursor = get_cursor()
+        cursor.execute('''
+            INSERT INTO groupmsg (mid, sid, timeStamp, data)
+            VALUES (?, ?, ?, ?)
+        ''', (mid, sid, timestamp, data_bytes))
+    def get_id_by_mid(mid: int):
+        cursor = get_cursor()
+        cursor.execute('''
+            SELECT id FROM groupmsg 
+            WHERE mid = ? 
+            ORDER BY timeStamp DESC 
+            LIMIT 1
+        ''', (mid,))
+        result = cursor.fetchone()
+        return result[0] if result else -1
+
+
 db = DataManager()
 
 fudupoint = on_command("复读点数", priority=10, block=True)
@@ -83,6 +111,8 @@ roll = on_command("roll", priority=10, block=True, permission=SUPERUSER)
 allmsg = on_message(priority=0, block=False)
 
 fuducheck = on_message(priority=100, block=True)
+
+debug_updmsg = on_command("updmsg", priority=10, block=True, permission=SUPERUSER)
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -119,6 +149,8 @@ def encode_msg(segments):
     for seg in segments:
         if seg["type"] == "text":
             msglist.append(("text", seg["data"]["text"]))
+        if seg["type"] == "reply":
+            msglist.append(("reply", db.get_id_by_mid(seg["data"]["id"])))
         elif seg["type"] == "at":
             msglist.append(("at", seg["data"]["qq"]))
         elif seg["type"] == "face":
@@ -127,18 +159,33 @@ def encode_msg(segments):
             msglist.append(("image"))
     return msgpack.dumps(msglist)
 
+def insert_msg(message):
+    db.insert_groupmsg(
+        message["message_id"],
+        "group_{}_{}".format(message["group_id"], message["user_id"]),
+        message["time"],
+        encode_msg(message["message"])
+    )
+
+@allmsg.handle()
+async def allmsg_function(bot: Bot, message: GroupMessageEvent):
+    sid = message.get_session_id()
+    assert(sid.startswith("group"))
+    # insert_msg(await bot.get_msg(message_id=message.message_id))
+
+@debug_updmsg.handle()
+async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
+    sid = message.get_session_id()
+    assert(sid.startswith("group"))
+    data = await bot.call_api("get_group_msg_history", group_id=sid.split('_')[1], count=20)
+    for msg in data["data"]["messages"]:
+        insert_msg(msg)
 
 
 def sigmoid_step(x):
     t = (x - 50) / 500.0
     return max(0.02, math.tanh(t))
 
-@allmsg.handle()
-async def allmsg_function(bot: Bot, message: GroupMessageEvent):
-    sid = message.get_session_id()
-    assert(sid.startswith("group"))
-    data = encode_msg((await bot.get_msg(message_id=message.message_id))["message"])
-    print(msgpack.loads(data))
 
 
 @fudupoint.handle()
