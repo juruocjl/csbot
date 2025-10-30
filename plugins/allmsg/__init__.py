@@ -178,6 +178,7 @@ async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     data = await bot.call_api("get_group_msg_history", group_id=sid.split('_')[1], count=20)
+    print(data)
     for msg in data["data"]["messages"]:
         insert_msg(msg)
 
