@@ -299,7 +299,7 @@ async def wordcloud_function(message: GroupMessageEvent):
         colormap='viridis'
     ).generate(text)
 
-    await wordcloud.finish(MessageSegment.Image(res.to_image()))
+    await wordcloud.finish(MessageSegment.image(res.to_image()))
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
