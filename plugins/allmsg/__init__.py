@@ -119,11 +119,12 @@ def sigmoid_step(x):
     return max(0.02, math.tanh(t))
 
 @allmsg.handle()
-async def allmsg_function(message: GroupMessageEvent):
+async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
-    msg = message.get_message()
     assert(sid.startswith("group"))
-    print(msg.to_rich_text())
+    msg = message.get_message()
+    print(message)
+    print(await bot.get_msg(message_id=message.message_id))
     print(str(msg))
 
 
