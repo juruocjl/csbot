@@ -339,7 +339,6 @@ async def todaywc():
     for group in config.cs_group_list:
         image = get_wordcloud(db.get_all_msg(group, tm = time.time() - 24 * 3600))
         await bot.send_group_msg(group_id=group, message=Message([MessageSegment.image(image)]))
-        
 
 @debug_updmsg.handle()
 async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
@@ -351,12 +350,9 @@ async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
         if msg['user_id'] != myid:
             insert_msg(msg)
 
-
 def sigmoid_step(x):
     t = (x - 50) / 500.0
     return max(0.02, math.tanh(t))
-
-
 
 @fudupoint.handle()
 async def fudupoint_function(message: GroupMessageEvent):
@@ -373,8 +369,18 @@ async def fudupoint_function(message: GroupMessageEvent):
     tm = db.get_zero_point(sid) + 1
     await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
 
-
 lastmsg = {}
+
+def checksb(message: Message):
+    text = message.extract_plain_text().strip().lower()
+    if text == "sb" or text == "傻逼":
+        atset = set()
+        for seg in message:
+            if seg.type == "at":
+                atset.add(seg.data["qq"])
+        if len(atset) == 1:
+            return (True, list(atset)[0])
+    return (False, None)
 
 @fuducheck.handle()
 async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
@@ -411,18 +417,23 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
     msglst = []
     if gid in lastmsg:
         msglst = lastmsg[gid]
-    if len(msglst) == 1 and msglst[0][0] == -1 and msglst[0][2] == mhs:
-        nowpoint = 3
-    elif len(msglst) > 0 and msglst[0][2] == mhs and (uid in [a[0] for a in msglst]):
-        nowpoint = 5
+    issb, whosb = checksb(msg)
+    print(issb, whosb)
+    if issb:
+        nowpoint += 5
+
+    if len(msglst) > 0 and msglst[0][2] == mhs and (uid in [a[0] for a in msglst]):
+        nowpoint += 5
     else:
         msglst.append((uid, msg, mhs))
         if len(msglst) > 1 and msglst[-1][2] != msglst[-2][2]:
             msglst = msglst[-1:]
-        nowpoint = len(msglst) - 1
-        if len(msglst) > 2:
+        nowpoint += min(3, len(msglst) - 1)
+        if len(msglst) == 3:
             await fuducheck.send(msglst[0][1])
-            msglst = [(-1, msglst[0][1], mhs)]
+            if issb:
+                tm = db.get_zero_point(f"group_{gid}_{whosb}") + 1
+                await bot.set_group_ban(group_id=gid, user_id=whosb, duration=60 * tm)
     lastmsg[gid] = msglst
     if nowpoint > 0:
         db.add_point(sid, nowpoint)
