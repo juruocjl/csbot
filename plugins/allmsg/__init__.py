@@ -335,7 +335,7 @@ async def wordcloud_function(message: GroupMessageEvent):
     msgdict = db.get_all_msg(sid.split('_')[1], userid=uid)
     await mywordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
 
-@scheduler.scheduled_job("cron", hour="23", minute="30", id="todaywc")
+@scheduler.scheduled_job("cron", hour="23", minute="50", id="todaywc")
 async def todaywc():
     bot = get_bot()
     for group in config.cs_group_list:
