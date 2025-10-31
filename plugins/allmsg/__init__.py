@@ -360,13 +360,16 @@ async def fudupoint_function(message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
-    point = db.get_point(sid)
+    for seg in message.get_message():
+        if seg.type == "at":
+            uid = seg.data["qq"]
+    point = db.get_point(f"group_{gid}_{uid}")
     admincoef = 2 if uid == localstorage.get(f'adminqq{gid}') else 1
     prob1 = sigmoid_step(admincoef * (point + 1))
     prob2 = sigmoid_step(admincoef * (point + 2) * 2)
     prob3 = sigmoid_step(admincoef * (point + 3) * 3)
     prob5 = sigmoid_step(admincoef * (point + 5) * 5)
-    tm = db.get_zero_point(sid) + 1
+    tm = db.get_zero_point(f"group_{gid}_{uid}") + 1
     await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
 
 lastmsg = {}
@@ -442,7 +445,7 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
         if random.random() < prob:
             db.add_point(sid, 0)
             tm = db.get_zero_point(sid)
-            await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * db.get_zero_point(uid))
+            await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
             await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
 
