@@ -41,6 +41,8 @@ get_today_start_timestamp = require("utils").get_today_start_timestamp
 
 config = get_plugin_config(Config)
 
+jieba.load_userdict(str(Path("assets") / "dict.txt"))
+
 class DataManager:
     def __init__(self):
         cursor = get_cursor()
