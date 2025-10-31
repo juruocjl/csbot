@@ -109,12 +109,20 @@ class DataManager:
 
     def get_all_msg(self, groupid, userid = "%", tm = 0):
         cursor = get_cursor()
-        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and timeStamp >= ?", (f"group_{groupid}_{userid}", tm, ))
+        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and timeStamp >= ?",
+                       (f"group_{groupid}_{userid}", tm, ))
         result = cursor.fetchall()
         msgdict = {}
         for id, _, sid, tm, msg in result:
             msgdict[id] = (sid, tm, msgpack.loads(msg))
         return msgdict
+
+    def get_active_user(self, groupid):
+        cursor = get_cursor()
+        cursor.execute('SELECT DISTINCT sid FROM groupmsg WHERE sid LIKE ? and timeStamp >= ?',
+                       (f"group_{groupid}_%", get_today_start_timestamp(), ))
+        res = cursor.fetchall()
+        return [a[0] for a in res]
 
 
 db = DataManager()
@@ -432,16 +440,14 @@ async def roll_admin(groupid: str):
     keyname = f'adminqq{groupid}'
     if localstorage.get(keyname):
         await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(keyname), enable=False)
-    member_list = await bot.get_group_member_list(group_id=groupid)
-    myid = (await bot.get_login_info())['user_id']
     users = []
     weights = []
-    for user in member_list:
-        if not user['is_robot'] and user['user_id'] != myid:
-            sid = "group_" + groupid + "_" + str(user['user_id'])
-            point = db.get_point(sid) / (db.get_zero_point(sid) + 1) + 1
-            users.append((user['user_id'], point))
-            weights.append(point)
+    sid_list = db.get_active_user(groupid)
+    for sid in sid_list:
+        point = db.get_point(sid) / (db.get_zero_point(sid) + 1) + 1
+        userid = int(sid.split('_')[2])
+        users.append((userid, point))
+        weights.append(point)
     print(users)
     newadmin, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
