@@ -6,8 +6,8 @@ from nonebot import on_command
 from nonebot import require
 
 get_pic_status = require("pic").get_pic_status
+get_session = require("utils").get_session
 
-import requests
 import time
 import psutil
 import random
@@ -107,5 +107,6 @@ async def getstatus_function(message: MessageEvent):
 
 @langeng.handle()
 async def langeng_function():
-    res = requests.get("https://hguofichp.cn:10086/machine/getRandOne")
-    await langeng.finish(res.json()['data']['barrage'])
+    async with get_session().get("https://hguofichp.cn:10086/machine/getRandOne") as res:
+        data = await res.json()
+        await langeng.finish(data['data']['barrage'])

@@ -20,7 +20,6 @@ import msgpack
 import time
 import math
 import hashlib
-import urllib
 from pathlib import Path
 import random
 from meme_generator import Image, get_meme
@@ -151,7 +150,7 @@ def get_bytes_hash(data, algorithm='sha256'):
     hash_obj.update(data)
     return hash_obj.hexdigest()
 
-def process_message_segments(segments):
+async def process_message_segments(segments):
     """处理消息段，提取信息并计算哈希"""
     hash_source = b""
     
@@ -170,7 +169,7 @@ def process_message_segments(segments):
             
         elif seg.type == "image":
             url = seg.data["url"]
-            with urllib.request.urlopen(url) as response:
+            async with get_session.get(url) as response:
                 data = get_bytes_hash(response.read())
                 hash_source += f"image:{data}".encode("utf-8") + b"|"
 
@@ -395,7 +394,7 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     msg = message.get_message()
-    mhs = process_message_segments(msg)
+    mhs = await process_message_segments(msg)
     nowpoint = 0
     logger.info(f"{uid} send {msg} with {mhs}")
     gid = sid.split('_')[1]

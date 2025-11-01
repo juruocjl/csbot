@@ -6,12 +6,12 @@ from nonebot import get_bot
 from nonebot import logger
 
 import asyncio
-import requests
 import re
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 get_cursor = require("utils").get_cursor
+get_session = require("utils").get_session
 
 from .config import Config
 
@@ -61,19 +61,22 @@ livestate = on_command("直播状态", priority=10, block=True)
 async def get_live_status(liveid):
     await asyncio.sleep(1)
     if liveid.startswith("dy_"):
-        res = requests.get("https://www.doseeing.com/room/"+liveid.split('_')[1])
-        islive = int('<span>直播中</span>' in res.text)
-        nickname = re.findall(r'<title>(.*?)</title>', res.text, re.IGNORECASE)[1][:-10]
-        return islive, nickname
+        async with get_session().get("https://www.doseeing.com/room/"+liveid.split('_')[1]) as res:
+            data = await res.text() 
+            islive = int('<span>直播中</span>' in data)
+            nickname = re.findall(r'<title>(.*?)</title>', data, re.IGNORECASE)[1][:-10]
+            return islive, nickname
     if liveid.startswith("bili_"):
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.111 Safari/537.36"}
-        res = requests.get("https://api.live.bilibili.com/room/v1/Room/room_init?id="+liveid.split('_')[1], headers=headers)
-        await asyncio.sleep(1)
-        islive = int(res.json()['data']['live_status'] == 1)
-        uid = res.json()['data']['uid']
-        res = requests.get("https://api.live.bilibili.com/live_user/v1/Master/info?uid="+str(uid), headers=headers)
-        nickname = res.json()['data']['info']['uname']
-        return islive, nickname
+        async with get_session().get("https://api.live.bilibili.com/room/v1/Room/room_init?id="+liveid.split('_')[1], headers=headers) as res:
+            await asyncio.sleep(1)
+            data = await res.json()
+            islive = int(data['data']['live_status'] == 1)
+            uid = data['data']['uid']
+            async with get_session().get("https://api.live.bilibili.com/live_user/v1/Master/info?uid="+str(uid), headers=headers) as res:
+                data = await res.json()
+                nickname = data['data']['info']['uname']
+                return islive, nickname
 
 
 now_live_state = "无数据"

@@ -8,6 +8,7 @@ from nonebot import require
 from nonebot import logger
 
 localstorage = require("utils").localstorage
+async_download = require("utils").async_download
 
 from .config import Config
 
@@ -16,7 +17,6 @@ import os
 from pathlib import Path
 import random
 import uuid
-import urllib
 import asyncio
 import ast
 
@@ -75,9 +75,9 @@ class PicDir:
             self.hashset.add(hashval)
         localstorage.set(self.keyname, str(self.hashset))
 
-    def addpic(self, filename, url):
+    async def addpic(self, filename, url):
         filepath = Path(self.dirname) / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
-        urllib.request.urlretrieve(url, filepath)
+        await async_download(url, filepath)
         hashval = get_file_hash(filepath)
         if hashval in self.hashset:
             logger.info(f"add{self.dirname}  {filename} existed")
@@ -111,7 +111,7 @@ async def addpic_got_imgs(imgs: Message = Arg()):
     addcnt = 0
     for seg in imgs:
         if seg.type == 'image':
-            addcnt += Pic1.addpic(seg.data['file'], seg.data["url"])
+            addcnt += await Pic1.addpic(seg.data['file'], seg.data["url"])
     if addcnt > 0:
         await addpic.finish(f"成功添加 {addcnt} 张图片")
     await addpic.finish(f"添加失败")
@@ -132,7 +132,7 @@ async def addmgz_got_imgs(imgs: Message = Arg()):
     addcnt = 0
     for seg in imgs:
         if seg.type == 'image':
-            addcnt += Pic2.addpic(seg.data['file'], seg.data["url"])
+            addcnt += await Pic2.addpic(seg.data['file'], seg.data["url"])
     if addcnt > 0:
         await addmgz.finish(f"成功添加 {addcnt} 张图片")
     await addmgz.finish(f"添加失败")

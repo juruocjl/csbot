@@ -9,7 +9,6 @@ from nonebot import require
 from nonebot import logger
 from typing import List
 
-import requests
 import json
 import time
 import asyncio
@@ -19,6 +18,7 @@ from .config import Config
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 get_cursor = require("utils").get_cursor
+get_session = require("utils").get_session
 
 
 __plugin_meta__ = PluginMetadata(
@@ -69,8 +69,8 @@ class DataManager:
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
             goods_list = goods_list[50:]
-            res = requests.post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.csqaq_api})
-            data = res.json()
+            with get_session().post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.csqaq_api}) as res:
+                data = await res.json()
             if data['code'] == 200:
                 for marketHashName, good_info in data['data']['success'].items():
                     cursor.execute(
@@ -133,8 +133,8 @@ async def baojia_function():
 
 @search.handle()
 async def search_function(args: Message = CommandArg()):
-    res = requests.get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api})
-    data = res.json()
+    async with get_session().get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api}) as res:
+        data = await res.json()
     if data['code'] == 200:
         await search.finish(("搜索结果\n" + "\n".join([f"{item['id']}. {item['value']}" for item in data['data'][:10]])).strip())
     else:
@@ -145,9 +145,9 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
     uid = message.get_user_id()
     res = ""
     try:
-        res = requests.get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api})
-        data = res.json()
-        time.sleep(1.1)
+        async with get_session().get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api}) as res:
+            data = await res.json()
+        asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
         db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
         res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
