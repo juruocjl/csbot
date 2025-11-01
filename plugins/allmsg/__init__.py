@@ -169,7 +169,7 @@ async def process_message_segments(segments):
             
         elif seg.type == "image":
             url = seg.data["url"]
-            async with get_session.get(url) as response:
+            async with get_session().get(url) as response:
                 data = get_bytes_hash(response.read())
                 hash_source += f"image:{data}".encode("utf-8") + b"|"
 
