@@ -378,7 +378,7 @@ lastmsg = {}
 
 def checksb(message: Message):
     text = message.extract_plain_text().strip().lower()
-    if text == "sb" or text == "傻逼":
+    if text == "sb" or text == "傻逼" or text == "艾斯比":
         atset = set()
         for seg in message:
             if seg.type == "at":
