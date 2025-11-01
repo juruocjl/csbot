@@ -36,7 +36,7 @@ __plugin_meta__ = PluginMetadata(
 )
 
 get_cursor = require("utils").get_cursor
-session = require("utils").session
+get_session = require("utils").get_session
 
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 

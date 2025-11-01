@@ -4,7 +4,7 @@ from nonebot import require
 from nonebot import logger
 
 get_cursor = require("utils").get_cursor
-session = require("utils").session
+get_session = require("utils").get_session
 async_download = require("utils").async_download
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
@@ -205,7 +205,7 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token":config.cs_wmtoken
         }
-        async with session.post(url,headers=header,json=payload) as result:
+        async with get_session().post(url,headers=header,json=payload) as result:
             data = await result.json()
         await asyncio.sleep(0.2)
         if data["statusCode"] != 0:
@@ -258,7 +258,7 @@ class DataManager:
             "token": config.cs_wmtoken
         }
         
-        async with session.post(url, headers=header, json=payload) as result:
+        async with get_session().post(url, headers=header, json=payload) as result:
             data = await result.json()
         await asyncio.sleep(0.2)
 
@@ -339,7 +339,7 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token":config.cs_wmtoken
         }
-        async with session.post(url,headers=header,json=payload) as result:
+        async with get_session().post(url,headers=header,json=payload) as result:
             data = await result.json()
         if data["statusCode"] != 0:
             logger.error(f"爬取失败 {steamid} {data}")
@@ -378,7 +378,7 @@ class DataManager:
                         "pvpType": -1,
                         "toSteamId": steamid
                     }
-                    async with session.post(url, json=payload, headers=headers) as result:
+                    async with get_session().post(url, json=payload, headers=headers) as result:
                         ddata = await result.json()
                     if ddata["statusCode"] != 0:
                         logger.error(f"爬取失败 {steamid} {SeasonID} {page} {ddata}")
@@ -407,7 +407,7 @@ class DataManager:
                 "toSteamId": steamid
             }
 
-            async with session.post(url, json=payload, headers=headers) as result:
+            async with get_session().post(url, json=payload, headers=headers) as result:
                 ddata = await result.json()
             if ddata["statusCode"] != 0:
                 logger.error(f"gp爬取失败 {steamid}  {data}")

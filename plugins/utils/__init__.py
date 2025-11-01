@@ -67,12 +67,16 @@ class LocalStorage:
 
 localstorage = LocalStorage()
 
-session  = None
+session = None
 
 @driver.on_startup
-async def get_session():
+async def init_session():
     global session
     session = aiohttp.ClientSession()
+
+def get_session():
+    global session
+    return session
 
 async def async_download(url, file_path):
     async with session.get(url) as response:
