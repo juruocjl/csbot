@@ -1,4 +1,6 @@
 from nonebot import get_plugin_config
+from nonebot import get_driver
+
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -6,6 +8,7 @@ from .config import Config
 import datetime
 import time
 import sqlite3
+import aiohttp
 
 __plugin_meta__ = PluginMetadata(
     name="utils",
@@ -16,6 +19,7 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+driver = get_driver()
 
 conn = sqlite3.connect("groups.db", autocommit=True)
 
@@ -62,3 +66,23 @@ class LocalStorage:
         return result[0] if result else None
 
 localstorage = LocalStorage()
+
+session  = None
+
+@driver.on_startup
+async def get_session():
+    global session
+    session = aiohttp.ClientSession()
+
+async def async_download(url, file_path):
+    async with session.get(url) as response:
+        if response.status == 200:
+            with open(file_path, "wb") as f:
+                while True:
+                    chunk = await response.content.read(1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            return file_path
+        else:
+            raise Exception(f"下载失败，状态码：{response.status}")

@@ -4,12 +4,11 @@ from nonebot import require
 from nonebot import logger
 
 get_cursor = require("utils").get_cursor
+session = require("utils").session
+async_download = require("utils").async_download
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
-import requests
-import urllib
 from pathlib import Path
-import time
 import asyncio
 
 from .config import Config
@@ -206,9 +205,9 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token":config.cs_wmtoken
         }
-        result = requests.post(url,headers=header,json=payload)
+        async with session.post(url,headers=header,json=payload) as result:
+            data = await result.json()
         await asyncio.sleep(0.2)
-        data = result.json()
         if data["statusCode"] != 0:
             logger.error(f"爬取失败  {mid} {data}")
             raise RuntimeError("爬取失败：" + data.get("errorMessage", "未知错误"))
@@ -223,7 +222,7 @@ class DataManager:
                 (mid, steamid, seasonId, mapName, team, winTeam, score1, score2,
                 pwRating, we, timeStamp, kill, death, assist, duration, mode, pvpScore, pvpStars, pvpScoreChange, pvpMvp,
                 isgroup, greenMatch, entryKill, headShot, headShotRatio,
-                 flashTeammate, flashSuccess,
+                flashTeammate, flashSuccess,
                 twoKill, threeKill, fourKill, fiveKill, vs1, vs2, vs3, vs4, vs5,
                 dmgArmor, dmgHealth, adpr, rws, teamId, throwsCnt, snipeNum, firstDeath
                 ) VALUES
@@ -258,9 +257,10 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token": config.cs_wmtoken
         }
-        result = requests.post(url, headers=header, json=payload)
+        
+        async with session.post(url, headers=header, json=payload) as result:
+            data = await result.json()
         await asyncio.sleep(0.2)
-        data = result.json()
 
         if data["statusCode"] != 0:
             logger.error(f"爬取失败 {mid} {data}")
@@ -339,8 +339,8 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token":config.cs_wmtoken
         }
-        result = requests.post(url,headers=header,json=payload)
-        data = result.json()
+        async with session.post(url,headers=header,json=payload) as result:
+            data = await result.json()
         if data["statusCode"] != 0:
             logger.error(f"爬取失败 {steamid} {data}")
             return (False, "爬取失败：" + data["errorMessage"])
@@ -350,7 +350,7 @@ class DataManager:
         ''', (steamid,))
         result = cursor.fetchone()
         if not result or result[0] != data["data"]["avatar"]:
-            urllib.request.urlretrieve(data["data"]["avatar"], Path(f"./avatar/{steamid}.png"))
+            await async_download(data["data"]["avatar"], Path(f"./avatar/{steamid}.png"))
         LastTime = 0
         if result:
             LastTime = result[1]
@@ -378,9 +378,8 @@ class DataManager:
                         "pvpType": -1,
                         "toSteamId": steamid
                     }
-
-                    result = requests.post(url, json=payload, headers=headers)
-                    ddata = result.json()
+                    async with session.post(url, json=payload, headers=headers) as result:
+                        ddata = await result.json()
                     if ddata["statusCode"] != 0:
                         logger.error(f"爬取失败 {steamid} {SeasonID} {page} {ddata}")
                         raise RuntimeError(ddata["errorMessage"])
@@ -408,8 +407,8 @@ class DataManager:
                 "toSteamId": steamid
             }
 
-            result = requests.post(url, json=payload, headers=headers)
-            ddata = result.json()
+            async with session.post(url, json=payload, headers=headers) as result:
+                ddata = await result.json()
             if ddata["statusCode"] != 0:
                 logger.error(f"gp爬取失败 {steamid}  {data}")
                 raise RuntimeError(ddata["errorMessage"])
