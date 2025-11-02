@@ -69,7 +69,7 @@ class DataManager:
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
             goods_list = goods_list[50:]
-            with get_session().post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.csqaq_api}) as res:
+            async with get_session().post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.csqaq_api}) as res:
                 data = await res.json()
             if data['code'] == 200:
                 for marketHashName, good_info in data['data']['success'].items():

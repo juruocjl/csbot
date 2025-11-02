@@ -450,7 +450,6 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
             await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
-
 async def roll_admin(groupid: str):
     bot = get_bot()
     keyname = f'adminqq{groupid}'
