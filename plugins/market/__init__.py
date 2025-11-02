@@ -30,6 +30,8 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+headers = {'ApiToken': config.csqaq_api, 'Content-Type': 'application/json'}
+
 class DataManager:
     def __init__(self):
         cursor = get_cursor()
@@ -69,9 +71,8 @@ class DataManager:
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
             goods_list = goods_list[50:]
-            async with get_session().post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers={'ApiToken': config.csqaq_api}) as res:
+            async with get_session().post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers=headers) as res:
                 data = await res.json()
-            print(data)
             if data['code'] == 200:
                 for marketHashName, good_info in data['data']['success'].items():
                     cursor.execute(
@@ -134,7 +135,7 @@ async def baojia_function():
 
 @search.handle()
 async def search_function(args: Message = CommandArg()):
-    async with get_session().get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api}) as res:
+    async with get_session().get("https://api.csqaq.com/api/v1/search/suggest", params={"text": args.extract_plain_text()}, headers=headers) as res:
         data = await res.json()
     if data['code'] == 200:
         await search.finish(("搜索结果\n" + "\n".join([f"{item['id']}. {item['value']}" for item in data['data'][:10]])).strip())
@@ -146,7 +147,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
     uid = message.get_user_id()
     res = ""
     try:
-        async with get_session().get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers={'ApiToken': config.csqaq_api}) as res:
+        async with get_session().get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers=headers) as res:
             data = await res.json()
         asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
