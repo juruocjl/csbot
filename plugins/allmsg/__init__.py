@@ -6,6 +6,7 @@ from nonebot import logger
 from nonebot import require
 from nonebot.adapters import Bot
 from nonebot.permission import SUPERUSER
+from nonebot.params import CommandArg
 from nonebot import get_bot
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
@@ -336,11 +337,11 @@ def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
 
 
 @wordcloud.handle()
-async def wordcloud_function(message: GroupMessageEvent):
+async def wordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
-    msg = message.get_message().extract_plain_text().strip()
+    msg = args.extract_plain_text().strip()
     uid = "%"
     for seg in message.get_message():
         if seg.type == "at":
@@ -349,11 +350,11 @@ async def wordcloud_function(message: GroupMessageEvent):
     await wordcloud.finish(MessageSegment.image(image))
 
 @mywordcloud.handle()
-async def wordcloud_function(message: GroupMessageEvent):
+async def wordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
-    msg = message.get_message().extract_plain_text()
+    msg = args.extract_plain_text().strip()
     uid = message.get_user_id()
     image = get_wordcloud(gid, user_id=uid, time_type=msg)
     await mywordcloud.finish(MessageSegment.image(image))
