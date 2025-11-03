@@ -301,13 +301,13 @@ def extra_plain_text(msg):
 valid_time = ["今日", "昨日", "本周", "全部"]
 def get_time_range(time_type):
     if time_type == "今日":
-        return get_today_start_timestamp(), 1e9
+        return get_today_start_timestamp(), 1e10
     if time_type == "昨日":
         return get_today_start_timestamp() - 24 * 3600, get_today_start_timestamp()
     if time_type == "本周":
-        return time.time() - 7 * 24 * 3600, 1e9
+        return time.time() - 7 * 24 * 3600, 1e10
     if time_type == "全部":
-        return 0, 1e9
+        return 0, 1e10
     raise RuntimeError("no time type")
 
 def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
