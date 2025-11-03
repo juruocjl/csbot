@@ -312,7 +312,7 @@ def get_time_range(time_type):
 def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
     if time_type not in valid_time:
         time_type = "全部"
-    msgdict = db.get_all_msg(groud_id, user_id, get_time_range(time_type))
+    msgdict = db.get_all_msg(groud_id, userid=user_id, tmrange=get_time_range(time_type))
     stopwords = {
         "怎么", "感觉", "什么", "真是", "不是", "一个", "可以", "没有", "你们", "但是", "现在", "这个",
     }
