@@ -109,10 +109,10 @@ class DataManager:
         result = cursor.fetchone()
         return result[0] if result else -1
 
-    def get_all_msg(self, groupid, userid = "%", tm = 0):
+    def get_all_msg(self, groupid, userid = "%", tmrange = (0, 1e9)):
         cursor = get_cursor()
-        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and timeStamp >= ?",
-                       (f"group_{groupid}_{userid}", tm, ))
+        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and ? <= timeStamp and timeStamp <= ?",
+                       (f"group_{groupid}_{userid}", tmrange[0], tmrange[1]))
         result = cursor.fetchall()
         msgdict = {}
         for id, _, sid, tm, msg in result:
@@ -297,7 +297,22 @@ def extra_plain_text(msg):
             result += seg[1]
     return result
 
-def get_wordcloud(msgdict):
+valid_time = ["今日", "昨日", "本周", "全部"]
+def get_time_range(time_type):
+    if time_type == "今日":
+        return get_today_start_timestamp(), 1e9
+    if time_type == "昨日":
+        return get_today_start_timestamp() - 24 * 3600, get_today_start_timestamp()
+    if time_type == "本周":
+        return time.time() - 7 * 24 * 3600, 1e9
+    if time_type == "全部":
+        return 0, 1e9
+    raise RuntimeError("no time type")
+
+def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
+    if time_type not in valid_time:
+        time_type = "全部"
+    msgdict = db.get_all_msg(groud_id, user_id, get_time_range(time_type))
     stopwords = {
         "怎么", "感觉", "什么", "真是", "不是", "一个", "可以", "没有", "你们", "但是", "现在", "这个",
     }
@@ -317,23 +332,30 @@ def get_wordcloud(msgdict):
     ).generate(text).to_image().save(buffer, format='PNG') 
     return buffer
 
+
+
 @wordcloud.handle()
 async def wordcloud_function(message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
-    msgdict = db.get_all_msg(sid.split('_')[1])
-    await wordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
+    gid = sid.split('_')[1]
+    msg = message.get_message().extract_plain_text().strip()
+    uid = "%"
+    for seg in message.get_message():
+        if seg.type == "at":
+            uid = seg.data["qq"]
+    image = get_wordcloud(gid, user_id=uid, time_type=msg)
+    await wordcloud.finish(MessageSegment.image(image))
 
 @mywordcloud.handle()
 async def wordcloud_function(message: GroupMessageEvent):
     sid = message.get_session_id()
-    uid = message.get_user_id()
     assert(sid.startswith("group"))
-    for seg in message.get_message():
-        if seg.type == "at":
-            uid = seg.data["qq"]
-    msgdict = db.get_all_msg(sid.split('_')[1], userid=uid)
-    await mywordcloud.finish(MessageSegment.image(get_wordcloud(msgdict)))
+    gid = sid.split('_')[1]
+    msg = message.get_message().extract_plain_text()
+    uid = message.get_user_id()
+    image = get_wordcloud(gid, user_id=uid, time_type=msg)
+    await mywordcloud.finish(MessageSegment.image(image))
 
 @scheduler.scheduled_job("cron", hour="23", minute="50", id="todaywc")
 async def todaywc():
