@@ -110,9 +110,10 @@ class DataManager:
         return result[0] if result else -1
 
     def get_all_msg(self, groupid, userid = "%", tmrange = (0, 1e9)):
+        print(groupid, userid, tmrange)
         cursor = get_cursor()
         cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and ? <= timeStamp and timeStamp <= ?",
-                       (f"group_{groupid}_{userid}", tmrange[0], tmrange[1]))
+                       (f"group_{groupid}_{userid}", int(tmrange[0]), int(tmrange[1])))
         result = cursor.fetchall()
         msgdict = {}
         for id, _, sid, tm, msg in result:
