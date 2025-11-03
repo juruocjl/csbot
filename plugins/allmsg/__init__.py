@@ -362,7 +362,7 @@ async def wordcloud_function(message: GroupMessageEvent, args: Message = Command
 async def todaywc():
     bot = get_bot()
     for group in config.cs_group_list:
-        image = get_wordcloud(db.get_all_msg(group, tm = time.time() - 24 * 3600))
+        image = get_wordcloud(group, time_type="今日")
         await bot.send_group_msg(group_id=group, message=Message([MessageSegment.image(image)]))
 
 @debug_updmsg.handle()
