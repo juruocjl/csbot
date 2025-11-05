@@ -511,7 +511,7 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
 @admincheck.handle()
 async def admincheck_function(notice: NoticeEvent):
     print(notice.get_event_name(), notice.get_event_description())
-    data = json.loads(notice.get_event_description())
+    data = json.loads(notice.get_event_description().replace("'", '"'))
     uid = data['user_id']
     gid = data['group_id']
     duration = data['duration']
