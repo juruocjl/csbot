@@ -418,7 +418,7 @@ async def fudupoint_function(message: GroupMessageEvent):
     else:
         await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
 
-async def addpoint(gid, uid, nowpoint):
+async def addpoint(gid: str, uid: str, nowpoint: int):
     bot = get_bot()
     sid = f"group_{gid}_{uid}"
     if uid == localstorage.get(f'adminqq{gid}') and int(localstorage.get(f'adminqqalive{gid}')):
