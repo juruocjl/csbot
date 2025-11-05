@@ -142,9 +142,7 @@ allmsg = on_message(priority=0, block=False)
 fuducheck = on_message(priority=100, block=True)
 
 def bancheck(event: NoticeEvent):
-    name = event.get_event_name()
-    print(name)
-    return name.startswith("notice.group_ban.")
+    return event.get_event_name().startswith("notice.group_ban.")
 
 admincheck = on_notice(bancheck, priority=100, block=False)
 
@@ -387,7 +385,7 @@ async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
 async def fuduhelp_function():
     await fuduhelp.finish("""禁言概率公式：max(0.02,tanh((本句点数*累计点数-50)/500))
 管理员被撤销概率公式：max(0,tanh((本句点数*累计点数/100-50)/500))
-第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为60""")
+第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为100""")
 
 def sigmoid_step(x, admin = False):
     if admin:
@@ -416,7 +414,7 @@ async def fudupoint_function(message: GroupMessageEvent):
     prob5 = sigmoid_step((point + 5) * 5, admin=admin)
     tm = db.get_zero_point(f"group_{gid}_{uid}") + 1
     if admin:
-        await fudupoint.finish(f"[管理员]当前点数：{point}  下一次被撤下管理\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
+        await fudupoint.finish(f"[管理员]当前点数：{point}  下一次被下放\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
     else:
         await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
 
@@ -429,7 +427,8 @@ async def addpoint(gid, uid, nowpoint):
         if random.random() < prob:
             localstorage.set(f'adminqqalive{gid}', '0')
             await bot.set_group_admin(group_id=gid, user_id=uid, enable=False)
-            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被撤下管理员"]))
+            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被下放"]))
+            return True
     else:
         db.add_point(sid, nowpoint)
         prob = sigmoid_step(nowpoint * db.get_point(sid), admin=False)
@@ -438,6 +437,8 @@ async def addpoint(gid, uid, nowpoint):
             tm = db.get_zero_point(sid)
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
             await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
+            return True
+    return False
 
 lastmsg = {}
 
@@ -509,13 +510,19 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
         addpoint(gid, uid, nowpoint)
 
 @admincheck.handle()
-async def admincheck_function(notice: NoticeEvent):
+async def admincheck_function(bot: Bot, notice: NoticeEvent):
     print(notice.get_event_name(), notice.get_event_description())
     data = json.loads(notice.get_event_description().replace("'", '"'))
     uid = data['user_id']
     gid = data['group_id']
+    o_uid = data['operator_id']
     duration = data['duration']
     print(uid, gid, duration, data['sub_type'])
+    if duration:
+        if addpoint(gid, o_uid, duration):
+            await bot.set_group_ban(group_id=gid, user_id=uid, duration=0)
+    else:
+        addpoint(gid, o_uid, 100)
 
 
 async def roll_admin(groupid: str):
