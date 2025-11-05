@@ -27,6 +27,7 @@ from meme_generator import Image, get_meme
 import jieba
 from wordcloud import WordCloud
 from io import BytesIO
+import json
 
 __plugin_meta__ = PluginMetadata(
     name="allmsg",
@@ -140,7 +141,12 @@ allmsg = on_message(priority=0, block=False)
 
 fuducheck = on_message(priority=100, block=True)
 
-admincheck = on_notice(priority=100, block=False)
+def bancheck(event: NoticeEvent):
+    name = event.get_event_name()
+    print(name)
+    return name.startswith("notice.group_ban.")
+
+admincheck = on_notice(bancheck, priority=100, block=False)
 
 debug_updmsg = on_command("updmsg", priority=10, block=True, permission=SUPERUSER)
 
@@ -433,7 +439,6 @@ async def addpoint(gid, uid, nowpoint):
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
             await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
 
-
 lastmsg = {}
 
 def checksb(message: Message):
@@ -504,8 +509,14 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
         addpoint(gid, uid, nowpoint)
 
 @admincheck.handle()
-async def admincheck_function(notice: Event):
+async def admincheck_function(notice: NoticeEvent):
     print(notice.get_event_name(), notice.get_event_description())
+    data = json.loads(notice.get_event_description())
+    uid = data['user_id']
+    gid = data['group_id']
+    duration = data['duration']
+    print(uid, gid, duration, data['sub_type'])
+
 
 async def roll_admin(groupid: str):
     bot = get_bot()
