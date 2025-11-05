@@ -511,13 +511,14 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
 
 @admincheck.handle()
 async def admincheck_function(bot: Bot, notice: NoticeEvent):
-    print(notice.get_event_name(), notice.get_event_description())
+    logger.info(notice.get_event_description())
+    # print(notice.get_event_name(), notice.get_event_description())
     data = json.loads(notice.get_event_description().replace("'", '"'))
     uid = data['user_id']
     gid = data['group_id']
     o_uid = data['operator_id']
     duration = data['duration']
-    print(uid, gid, duration, data['sub_type'])
+    # print(uid, gid, duration, data['sub_type'])
     if duration:
         if await addpoint(gid, o_uid, duration):
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=0)
