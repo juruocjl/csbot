@@ -1,7 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
-from nonebot import on_command, on_message
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment, NoticeEvent
+from nonebot import on_command, on_message, on_notice
 from nonebot import logger
 from nonebot import require
 from nonebot.adapters import Bot
@@ -132,11 +132,15 @@ db = DataManager()
 
 fudupoint = on_command("复读点数", priority=10, block=True)
 
+fuduhelp = on_command("复读帮助", priority=10, block=True)
+
 roll = on_command("roll", priority=10, block=True, permission=SUPERUSER)
 
 allmsg = on_message(priority=0, block=False)
 
 fuducheck = on_message(priority=100, block=True)
+
+admincheck = on_notice(priority=100, block=False)
 
 debug_updmsg = on_command("updmsg", priority=10, block=True, permission=SUPERUSER)
 
@@ -333,8 +337,6 @@ def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
     ).generate(text).to_image().save(buffer, format='PNG') 
     return buffer
 
-
-
 @wordcloud.handle()
 async def wordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
@@ -375,9 +377,19 @@ async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
         if msg['user_id'] != myid:
             insert_msg(msg)
 
-def sigmoid_step(x):
-    t = (x - 50) / 500.0
-    return max(0.02, math.tanh(t))
+@fuduhelp.handle()
+async def fuduhelp_function():
+    await fuduhelp.finish("""禁言概率公式：max(0.02,tanh((本句点数*累计点数-50)/500))
+管理员被撤销概率公式：max(0,tanh((本句点数*累计点数/100-50)/500))
+第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为60""")
+
+def sigmoid_step(x, admin = False):
+    if admin:
+        t = (x / 100 - 50) / 500.0
+        return max(0, math.tanh(t))
+    else:
+        t = (x - 50) / 500.0
+        return max(0.02, math.tanh(t))
 
 @fudupoint.handle()
 async def fudupoint_function(message: GroupMessageEvent):
@@ -388,14 +400,39 @@ async def fudupoint_function(message: GroupMessageEvent):
     for seg in message.get_message():
         if seg.type == "at":
             uid = seg.data["qq"]
+    admin = False
+    if uid == localstorage.get(f'adminqq{gid}') and int(localstorage.get(f'adminqqalive{gid}')):
+        admin = True
     point = db.get_point(f"group_{gid}_{uid}")
-    admincoef = 2 if uid == localstorage.get(f'adminqq{gid}') else 1
-    prob1 = sigmoid_step(admincoef * (point + 1))
-    prob2 = sigmoid_step(admincoef * (point + 2) * 2)
-    prob3 = sigmoid_step(admincoef * (point + 3) * 3)
-    prob5 = sigmoid_step(admincoef * (point + 5) * 5)
+    prob1 = sigmoid_step((point + 1), admin=admin)
+    prob2 = sigmoid_step((point + 2) * 2, admin=admin)
+    prob3 = sigmoid_step((point + 3) * 3, admin=admin)
+    prob5 = sigmoid_step((point + 5) * 5, admin=admin)
     tm = db.get_zero_point(f"group_{gid}_{uid}") + 1
-    await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
+    if admin:
+        await fudupoint.finish(f"[管理员]当前点数：{point}  下一次被撤下管理\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
+    else:
+        await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
+
+async def addpoint(gid, uid, nowpoint):
+    bot = get_bot()
+    sid = f"group_{gid}_{uid}"
+    if uid == localstorage.get(f'adminqq{gid}') and int(localstorage.get(f'adminqqalive{gid}')):
+        db.add_point(sid, nowpoint)
+        prob = sigmoid_step(nowpoint * db.get_point(sid), admin=True)
+        if random.random() < prob:
+            localstorage.set(f'adminqqalive{gid}', '0')
+            await bot.set_group_admin(group_id=gid, user_id=uid, enable=False)
+            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被撤下管理员"]))
+    else:
+        db.add_point(sid, nowpoint)
+        prob = sigmoid_step(nowpoint * db.get_point(sid), admin=False)
+        if random.random() < prob:
+            db.add_point(sid, 0)
+            tm = db.get_zero_point(sid)
+            await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
+            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
+
 
 lastmsg = {}
 
@@ -464,20 +501,16 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
                 await bot.set_group_ban(group_id=gid, user_id=whosb, duration=60 * tm)
     lastmsg[gid] = msglst
     if nowpoint > 0:
-        db.add_point(sid, nowpoint)
-        admincoef = 2 if uid == localstorage.get(f'adminqq{gid}') else 1
-        prob = sigmoid_step(admincoef * nowpoint * db.get_point(sid))
-        if random.random() < prob:
-            db.add_point(sid, 0)
-            tm = db.get_zero_point(sid)
-            await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
-            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
+        addpoint(gid, uid, nowpoint)
+
+@admincheck.handle()
+async def admincheck_function(notice: NoticeEvent):
+    print(notice.get_event_name(), notice.get_event_description())
 
 async def roll_admin(groupid: str):
     bot = get_bot()
-    keyname = f'adminqq{groupid}'
-    if localstorage.get(keyname):
-        await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(keyname), enable=False)
+    if localstorage.get(f'adminqq{groupid}') and int(localstorage.get(f'adminqqalive{groupid}')):
+        await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(f'adminqq{groupid}'), enable=False)
     users = []
     weights = []
     sid_list = db.get_active_user(groupid)
@@ -490,15 +523,15 @@ async def roll_admin(groupid: str):
     newadmin, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
     await bot.send_group_msg(group_id=groupid, message=Message(['恭喜', MessageSegment.at(newadmin), f" 以{point}/{totsum}选为管理员"]))
-    localstorage.set(keyname, newadmin)
-    await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(keyname), enable=True)
+    localstorage.set(f'adminqq{groupid}', newadmin)
+    localstorage.set(f'adminqqalive{groupid}', '1')
+    await bot.set_group_admin(group_id=groupid, user_id=newadmin, enable=True)
 
 @roll.handle()
 async def roll_function(message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     await roll_admin(sid.split('_')[1])
-    
 
 @scheduler.scheduled_job("cron", hour="23", minute="55", id="roll")
 async def autoroll():
