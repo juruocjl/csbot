@@ -1,6 +1,6 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment, NoticeEvent
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment, NoticeEvent, Event
 from nonebot import on_command, on_message, on_notice
 from nonebot import logger
 from nonebot import require
@@ -504,7 +504,7 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
         addpoint(gid, uid, nowpoint)
 
 @admincheck.handle()
-async def admincheck_function(notice: NoticeEvent):
+async def admincheck_function(notice: Event):
     print(notice.get_event_name(), notice.get_event_description())
 
 async def roll_admin(groupid: str):
