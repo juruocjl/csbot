@@ -519,10 +519,10 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
     duration = data['duration']
     print(uid, gid, duration, data['sub_type'])
     if duration:
-        if addpoint(gid, o_uid, duration):
+        if await addpoint(gid, o_uid, duration):
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=0)
     else:
-        addpoint(gid, o_uid, 100)
+        await addpoint(gid, o_uid, 100)
 
 
 async def roll_admin(groupid: str):
