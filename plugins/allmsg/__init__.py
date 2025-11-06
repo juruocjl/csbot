@@ -459,7 +459,7 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
     uid = message.get_user_id()
     sid = message.get_session_id()
     assert(sid.startswith("group"))
-    msg = message.get_message()
+    msg = message.original_message
     mhs = await process_message_segments(msg)
     nowpoint = 0
     logger.info(f"{uid} send {msg} with {mhs}")
