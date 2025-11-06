@@ -385,7 +385,7 @@ async def qwqwqwwqq(bot: Bot, message: GroupMessageEvent):
 async def fuduhelp_function():
     await fuduhelp.finish("""禁言概率公式：max(0.02,tanh((本句点数*累计点数-50)/500))
 管理员被撤销概率公式：max(0,tanh((本句点数*累计点数/100-50)/500))
-第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为50""")
+复读自己/使用poke5，第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为50""")
 
 def sigmoid_step(x, admin = False):
     if admin:

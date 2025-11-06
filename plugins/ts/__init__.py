@@ -239,7 +239,9 @@ async def tspoke_function(message: GroupMessageEvent, arg: Message = CommandArg(
         ts3conn.exec_("use", sid=SID)
         for client in ts3conn.exec_("clientlist"):
             if nickname == client["client_nickname"]:
-                ts3conn.exec_("clientpoke", clid=client["clid"], msg=f"{uid}Poked you!")
+                ts3conn.exec_("clientpoke", clid=client["clid"], msg=f"{uid} Poked you!")
                 if not await addpoint(gid, uid, 5):
                     await tspoke.finish(f"Poked {nickname}!")
+                else:
+                    return
         await tspoke.finish(f"User {nickname} not found.")    
