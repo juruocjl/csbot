@@ -507,7 +507,7 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
                 await bot.set_group_ban(group_id=gid, user_id=whosb, duration=60 * tm)
     lastmsg[gid] = msglst
     if nowpoint > 0:
-        addpoint(gid, uid, nowpoint)
+        await addpoint(gid, uid, nowpoint)
 
 @admincheck.handle()
 async def admincheck_function(bot: Bot, notice: NoticeEvent):
@@ -528,7 +528,9 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
 
 async def roll_admin(groupid: str):
     bot = get_bot()
+    adminuid = None
     if localstorage.get(f'adminqq{groupid}') and int(localstorage.get(f'adminqqalive{groupid}')):
+        adminuid = int(localstorage.get(f'adminqq{groupid}'))
         await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(f'adminqq{groupid}'), enable=False)
     users = []
     weights = []
@@ -536,8 +538,9 @@ async def roll_admin(groupid: str):
     for sid in sid_list:
         point = db.get_point(sid) / (db.get_zero_point(sid) + 1) + 1
         userid = int(sid.split('_')[2])
-        users.append((userid, point))
-        weights.append(point)
+        if userid != adminuid:
+            users.append((userid, point))
+            weights.append(point)
     print(users)
     newadmin, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
