@@ -1,6 +1,11 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot import on_command
+from nonebot.params import CommandArg
+from nonebot import require
+
+addpoint = require("allmsg").addpoint
 
 from .config import Config
 
@@ -205,6 +210,8 @@ class ChannelTreeNode(object):
 
 getts = on_command("getts", priority=10, block=True)
 
+tspoke = on_command("poke", priority=10, block=True)
+
 @getts.handle()
 async def getts_function():
     """
@@ -214,3 +221,25 @@ async def getts_function():
         ts3conn.exec_("use", sid=SID)
         tree = ChannelTreeNode.build_tree(ts3conn, SID)
         await getts.finish(tree.print())
+    
+
+@tspoke.handle()
+async def tspoke_function(message: GroupMessageEvent, arg: Message = CommandArg()):
+    """
+    Pokes a user with a given nickname.
+
+    Usage: poke <nickname>
+    """
+    nickname = arg.extract_plain_text().strip()
+    if not nickname:
+        await tspoke.finish("Please provide a nickname to poke.")
+    uid = message.get_user_id()
+    gid = message.get_session_id().split('_')[1]
+    with ts3.query.TS3ServerConnection(URI) as ts3conn:
+        ts3conn.exec_("use", sid=SID)
+        for client in ts3conn.exec_("clientlist"):
+            if nickname == client["client_nickname"]:
+                ts3conn.exec_("clientpoke", clid=client["clid"], msg=f"{uid}Poked you!")
+                if not await addpoint(uid, gid, 5):
+                    await tspoke.finish(f"Poked {nickname}!")
+        await tspoke.finish(f"User {nickname} not found.")    
