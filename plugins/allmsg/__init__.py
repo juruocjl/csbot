@@ -513,11 +513,14 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
 async def admincheck_function(bot: Bot, notice: NoticeEvent):
     logger.info(notice.get_event_description())
     # print(notice.get_event_name(), notice.get_event_description())
+    myid = str(bot.get_login_info()['user_id'])
     data = json.loads(notice.get_event_description().replace("'", '"'))
     uid = str(data['user_id'])
     gid = str(data['group_id'])
     o_uid = str(data['operator_id'])
     duration = data['duration']
+    if myid == o_uid:
+        return
     # print(uid, gid, duration, data['sub_type'])
     if duration:
         if await addpoint(gid, o_uid, duration):
