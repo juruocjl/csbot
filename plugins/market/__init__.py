@@ -12,6 +12,7 @@ from typing import List
 import json
 import time
 import asyncio
+import os
 
 from .config import Config
 
@@ -29,6 +30,11 @@ __plugin_meta__ = PluginMetadata(
 )
 
 config = get_plugin_config(Config)
+
+
+if not os.path.exists("goodsimg"):
+    os.makedirs("goodsimg", exist_ok=True)
+
 
 headers = {'ApiToken': config.csqaq_api, 'Content-Type': 'application/json'}
 
