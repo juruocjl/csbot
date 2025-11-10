@@ -15,7 +15,7 @@ def getallgoodsid():
 def download_img(id: str):
     resp = requests.get(f"https://api.csqaq.com/api/v1/info/good?id={id}", headers=headers)
     imgurl = resp.json()['data']['goods_info']['img']
-    hashname = resp.json()['data']['goods_info']['marketHashName']
+    hashname = resp.json()['data']['goods_info']['market_hash_name']
     imgpath = Path("goodsimg") / f"{hashname}.jpg"
     if imgpath.exists():
         return
