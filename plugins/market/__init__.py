@@ -156,7 +156,7 @@ async def get_baojia_image(title: str = "当前底价"):
     data = sorted(data, key = lambda x: x[2])
     for item in data:
         temp_html = market_content[1]
-        temp_html.replace("_IMG_", path_to_file_url(Path("goodsimg") / f"{item[0]}.jpg"))
+        temp_html = temp_html.replace("_IMG_", path_to_file_url(Path("goodsimg") / f"{item[0]}.jpg"))
         temp_html = temp_html.replace("_NAME_", item[1])
         temp_html = temp_html.replace("_PRICE_", str(item[2]/100))
         if item[3] != None:
@@ -200,7 +200,7 @@ async def get_baojia_image(title: str = "当前底价"):
         temp_file.write(html)
         temp_file.close()
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 120 + len(data) * 60)
-        # os.remove(temp_file.name)
+        os.remove(temp_file.name)
     return img
 
 @baojia.handle()
