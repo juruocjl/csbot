@@ -2,7 +2,7 @@ from pathlib import Path
 import requests
 import sqlite3
 
-headers = {'ApiToken': input("Please input api:"), 'Content-Type': 'application/json'}
+headers = {'ApiToken': input("Please input api: "), 'Content-Type': 'application/json'}
 
 db = sqlite3.connect("groups.db")
 
@@ -14,8 +14,8 @@ def getallgoodsid():
 
 def download_img(id: str):
     resp = requests.get(f"https://api.csqaq.com/api/v1/info/good?id={id}", headers=headers)
-    imgurl = resp.json()['data']['good_info']['img']
-    hashname = resp.json()['data']['good_info']['marketHashName']
+    imgurl = resp.json()['data']['goods_info']['img']
+    hashname = resp.json()['data']['goods_info']['marketHashName']
     imgpath = Path("goodsimg") / f"{hashname}.jpg"
     if imgpath.exists():
         return
