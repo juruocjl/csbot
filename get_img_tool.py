@@ -14,17 +14,17 @@ def getallgoodsid():
 
 def download_img(id: str):
     resp = requests.get(f"https://api.csqaq.com/api/v1/info/good?id={id}", headers=headers)
-    imgurl = resp.json()['data']['goods_info']['img']
-    imgpath = Path("goodsimg") / f"{id}.jpg"
-    if imgpath.exists():
-        return
-    imgdata = requests.get(imgurl).content
-    with open(imgpath, "wb") as f:
-        f.write(imgdata)
+    try:
+        imgurl = resp.json()['data']['goods_info']['img']
+        imgpath = Path("goodsimg") / f"{id}.jpg"
+        if imgpath.exists():
+            return
+        imgdata = requests.get(imgurl).content
+        with open(imgpath, "wb") as f:
+            f.write(imgdata)
+    except:
+        print(f"Failed to download image for id {id}")
+        print(resp.text)
 
 for id in getallgoodsid():
-    try:
-        download_img(str(id))
-        print(f"Downloaded image for goodId {id}")
-    except Exception as e:
-        print(f"Failed to download image for goodId {id}: {e}")
+    download_img(str(id))
