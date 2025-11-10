@@ -83,10 +83,8 @@ class DataManager:
                         round(good_info['steamSellPrice'] * 100), good_info['steamSellNum']
                         )
                     )
-                    
             else:
                 logger.error("update_goods "+data['msg'])
-            await asyncio.sleep(1.1)
 
     def getallgoods(self) -> List[str]:
         cursor = get_cursor()
@@ -149,7 +147,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
     try:
         async with get_session().get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers=headers) as res:
             data = await res.json()
-        asyncio.sleep(1.1)
+        await asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
         db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
         res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
