@@ -1,6 +1,7 @@
 from pathlib import Path
 import requests
 import sqlite3
+import time
 
 headers = {'ApiToken': input("Please input api: "), 'Content-Type': 'application/json'}
 
@@ -28,3 +29,4 @@ def download_img(id: str):
 
 for id in getallgoodsid():
     download_img(str(id))
+    time.sleep(1.2)
