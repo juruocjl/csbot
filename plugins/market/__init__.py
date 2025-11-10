@@ -13,6 +13,7 @@ import json
 import time
 import asyncio
 import os
+from pathlib import Path
 
 from .config import Config
 
@@ -20,7 +21,7 @@ scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 get_cursor = require("utils").get_cursor
 get_session = require("utils").get_session
-
+async_download = require("utils").async_download
 
 __plugin_meta__ = PluginMetadata(
     name="market",
@@ -155,6 +156,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
             data = await res.json()
         await asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
+        await async_download(data['data']['goods_info']['img'], Path("goodsimg") / f"{data['data']['goods_info']['id']}.jpg")
         db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
         res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
     except Exception as e:
