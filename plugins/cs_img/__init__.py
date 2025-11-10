@@ -3,11 +3,12 @@ from nonebot.plugin import PluginMetadata
 from nonebot import require
 
 output = require("utils").output
+path_to_file_url = require("utils").path_to_file_url
+screenshot_html_to_png = require("utils").screenshot_html_to_png
+
 
 import os
 from pathlib import Path
-from pyppeteer import launch
-import asyncio
 import tempfile
 from io import BytesIO
 from unicodedata import normalize
@@ -24,8 +25,6 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-if not os.path.exists("temp"):
-    os.makedirs("temp", exist_ok=True)
 
 with open(Path("assets") / "data.html", 'r', encoding='utf-8') as file:
     data_content = file.read()
@@ -37,22 +36,7 @@ with open(Path("assets") / "matches.html", 'r', encoding='utf-8') as file:
     matches_content = file.read().split("<!--SPLIT--->")
 
 
-def path_to_file_url(path):
-    absolute_path = os.path.abspath(path)
-    
-    if os.name == 'nt':
-        absolute_path = '/' + absolute_path.replace('\\', '/')
-    return 'file://' + absolute_path
 
-async def screenshot_html_to_png(url, width, height):
-    browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-    page = await browser.newPage()
-    await page.setViewport({'width': width, 'height': height})
-    await page.goto(url)
-    await asyncio.sleep(1)
-    image = await page.screenshot()
-    await browser.close()
-    return image
 
 def get_elo_info(pvpScore, seasonId = "S21"):
     if int(seasonId[1:]) >= 21:

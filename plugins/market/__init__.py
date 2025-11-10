@@ -1,6 +1,6 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.permission import SUPERUSER
 from nonebot.params import CommandArg
 from nonebot import on_command
@@ -14,6 +14,7 @@ import time
 import asyncio
 import os
 from pathlib import Path
+import tempfile
 
 from .config import Config
 
@@ -22,6 +23,8 @@ scheduler = require("nonebot_plugin_apscheduler").scheduler
 get_cursor = require("utils").get_cursor
 get_session = require("utils").get_session
 async_download = require("utils").async_download
+path_to_file_url = require("utils").path_to_file_url
+screenshot_html_to_png = require("utils").screenshot_html_to_png
 
 __plugin_meta__ = PluginMetadata(
     name="market",
@@ -119,6 +122,9 @@ addgoods = on_command("加仓", priority=10, block=True)
 
 updallgoods = on_command("更新饰品", priority=10, block=True, permission=SUPERUSER)
 
+with open(Path("assets") / "market.html", 'r', encoding='utf-8') as file:
+    market_content = file.read().split("<!--SPLIT--->")
+
 def get_baojia(title: str = "当前底价"):
     allgoods = db.getallgoods()
     logger.info(allgoods)
@@ -134,9 +140,73 @@ def get_baojia(title: str = "当前底价"):
     data = sorted(data, key = lambda x: x[1])
     return (title + "\n" + "\n".join([a[0] + "\n> " + str(a[1]/100) + "   Δ1d=" + a[2] + "   Δ7d=" + a[3] for a in data])).strip()
 
+async def get_baojia_image(title: str = "当前底价"):
+    allgoods = db.getallgoods()
+    logger.info(allgoods)
+    data = []
+    html = market_content[0].replace("_title_", title)
+    for goods in allgoods:
+        info = db.getgoodsinfo(goods)
+        info1d = db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
+        info7d = db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
+        price1d = info1d[6] if info[1] - info1d[1] >= 20 * 3600 else None
+        price7d = info7d[6] if info[1] - info7d[1] >= 6 * 24 * 3600 else None
+        
+        data.append((info[2], info[3], info[6], price1d, price7d))
+    data = sorted(data, key = lambda x: x[2])
+    for item in data:
+        temp_html = market_content[1]
+        temp_html.replace("_IMG_", path_to_file_url(Path("goodsimg") / f"{item[0]}.jpg"))
+        temp_html = temp_html.replace("_NAME_", item[1])
+        temp_html = temp_html.replace("_PRICE_", str(item[2]/100))
+        if item[3] != None:
+            delta1d = item[2] - item[3]
+            if delta1d > 0:
+                temp_html = temp_html.replace("_1DC_", "red")
+            elif delta1d < 0:
+                temp_html = temp_html.replace("_1DC_", "green")
+            else:
+                temp_html = temp_html.replace("_1DC_", "black")
+            temp_html = temp_html.replace("_1D_", f"{delta1d/100}")
+            if item[3] != 0:
+                temp_html = temp_html.replace("_1DP_", f"{delta1d / item[3] * 100:.1f}%")
+            else:
+                temp_html = temp_html.replace("_1DP_", f"Nan")
+        else:
+            temp_html = temp_html.replace("_1DC_", "black")
+            temp_html = temp_html.replace("_1D_", "无数据")
+            temp_html = temp_html.replace("_1DP_", "无数据")
+
+        if item[4] != None:
+            delta7d = item[2] - item[4]
+            if delta7d > 0:
+                temp_html = temp_html.replace("_7DC_", "red")
+            elif delta7d < 0:
+                temp_html = temp_html.replace("_7DC_", "green")
+            else:
+                temp_html = temp_html.replace("_7DC_", "black")
+            temp_html = temp_html.replace("_7D_", f"{delta7d/100}")
+            if item[4] != 0:
+                temp_html = temp_html.replace("_7DP_", f"{delta7d / item[4] * 100:.1f}%")
+            else:
+                temp_html = temp_html.replace("_7DP_", f"Nan")
+        else:
+            temp_html = temp_html.replace("_7DC_", "black")
+            temp_html = temp_html.replace("_7D_", "无数据")
+            temp_html = temp_html.replace("_7DP_", "无数据")
+        html += temp_html
+    html += market_content[2]
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+        temp_file.write(html)
+        temp_file.close()
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 100 + len(data) * 60)
+        os.remove(temp_file.name)
+    return img
+
 @baojia.handle()
 async def baojia_function():
-    await baojia.finish(get_baojia())
+    # await baojia.finish(get_baojia())
+    await baojia.finish(MessageSegment.image(await get_baojia_image()))
 
 @search.handle()
 async def search_function(args: Message = CommandArg()):

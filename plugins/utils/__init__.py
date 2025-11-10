@@ -9,6 +9,10 @@ import datetime
 import time
 import sqlite3
 import aiohttp
+import os
+from pyppeteer import launch
+import asyncio
+
 
 __plugin_meta__ = PluginMetadata(
     name="utils",
@@ -22,6 +26,9 @@ config = get_plugin_config(Config)
 driver = get_driver()
 
 conn = sqlite3.connect("groups.db", autocommit=True)
+
+if not os.path.exists("temp"):
+    os.makedirs("temp", exist_ok=True)
 
 def get_cursor():
     return conn.cursor()
@@ -90,3 +97,17 @@ async def async_download(url, file_path):
             return file_path
         else:
             raise Exception(f"下载失败，状态码：{response.status}")
+        
+def path_to_file_url(path):
+    absolute_path = os.path.abspath(path)
+    return 'file://' + absolute_path
+
+async def screenshot_html_to_png(url, width, height):
+    browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+    page = await browser.newPage()
+    await page.setViewport({'width': width, 'height': height})
+    await page.goto(url)
+    await asyncio.sleep(1)
+    image = await page.screenshot()
+    await browser.close()
+    return image
