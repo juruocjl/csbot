@@ -144,7 +144,7 @@ async def get_baojia_image(title: str = "当前底价"):
     allgoods = db.getallgoods()
     logger.info(allgoods)
     data = []
-    html = market_content[0].replace("_title_", title)
+    html = market_content[0].replace("_TITLE_", title)
     for goods in allgoods:
         info = db.getgoodsinfo(goods)
         info1d = db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
@@ -199,8 +199,8 @@ async def get_baojia_image(title: str = "当前底价"):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
         temp_file.write(html)
         temp_file.close()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 100 + len(data) * 60)
-        os.remove(temp_file.name)
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 120 + len(data) * 60)
+        # os.remove(temp_file.name)
     return img
 
 @baojia.handle()
