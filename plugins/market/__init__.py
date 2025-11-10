@@ -245,7 +245,7 @@ async def send_baojia():
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message=get_baojia(title = "10点自动更新")
+            message=MessageSegment.image(await get_baojia_image(title="10点自动更新"))
         )
 
 @updallgoods.handle()
