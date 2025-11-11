@@ -185,7 +185,7 @@ async def get_baojia_image(title: str = "当前底价"):
         price1d = price1d[3] if price[1] - price1d[1] >= 20 * 3600 else None
         price7d = price7d[3] if price[1] - price7d[1] >= 6 * 24 * 3600 else None
         
-        data.append((id, info[1], price[6], price1d, price7d))
+        data.append((id, info[1], price[3], price1d, price7d))
     data = sorted(data, key = lambda x: x[2])
     for item in data:
         temp_html = market_content[1]
@@ -278,7 +278,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
                         int(goodid),
                         ddata['timestamp'][i],
                         plat,
-                        ddata['main_data'][i],
+                        round(100 * ddata['main_data'][i]),
                         ddata['num_data'][i]
                     )
             await async_download(data['data']['goods_info']['img'], Path("goodsimg") / f"{data['data']['goods_info']['id']}.jpg")
