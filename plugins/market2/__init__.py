@@ -270,6 +270,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
             )
             for plat in range(1, 4):
                 async with get_session().post("https://api.csqaq.com/api/v1/info/chart", data={"good_id": goodid, "key": "sell_price","platform": plat,"period": "30","style": "all_style"}, headers=headers) as res:
+                    print(await res.text())
                     resjson = await res.json()
                     if 'data' not in resjson:
                         raise Exception("获取价格数据失败 "+resjson['msg'])
