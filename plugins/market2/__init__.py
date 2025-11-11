@@ -269,7 +269,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
                 data['data']['goods_info']['exterior_localized_name']
             )
             for plat in range(1, 4):
-                async with get_session().post("https://api.csqaq.com/api/v1/info/chart", params={"good_id": goodid, "key": "sell_price","platform": plat,"period": "30",}, headers=headers) as res:
+                async with get_session().post("https://api.csqaq.com/api/v1/info/chart", data={"good_id": goodid, "key": "sell_price","platform": plat,"period": "30",}, headers=headers) as res:
                     ddata = (await res.json())['data']
                 await asyncio.sleep(1.1)
                 print(ddata)
