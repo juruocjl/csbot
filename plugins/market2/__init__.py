@@ -269,12 +269,8 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
                 data['data']['goods_info']['exterior_localized_name']
             )
             for plat in range(1, 4):
-                async with get_session().post("https://api.csqaq.com/api/v1/info/chart", data={"good_id": goodid, "key": "sell_price","platform": plat,"period": "30","style": "all_style"}, headers=headers) as res:
-                    print(await res.text())
-                    resjson = await res.json()
-                    if 'data' not in resjson:
-                        raise Exception("获取价格数据失败 "+resjson['msg'])
-                    ddata = resjson['data']
+                async with get_session().post("https://api.csqaq.com/api/v1/info/chart", data=json.dumps({"good_id": goodid, "key": "sell_price","platform": plat,"period": "30","style": "all_style"}), headers=headers) as res:
+                    ddata = (await res.json())['data']
                 await asyncio.sleep(1.1)
                 print(ddata)
                 for i in range(len(ddata['timestamp'])):
