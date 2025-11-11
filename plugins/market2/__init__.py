@@ -123,21 +123,21 @@ class DataManager:
                         good_info['goodId'],
                         timeStamp,
                         1,
-                        good_info['buffSellPrice'],
+                        round(good_info['buffSellPrice'] * 100),
                         good_info['buffSellNum']
                     )
                     self.ins_good_price(
                         good_info['goodId'],
                         timeStamp,
                         2,
-                        good_info['yyypSellPrice'],
+                        round(good_info['yyypSellPrice'] * 100),
                         good_info['yyypSellNum']
                     )
                     self.ins_good_price(
                         good_info['goodId'],
                         timeStamp,
                         3,
-                        good_info['steamSellPrice'],
+                        round(good_info['steamSellPrice'] * 100),
                         good_info['steamSellNum']
                     )
 
