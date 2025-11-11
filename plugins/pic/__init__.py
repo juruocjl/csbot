@@ -3,7 +3,7 @@ from nonebot.plugin import PluginMetadata
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.params import Arg
-from nonebot import on_command
+from nonebot import on_command, on_message
 from nonebot import require
 from nonebot import logger
 
@@ -19,6 +19,7 @@ import random
 import uuid
 import asyncio
 import ast
+from meme_generator import Image, get_meme
 
 __plugin_meta__ = PluginMetadata(
     name="pic",
@@ -37,6 +38,8 @@ addpic = on_command("addpic", priority=10, block=True)
 getmgz = on_command("getmgz", priority=10, block=True)
 
 addmgz = on_command("addmgz", priority=10, block=True)
+
+checklp = on_message(priority=0, block=False)
 
 def get_file_hash(file_path, chunk_size=8192, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -140,3 +143,25 @@ async def addmgz_got_imgs(imgs: Message = Arg()):
 def get_pic_status():
     return "pic {}, mgz {}".format(len(Pic1), len(Pic2))
 
+@checklp.handle()
+async def checklp_function(message: MessageEvent):
+    global lastpic
+    msg = message.get_message()
+    text = msg.extract_plain_text().lower().strip()
+    
+    if text == "wlp" and lastpic:
+        meme = get_meme("my_wife")
+        with open(lastpic, "rb") as f:
+            data = f.read()
+        result = meme.generate([Image("test", data)], [], {})
+        lastpic = None
+        if isinstance(result, bytes):
+            await checklp.send(MessageSegment.image(result))
+    if text == "nlg" and lastpic:
+        meme = get_meme("dog_dislike")
+        with open(lastpic, "rb") as f:
+            data = f.read()
+        result = meme.generate([Image("test", data)], [], {})
+        lastpic = None
+        if isinstance(result, bytes):
+            await checklp.send(MessageSegment.image(result))

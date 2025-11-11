@@ -23,7 +23,6 @@ import math
 import hashlib
 from pathlib import Path
 import random
-from meme_generator import Image, get_meme
 import jieba
 from wordcloud import WordCloud
 from io import BytesIO
@@ -455,7 +454,6 @@ def checksb(message: Message):
 
 @fuducheck.handle()
 async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
-    global lastpic
     uid = message.get_user_id()
     sid = message.get_session_id()
     assert(sid.startswith("group"))
@@ -465,22 +463,6 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
     logger.info(f"{uid} send {msg} with {mhs}")
     gid = sid.split('_')[1]
     text = msg.extract_plain_text().lower().strip()
-    if text == "wlp" and lastpic:
-        meme = get_meme("my_wife")
-        with open(lastpic, "rb") as f:
-            data = f.read()
-        result = meme.generate([Image("test", data)], [], {})
-        lastpic = None
-        if isinstance(result, bytes):
-            await fuducheck.send(MessageSegment.image(result))
-    if text == "nlg" and lastpic:
-        meme = get_meme("dog_dislike")
-        with open(lastpic, "rb") as f:
-            data = f.read()
-        result = meme.generate([Image("test", data)], [], {})
-        lastpic = None
-        if isinstance(result, bytes):
-            await fuducheck.send(MessageSegment.image(result))
     if text == "gsm" or text == "干什么":
         await fuducheck.send(MessageSegment.record(Path("assets") / "gsm.mp3"))
     if text == "mbf" or text == "没办法":
