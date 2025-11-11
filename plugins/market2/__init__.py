@@ -305,10 +305,10 @@ async def send_baojia():
 
 @updallgoods.handle()
 async def updallgoods_function():
-    goods = db.getallgoods()
-    msg = "成功更新 {} 件饰品".format(len(goods))
+    goodid = db.get_all_goodid()
+    msg = "成功更新 {} 件饰品".format(len(goodid))
     try:
-        await db.update_goods(goods)
+        await db.update_goods(goodid)
     except:
         msg = "更新失败"
     await updallgoods.finish(msg)
