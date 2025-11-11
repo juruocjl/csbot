@@ -108,7 +108,7 @@ class DataManager:
             (goodid, timeStamp, platform, sellprice, sellnum)
         )
 
-    async def update_goods(self, goods_list: List[str]):
+    async def update_goods(self, goods_list: List[int]):
         while len(goods_list) > 0:
             now_goods = [self.getgoodinfo(id)[2] for id in goods_list[:50]]
             print(now_goods)
@@ -306,9 +306,5 @@ async def send_baojia():
 @updallgoods.handle()
 async def updallgoods_function():
     goodid = db.get_all_goodid()
-    msg = "成功更新 {} 件饰品".format(len(goodid))
-    try:
-        await db.update_goods(goodid)
-    except:
-        msg = "更新失败"
-    await updallgoods.finish(msg)
+    await db.update_goods(goodid)
+    await updallgoods.finish("成功更新 {} 件饰品".format(len(goodid)))
