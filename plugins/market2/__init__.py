@@ -110,7 +110,7 @@ class DataManager:
 
     async def update_goods(self, goods_list: List[int]):
         while len(goods_list) > 0:
-            now_goods = [self.getgoodinfo(id)[2] for id in goods_list[:50]]
+            now_goods = [self.get_good_info(id)[2] for id in goods_list[:50]]
             print(now_goods)
             goods_list = goods_list[50:]
             async with get_session().post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers=headers) as res:
