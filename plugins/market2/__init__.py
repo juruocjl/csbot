@@ -272,11 +272,11 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
                 async with get_session().post("https://api.csqaq.com/api/v1/info/chart", data=json.dumps({"good_id": goodid, "key": "sell_price","platform": plat,"period": "30","style": "all_style"}), headers=headers) as res:
                     ddata = (await res.json())['data']
                 await asyncio.sleep(1.1)
-                print(ddata)
+                # print(ddata)
                 for i in range(len(ddata['timestamp'])):
                     db.ins_good_price(
                         int(goodid),
-                        ddata['timestamp'][i],
+                        ddata['timestamp'][i] // 1000,
                         plat,
                         round(100 * ddata['main_data'][i]),
                         ddata['num_data'][i]
