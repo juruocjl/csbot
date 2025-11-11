@@ -117,7 +117,8 @@ class DataManager:
                 data = await res.json()
             if data['code'] == 200:
                 timeStamp = int(time.time())
-                for marketHashName, good_info in data['data']['success'].items():
+                print(data['data'])
+                for good_info in data['data']['success'].values():
                     self.ins_good_price(
                         good_info['goodId'],
                         timeStamp,
