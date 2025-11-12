@@ -229,17 +229,21 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     atfromcnt = defaultdict(int)
     atpaircnt = defaultdict(int)
     msgdict = db.get_all_msg(gid)
-    print(len(msgdict))
+    # print(len(msgdict))
     for sid, _, msg in msgdict.values():
         atset = set()
+        atall = False
         for seg in msg:
             if seg[0] == "at":
-                atset.add(int(seg[1]))
+                if seg[1] == "all":
+                    atall = True
+                else:
+                    atset.add(int(seg[1]))
         uid = int(sid.split('_')[2])
         for toid in atset:
             attocnt[toid] += 1
             atpaircnt[(uid, toid)] += 1
-        if len(atset):
+        if len(atset) or atall:
             atfromcnt[uid] += 1
     result = Message()
 
@@ -274,7 +278,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
             del lastattime[uid]
         atset = set()
         for seg in msg:
-            if seg[0] == "at" and int(seg[1]) != uid:
+            if seg[0] == "at" and seg[1] != "all" and int(seg[1]) != uid:
                 atset.add(int(seg[1]))
         for toid in atset:
             if toid not in lastattime:
