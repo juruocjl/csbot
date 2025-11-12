@@ -110,7 +110,7 @@ class DataManager:
         result = cursor.fetchone()
         return result[0] if result else -1
 
-    def get_all_msg(self, groupid, userid = "%", tmrange = (0, 1e9)):
+    def get_all_msg(self, groupid, userid = "%", tmrange = (0, 1e10)):
         cursor = get_cursor()
         cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and ? <= timeStamp and timeStamp <= ?",
                        (f"group_{groupid}_{userid}", int(tmrange[0]), int(tmrange[1])))
@@ -228,7 +228,8 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     attocnt = defaultdict(int)
     atfromcnt = defaultdict(int)
     atpaircnt = defaultdict(int)
-    msgdict = db.get_all_msg(sid.split('_')[1])
+    msgdict = db.get_all_msg(gid)
+    print(len(msgdict))
     for sid, _, msg in msgdict.values():
         atset = set()
         for seg in msg:
