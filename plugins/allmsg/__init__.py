@@ -78,7 +78,7 @@ class DataManager:
         cursor = get_cursor()
         cursor.execute(
             "SELECT SUM(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ?",
-            (uid, get_today_start_timestamp())
+            (uid, get_today_start_timestamp(refreshtime=86100))
         )
         result = cursor.fetchone()
         return result[0] if result[0] is not None else 0
@@ -87,7 +87,7 @@ class DataManager:
         cursor = get_cursor()
         cursor.execute(
             "SELECT COUNT(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ? AND point == 0",
-            (uid, get_today_start_timestamp())
+            (uid, get_today_start_timestamp(refreshtime=86100))
         )
         result = cursor.fetchone()
         return result[0] if result[0] is not None else 0
@@ -519,8 +519,9 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
 async def roll_admin(groupid: str):
     bot = get_bot()
     adminuid = None
-    if localstorage.get(f'adminqq{groupid}') and int(localstorage.get(f'adminqqalive{groupid}')):
+    if localstorage.get(f'adminqq{groupid}'):
         adminuid = int(localstorage.get(f'adminqq{groupid}'))
+    if int(localstorage.get(f'adminqqalive{groupid}')):
         await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(f'adminqq{groupid}'), enable=False)
     users = []
     weights = []
