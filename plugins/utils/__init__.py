@@ -33,15 +33,15 @@ if not os.path.exists("temp"):
 def get_cursor():
     return conn.cursor()
 
-def get_today_start_timestamp(refeshtime = 0):
+def get_today_start_timestamp(refreshtime = 0):
     today = datetime.date.today()
     today_start = datetime.datetime.combine(today, datetime.time.min)
     timestamp = int(time.mktime(today_start.timetuple()))
     now = time.time()
-    if now - timestamp < refeshtime:
-        timestamp = timestamp - 86400 + refeshtime
+    if now - timestamp < refreshtime:
+        timestamp = timestamp - 86400 + refreshtime
     else:
-        timestamp = timestamp + refeshtime
+        timestamp = timestamp + refreshtime
     return timestamp
 
 def output(val, format):
