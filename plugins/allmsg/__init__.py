@@ -26,6 +26,7 @@ import random
 import jieba
 from wordcloud import WordCloud
 from io import BytesIO
+import emoji
 import json
 
 __plugin_meta__ = PluginMetadata(
@@ -333,7 +334,12 @@ def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
     }
     raw_text = " ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))
     seg_list = list(jieba.cut(raw_text, cut_all=False))
-    text = " ".join([word for word in seg_list if word not in stopwords and len(word) > 1])
+    text = ""
+    for word in seg_list:
+        if emoji.emoji_count(word) == 1:
+            text += emoji.demojize(word) + " "
+        elif word not in stopwords and len(word) > 1:
+            text += word + " "
     
     buffer = BytesIO()
     WordCloud(
