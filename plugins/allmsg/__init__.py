@@ -535,7 +535,7 @@ async def roll_admin(groupid: str):
     weights = []
     sid_list = db.get_active_user(groupid)
     for sid in sid_list:
-        point = db.get_point(sid, day = -1) / (db.get_zero_point(sid, day = -1) + 1) + 1
+        point = db.get_point(sid, day = 1) / (db.get_zero_point(sid, day = 1) + 1) + 1
         userid = int(sid.split('_')[2])
         if userid != adminuid:
             users.append((userid, point))
