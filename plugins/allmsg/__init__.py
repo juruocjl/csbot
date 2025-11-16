@@ -74,20 +74,22 @@ class DataManager:
             (uid, timestamp, point)
         )
          
-    def get_point(self, uid):
+    def get_point(self, uid, day = 0):
         cursor = get_cursor()
+        starttime = get_today_start_timestamp(refreshtime=86100) - day * 86400
         cursor.execute(
-            "SELECT SUM(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ?",
-            (uid, get_today_start_timestamp(refreshtime=86100))
+            "SELECT SUM(point) FROM fudu_points WHERE uid = ? AND ? <= timeStamp AND timeStamp < ?",
+            (uid, starttime, starttime + 86400)
         )
         result = cursor.fetchone()
         return result[0] if result[0] is not None else 0
 
-    def get_zero_point(self, uid):
+    def get_zero_point(self, uid, day = 0):
         cursor = get_cursor()
+        starttime = get_today_start_timestamp(refreshtime=86100) - day * 86400
         cursor.execute(
-            "SELECT COUNT(point) FROM fudu_points WHERE uid = ? AND timeStamp >= ? AND point == 0",
-            (uid, get_today_start_timestamp(refreshtime=86100))
+            "SELECT COUNT(point) FROM fudu_points WHERE uid = ? AND ? <= timeStamp AND timeStamp < ? AND point == 0",
+            (uid, starttime, starttime + 86400)
         )
         result = cursor.fetchone()
         return result[0] if result[0] is not None else 0
@@ -527,7 +529,7 @@ async def roll_admin(groupid: str):
     weights = []
     sid_list = db.get_active_user(groupid)
     for sid in sid_list:
-        point = db.get_point(sid) / (db.get_zero_point(sid) + 1) + 1
+        point = db.get_point(sid, day = -1) / (db.get_zero_point(sid, day = -1) + 1) + 1
         userid = int(sid.split('_')[2])
         if userid != adminuid:
             users.append((userid, point))
