@@ -27,7 +27,6 @@ import jieba
 from wordcloud import WordCloud
 from io import BytesIO
 import emoji
-import emojiswitch
 import json
 
 __plugin_meta__ = PluginMetadata(
@@ -340,7 +339,7 @@ def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
         wordset = set()
         for word in seg_list:
             if emoji.emoji_count(word) == 1:
-                wordset.add(emojiswitch.demojize(word, delimiters=('[', ']')))
+                wordset.add(word)
             elif word not in stopwords and len(word) > 1:
                 wordset.add(word)
         for word in wordset:
@@ -351,7 +350,7 @@ def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
         width=800,
         height=600,
         background_color='white',
-        font_path=Path("./assets") / "SimHei.ttf",
+        font_path=Path("./assets") / "merged.ttf",
         max_words=200,
         colormap='viridis',
         collocations=False
