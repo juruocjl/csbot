@@ -1,11 +1,12 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
 from nonebot.adapters import Bot
 from nonebot import on_command
 from nonebot import require
 
 get_pic_status = require("pic").get_pic_status
+get_msg_status = require("allmsg").get_msg_status
 get_session = require("utils").get_session
 
 import time
@@ -75,7 +76,7 @@ async def caigou_function(bot: Bot, message: MessageEvent):
         await bot.call_api("group_poke", group_id=sid.split('_')[1], user_id=sid.split('_')[2])
 
 @getstatus.handle()
-async def getstatus_function(message: MessageEvent):
+async def getstatus_function(message: GroupMessageEvent):
     cpu_usage = psutil.cpu_percent()
     
     # 获取内存信息
@@ -99,13 +100,16 @@ async def getstatus_function(message: MessageEvent):
 
     tuku = get_pic_status()
 
+    msgcount = get_msg_status(message.group_id)
+
     await getstatus.finish(Message([
         MessageSegment.at(message.get_user_id()),
         f"""\nCPU 总使用率: {status['cpu_usage_percent']}%
 内存总容量: {status['memory']['total_gb']}GB
 已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
 可用内存: {status['memory']['available_gb']}GB
-当前图库: {tuku}"""]))
+当前图库: {tuku}
+{msgcount}"""]))
 
 @langeng.handle()
 async def langeng_function():

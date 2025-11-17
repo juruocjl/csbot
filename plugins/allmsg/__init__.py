@@ -130,6 +130,13 @@ class DataManager:
         res = cursor.fetchall()
         return [a[0] for a in res]
 
+    def get_msg_count(self, groupid):
+        cursor = get_cursor()
+        cursor.execute('SELECT COUNT(*) FROM groupmsg WHERE sid LIKE ?',
+                       (f"group_{groupid}_%", ))
+        res = cursor.fetchone()
+        return res[0] if res else 0
+
 
 db = DataManager()
 
@@ -155,6 +162,10 @@ report = on_command("统计", priority=10, block=True)
 wordcloud = on_command("词云", priority=10, block=True)
 
 mywordcloud = on_command("我的词云", priority=10, block=True)
+
+def get_msg_status(groupid):
+    count = db.get_msg_count(groupid)
+    return f"本群已记录消息数：{count}"
 
 def get_bytes_hash(data, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
