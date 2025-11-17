@@ -27,6 +27,7 @@ import jieba
 from wordcloud import WordCloud
 from io import BytesIO
 import emoji
+import emojiswitch
 import json
 
 __plugin_meta__ = PluginMetadata(
@@ -332,14 +333,18 @@ def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
     stopwords = {
         "怎么", "感觉", "什么", "真是", "不是", "一个", "可以", "没有", "你们", "但是", "现在", "这个",
     }
-    raw_text = " ".join(map(lambda x: extra_plain_text(x[2]),msgdict.values()))
-    seg_list = list(jieba.cut(raw_text, cut_all=False))
-    text = ""
-    for word in seg_list:
-        if emoji.emoji_count(word) == 1:
-            text += emoji.demojize(word) + " "
-        elif word not in stopwords and len(word) > 1:
-            text += word + " "
+    wordcount = defaultdict(int)
+    for x in msgdict.values():
+        msg = extra_plain_text(x[2])
+        seg_list = list(jieba.cut(msg, cut_all=False))
+        wordset = set()
+        for word in seg_list:
+            if emoji.emoji_count(word) == 1:
+                wordset.add(emojiswitch.demojize(word, delimiters=('[', ']')))
+            elif word not in stopwords and len(word) > 1:
+                wordset.add(word)
+        for word in wordset:
+            wordcount[word] += 1
     
     buffer = BytesIO()
     WordCloud(
@@ -350,7 +355,7 @@ def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
         max_words=200,
         colormap='viridis',
         collocations=False
-    ).generate(text).to_image().save(buffer, format='PNG') 
+    ).generate_from_frequencies(wordcount).to_image().save(buffer, format='PNG') 
     return buffer
 
 @wordcloud.handle()
