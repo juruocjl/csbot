@@ -299,6 +299,17 @@ class DataManager:
             if result[1] > 0:
                 return result
             raise ValueError(f"no {query_type}")        
+        if query_type == "内战胜率":
+            cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
+                                FROM 'matches'
+                                WHERE 
+                                mode == "PVP自定义"
+                                and {time_sql} and {steamid_sql}
+                            ''')
+            result = cursor.fetchone()
+            if result[1] > 0:
+                return result
+            raise ValueError(f"no {query_type}")       
         if query_type == "上分":
             cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(mid) as cnt
                             FROM 'matches'
@@ -757,6 +768,7 @@ rank_config = [
     RankConfig("鼓励", "单排场次", "两赛季", valid_time, True, Fix(0), "d0", 1),
     RankConfig("悲情", ">1.2rt未胜利场次", "两赛季", valid_time, True, Fix(0), "d0", 1),
     RankConfig("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
+    RankConfig("内战胜率", "pvp自定义胜率", "两赛季", valid_time, True, Fix(0), "p2", 1),
     RankConfig("上分", "上分", "本周", valid_time, True, ZeroIn(-1), "d0", 2),
     RankConfig("回均首杀", "平均每回合首杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
     RankConfig("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
