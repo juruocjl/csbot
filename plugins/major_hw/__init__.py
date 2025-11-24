@@ -46,7 +46,7 @@ class DataManager:
         """, (uid, stage, teams, 0.0, 0.0))
     def get_uid_hw(self, uid: str, stage: str):
         cursor = get_cursor()
-        cursor.execute("SELECT (uid, stage, teams) FROM major_hw WHERE uid = ? AND stage = ?", (uid, stage))
+        cursor.execute("SELECT * FROM major_hw WHERE uid = ? AND stage = ?", (uid, stage))
         return cursor.fetchone()
     def set_uid_val(self, uid: str, stage: str, new_winrate: float, new_expval: float):
         cursor = get_cursor()
@@ -138,8 +138,8 @@ async def hwhelp_funtion():
 """)
 
 def calc_val(uid: str):
-    if teams := db.get_uid_hw(uid, config.major_stage):
-        teams = json.loads(teams)
+    if res := db.get_uid_hw(uid, config.major_stage):
+        teams = json.loads(res[2])
         combo = {
             '3-0': teams[: 2],
             '3-1/3-2': teams[2: 8],
