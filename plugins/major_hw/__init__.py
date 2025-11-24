@@ -204,4 +204,16 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
         name = await getcard(bot, gid, uid)
         text+= f"\n{name} 通过率 {member[3]}"
     await hwrank.finish(text)
-            
+
+@hwupd.handle()
+async def hwupd_function():
+    global results
+    results, total_simulations = parse_simulation_results(file_path)
+    logger.info(f"已加载 {total_simulations} 个模拟结果")
+
+    res = db.get_all_hw(config.major_stage)
+    await hwupd.send("开始重新计算所有作业")
+    for member in res:
+        calc_val(member[0])
+    await hwupd.finish(f"成功计算 {len(res)} 份作业")
+    
