@@ -410,9 +410,10 @@ class DataManager:
             async with get_session().post(url, json=payload, headers=headers) as result:
                 ddata = await result.json()
             if ddata["statusCode"] != 0:
-                logger.error(f"gp爬取失败 {steamid}  {data}")
+                logger.error(f"gp爬取失败 {steamid} {data}")
                 raise RuntimeError(ddata["errorMessage"])
             await asyncio.sleep(0.2)
+            logger.debug(ddata)
             for match in ddata['data']['matchList']:
                 addMatchesGP += await self.update_matchgp(match["matchId"], match["timeStamp"])
         try:
