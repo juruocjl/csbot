@@ -1,0 +1,171 @@
+from nonebot import get_plugin_config
+from nonebot.plugin import PluginMetadata
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.params import CommandArg
+from nonebot.permission import SUPERUSER
+from nonebot import on_command
+from nonebot import require
+from nonebot import logger
+
+get_cursor = require("utils").get_cursor
+
+import json
+import re
+import numpy as np
+from collections import defaultdict
+
+from .config import Config
+
+__plugin_meta__ = PluginMetadata(
+    name="major_hw",
+    description="",
+    usage="",
+    config=Config,
+)
+
+config = get_plugin_config(Config)
+
+class DataManager:
+    def __init__(self):
+        cursor = get_cursor()
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS major_hw (
+            uid TEXT,
+            stage TEXT,
+            teams TEXT,
+            winrate REAL,
+            expval REAL,
+            PRIMARY KEY (uid, stage)
+        )
+        """)
+    def add_hw(self, uid: str, stage: str, teams: str):
+        cursor = get_cursor()
+        cursor.execute("""
+        INSERT OR REPLACE INTO major_hw (uid, stage, teams, winrate, expval) 
+        VALUES (?, ?, ?, ?, ?)
+        """, (uid, stage, teams, 0.0, 0.0))
+    def get_uid_hw(self, uid: str, stage: str):
+        cursor = get_cursor()
+        cursor.execute("SELECT (uid, stage, teams) FROM major_hw WHERE uid = ? AND stage = ?", (uid, stage))
+        return cursor.fetchone()
+    def set_uid_val(self, uid: str, stage: str, new_winrate: float, new_expval: float):
+        cursor = get_cursor()
+        cursor.execute("UPDATE major_hw SET winrate = ? WHERE uid = ? AND stage = ?", (new_winrate, uid, stage))
+        cursor.execute("UPDATE major_hw SET expval = ? WHERE uid = ? AND stage = ?", (new_expval, uid, stage))
+    def get_all_hw(self, stage: str):
+        cursor = get_cursor()
+        cursor.execute("SELECT * FROM major_hw WHERE stage = ?", (stage))
+        return cursor.fetchall()
+
+db = DataManager()
+
+
+file_path = "result.txt"
+
+def parse_simulation_results(file_path: str) -> dict:
+    """
+    解析模拟结果文件，返回每个组合及其出现频率的字典
+    格式: {('3-0': set, '3-1/3-2': set, '0-3': set): frequency}
+    """
+    results = defaultdict(int)
+    total_simulations = 0
+    pattern = r"3-0: (.*?) \| 3-1/3-2: (.*?) \| 0-3: (.*?): (\d+)/\d+"
+
+    with open(file_path, 'r') as file:
+        for line in file:
+            match = re.match(pattern, line)
+            if match:
+                three_zero = set(t.strip() for t in match.group(1).split(','))
+                three_one_two = set(t.strip() for t in match.group(2).split(','))
+                zero_three = set(t.strip() for t in match.group(3).split(','))
+                count = int(match.group(4))
+
+                key = (frozenset(three_zero), frozenset(three_one_two), frozenset(zero_three))
+                results[key] += count
+                total_simulations += count
+
+    return results, total_simulations
+
+
+def evaluate_combination(combo: dict, results: dict) -> tuple:
+    """
+    评估组合在模拟结果中的表现
+
+    Args:
+        combo: 要评估的组合
+        results: 模拟结果字典
+
+    Returns:
+        tuple: (正确数列表, 正确数>=5的概率, 正确数期望)
+    """
+    correct_counts = []
+    total_simulations = sum(results.values())
+
+    for (three_zero, three_one_two, zero_three), count in results.items():
+        correct = 0
+        correct += len(set(combo['3-0']) & set(three_zero))
+        correct += len(set(combo['3-1/3-2']) & set(three_one_two))
+        correct += len(set(combo['0-3']) & set(zero_three))
+        correct_counts.extend([correct] * count)
+
+    correct_counts = np.array(correct_counts)
+    prob_ge5 = np.mean(correct_counts >= 5)
+    expected_value = np.mean(correct_counts)
+
+    return correct_counts, prob_ge5, expected_value
+
+
+logger.info(f"{config.major_stage}, {config.major_teams}")
+results, total_simulations = parse_simulation_results(file_path)
+logger.info(f"已加载 {total_simulations} 个模拟结果")
+
+
+hwhelp = on_command("作业帮助", priority=10, block=True)
+hwadd = on_command("做作业", priority=10, block=True)
+hwsee = on_command("查看作业", priority=10, block=True)
+hwrank = on_command("作业排名", priority=10, block=True)
+hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER)
+
+@hwhelp.handle()
+async def hwhelp_funtion():
+    await hwhelp.finish(f"""当前状态 {config.major_stage}
+/做作业 team30,team30,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team03,team03
+添加作业，可用队伍 {config.major_teams}
+/查看作业 [@某人]
+查看自己或某人作业概率
+/作业排名
+查看当前作业排名
+""")
+
+def calc_val(uid: str):
+    if teams := db.get_uid_hw(uid, config.major_stage):
+        teams = json.loads(teams)
+        combo = {
+            '3-0': teams[: 2],
+            '3-1/3-2': teams[2: 8],
+            '0-3': teams[8: ]
+        }
+        correct_counts, prob_ge5, expected_value = evaluate_combination(combo, results)
+        db.set_uid_val(uid, config.major_stage, prob_ge5, expected_value)
+        return prob_ge5, expected_value
+
+@hwadd.handle()
+async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
+    uid = message.get_user_id()
+    teams = []
+    for team in arg.extract_plain_text().split(','):
+        team = team.strip()
+        ok = False
+        for nowteam in config.major_teams:
+            if team.lower() == nowteam.lower():
+                teams.append(nowteam)
+                ok = True
+                break
+        if not ok:
+            await hwadd.finish(f"未知队伍 {team}")
+    if len(teams) != 10 or len(set(teams)) != 10:
+        await hwadd.finish("请输入十只不同队伍")
+    db.add_hw(uid, config.major_stage, json.dumps(teams))
+    await hwadd.send("成功添加预测，开始计算概率")
+    prob_ge5, expected_value = calc_val(uid)
+    await hwadd.finish(f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}")
