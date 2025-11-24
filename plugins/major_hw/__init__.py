@@ -176,8 +176,8 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
 async def hwsee_function(message: MessageEvent):
     uid = message.get_user_id()
     for seg in message.get_message():
-        if seg['type'] == "at" and seg['data']['qq'] != 'all':
-            uid = seg['data']['qq']
+        if seg.type == "at" and seg.data['qq'] != 'all':
+            uid = seg.data['qq']
     if res := db.get_uid_hw(uid, config.major_stage):
         prob_ge5, expected_value = res[3:]
         text = f"3-0 {res[2][:2]}\n"
