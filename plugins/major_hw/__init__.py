@@ -55,7 +55,7 @@ class DataManager:
         cursor.execute("UPDATE major_hw SET expval = ? WHERE uid = ? AND stage = ?", (new_expval, uid, stage))
     def get_all_hw(self, stage: str):
         cursor = get_cursor()
-        cursor.execute("SELECT * FROM major_hw WHERE stage = ?", (stage))
+        cursor.execute("SELECT * FROM major_hw WHERE stage = ?", (stage, ))
         return cursor.fetchall()
 
 db = DataManager()
