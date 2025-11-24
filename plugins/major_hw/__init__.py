@@ -208,6 +208,8 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
 @hwupd.handle()
 async def hwupd_function():
     global results
+    await hwupd.send("开始读取模拟结果")
+
     results, total_simulations = parse_simulation_results(file_path)
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 
