@@ -1,8 +1,9 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
+from nonebot.adapters import Bot
 from nonebot import on_command
 from nonebot import require
 from nonebot import logger
@@ -170,3 +171,36 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
     await hwadd.send("成功添加预测，开始计算概率")
     prob_ge5, expected_value = calc_val(uid)
     await hwadd.finish(f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}")
+
+@hwsee.handle()
+async def hwsee_function(message: MessageEvent):
+    uid = message.get_user_id()
+    for seg in message.get_message():
+        if seg['type'] == "at" and seg['data']['qq'] != 'all':
+            uid = seg['data']['qq']
+    if res := db.get_uid_hw(uid, config.major_stage):
+        prob_ge5, expected_value = res[3:]
+        text = f"3-0 {res[2][:2]}\n"
+        text += f"3-1/3-2 {res[2][2:8]}\n"
+        text += f"0-3 {res[2][8:]}\n"
+        text += f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}"
+        await hwsee.finish(text)
+
+async def getcard(bot: Bot, gid: str, uid: str):
+    info = await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False)
+    if info["card"]:
+        return info["card"]
+    return info["nickname"]
+
+@hwrank.handle()
+async def hwrank_function(bot: Bot, message: GroupMessageEvent):
+    gid = message.get_session_id().split('_')[1]
+    res = db.get_all_hw(config.major_stage)
+    res = sorted(res, key=lambda x: x[3], reverse=True)
+    text = f"{config.major_stage} 作业排行"
+    for member in res:
+        uid = member[0]
+        name = getcard(bot, gid, uid)
+        text+= f"\n{name} 通过率 {member[3]}"
+    await hwrank.finish(text)
+            
