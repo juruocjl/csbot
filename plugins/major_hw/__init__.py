@@ -180,9 +180,10 @@ async def hwsee_function(message: MessageEvent):
             uid = seg.data['qq']
     if res := db.get_uid_hw(uid, config.major_stage):
         prob_ge5, expected_value = res[3:]
-        text = f"3-0 {res[2][:2]}\n"
-        text += f"3-1/3-2 {res[2][2:8]}\n"
-        text += f"0-3 {res[2][8:]}\n"
+        teams = json.loads(res[2])
+        text = f"3-0 {teams[:2]}\n"
+        text += f"3-1/3-2 {teams[2:8]}\n"
+        text += f"0-3 {teams[8:]}\n"
         text += f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}"
         await hwsee.finish(text)
 
