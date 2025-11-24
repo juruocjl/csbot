@@ -413,9 +413,9 @@ class DataManager:
                 logger.error(f"gp爬取失败 {steamid} {data}")
                 raise RuntimeError(ddata["errorMessage"])
             await asyncio.sleep(0.2)
-            logger.info(f"{steamid}, {ddata}")
-            for match in ddata['data']['matchList']:
-                addMatchesGP += await self.update_matchgp(match["matchId"], match["timeStamp"])
+            if ddata['data']['dataPublic']:
+                for match in ddata['data']['matchList']:
+                    addMatchesGP += await self.update_matchgp(match["matchId"], match["timeStamp"])
         try:
             await work()
             await work_gp()
