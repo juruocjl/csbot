@@ -163,6 +163,7 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
                 break
         if not ok:
             await hwadd.finish(f"未知队伍 {team}")
+    logger.info(teams)
     if len(teams) != 10 or len(set(teams)) != 10:
         await hwadd.finish("请输入十只不同队伍")
     db.add_hw(uid, config.major_stage, json.dumps(teams))
