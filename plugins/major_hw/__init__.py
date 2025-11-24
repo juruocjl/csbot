@@ -200,7 +200,7 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     text = f"{config.major_stage} 作业排行"
     for member in res:
         uid = member[0]
-        name = getcard(bot, gid, uid)
+        name = await getcard(bot, gid, uid)
         text+= f"\n{name} 通过率 {member[3]}"
     await hwrank.finish(text)
             
