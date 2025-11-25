@@ -1,6 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot import on_command
 from nonebot import require
 from nonebot import get_bot
 from nonebot import logger
@@ -68,6 +69,8 @@ def parse_matches_by_score(html: str) -> list[tuple[str, str]]:
             raise(RuntimeError("No win team"))
     return title, results
 
+updategame = on_command("更新比赛", priority=10, block=True)
+
 @scheduler.scheduled_job("cron", minute="*/5", id="hltv")
 async def update_events():
     bot = get_bot()
@@ -89,3 +92,7 @@ async def update_events():
                     )
                 localstorage.set(f"hltvresult{event}", json.dumps(res))
                 event_update(event)
+
+@updategame.handle()
+async def updategame_function():
+    await update_events()
