@@ -218,4 +218,7 @@ async def hwupd_function():
     for member in res:
         calc_val(member[0])
     await hwupd.finish(f"成功计算 {len(res)} 份作业")
-    
+
+async def event_update(event_id):
+    if event_id == config.major_event_id:
+        logger.info(f"{event_id} updated")

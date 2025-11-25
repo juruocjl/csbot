@@ -15,6 +15,7 @@ driver.register_adapter(OneBotAdapter)
  
 nonebot.load_plugin(Path("plugins") / "utils")
 nonebot.load_plugin(Path("plugins") / "major_hw")
+nonebot.load_plugin(Path("plugins") / "hltv_watcher")
 nonebot.load_plugin(Path("plugins") / "pic")
 nonebot.load_plugin(Path("plugins") / "allmsg")
 nonebot.load_plugin(Path("plugins") / "ts")

@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.9, <4.0"
 dependencies = [
     "aiohttp>=3.13.2",
+    "bs4>=0.0.2",
+    "curl-cffi>=0.13.0",
     "emoji>=2.15.0",
     "emojiswitch>=0.0.3",
     "fuzzywuzzy>=0.18.0",

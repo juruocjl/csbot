@@ -69,13 +69,13 @@ class LocalStorage:
             VALUES (?, ?)
         ''', (key, val))
     
-    def get(self, key: str) -> str | None:
+    def get(self, key: str, default = None) -> str | None:
         cursor = get_cursor()
         cursor.execute('''
             SELECT val FROM local_storage WHERE key == ?
         ''', (key,))
         result = cursor.fetchone()
-        return result[0] if result else None
+        return result[0] if result else default
 
 localstorage = LocalStorage()
 
