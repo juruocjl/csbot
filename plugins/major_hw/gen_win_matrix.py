@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Tuple, List, Dict
 import json
 import sys
 import csv
+from nonebot import logger
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -189,7 +190,7 @@ def gen_win_matrix(file_path, finish_match):
         win_matrix[teamb][teama] = 0
         
 
-    print_win_matrix(win_matrix, teams)
+    # print_win_matrix(win_matrix, teams)
     save_win_matrix_to_csv(win_matrix, teams, "win_matrix.csv")
-    print("胜率矩阵已保存为 win_matrix.csv")
+    logger.info("胜率矩阵已保存为 win_matrix.csv")
 
