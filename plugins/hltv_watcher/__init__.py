@@ -91,7 +91,7 @@ async def update_events():
                         message=text
                     )
                 localstorage.set(f"hltvresult{event}", json.dumps(res))
-                event_update(event)
+                await event_update(event)
 
 @updategame.handle()
 async def updategame_function():
