@@ -77,7 +77,7 @@ async def update_events():
     async with AsyncSession(impersonate="chrome110") as s:
         for event in config.hltv_event_id_list:
             logger.info(f"start get {event}")
-            r = await s.get("https://www.hltv.org/results?event={event}")
+            r = await s.get(f"https://www.hltv.org/results?event={event}")
             title, res = parse_matches_by_score(r.text)
             oldres = json.loads(localstorage.get(f"hltvresult{event}", default="[]"))
             if len(res) != len(oldres):
