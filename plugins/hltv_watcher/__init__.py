@@ -83,7 +83,7 @@ async def update_events():
             oldres = json.loads(localstorage.get(f"hltvresult{event}", default="[]"))
             if len(res) != len(oldres):
                 text = title + " 结果有更新"
-                for i in range(len(oldres), len(res)):
+                for i in range(len(res) - len(oldres)):
                     text += f"\n{res[i][0]} {res[i][2]} {res[i][1]}"
                 for groupid in config.cs_group_list:
                     await bot.send_msg(
