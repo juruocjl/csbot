@@ -4,6 +4,7 @@ from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.adapters import Bot
+from nonebot import get_bot
 from nonebot import on_command
 from nonebot import require
 from nonebot import logger
@@ -240,7 +241,41 @@ async def hwupd_function():
 async def calc_simulate():
     await asyncio.to_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
     await asyncio.to_thread(simulate, teamfile)
+    await simupd.finish("结果模拟完成")
 
 async def event_update(event_id):
     if event_id == config.major_event_id:
         logger.info(f"{event_id} updated")
+        bot = get_bot()
+        
+        for groupid in config.cs_group_list:
+            await bot.send_msg(
+                message_type="group",
+                group_id=groupid,
+                message="开始重新模拟"
+            )
+        
+        await asyncio.to_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
+        await asyncio.to_thread(simulate, teamfile)
+
+        for groupid in config.cs_group_list:
+            await bot.send_msg(
+                message_type="group",
+                group_id=groupid,
+                message="新结果模拟完成"
+            )
+        
+        global results
+        results, total_simulations = parse_simulation_results(file_path)
+        logger.info(f"已加载 {total_simulations} 个模拟结果")
+
+        res = db.get_all_hw(config.major_stage)
+        for member in res:
+            calc_val(member[0])
+        
+        for groupid in config.cs_group_list:
+            await bot.send_msg(
+                message_type="group",
+                group_id=groupid,
+                message=f"成功计算 {len(res)} 份作业"
+            )
