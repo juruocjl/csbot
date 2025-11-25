@@ -19,7 +19,7 @@ from pathlib import Path
 from collections import defaultdict
 
 from .gen_win_matrix import gen_win_matrix
-
+from .simulate import simulate
 
 from .config import Config
 
@@ -239,6 +239,7 @@ async def hwupd_function():
 @simupd.handle()
 async def calc_simulate():
     await asyncio.to_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
+    await asyncio.to_thread(simulate, teamfile)
 
 async def event_update(event_id):
     if event_id == config.major_event_id:
