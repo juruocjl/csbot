@@ -145,7 +145,7 @@ simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSE
 async def hwhelp_funtion():
     await hwhelp.finish(f"""当前状态 {config.major_stage}
 /做作业 team30,team30,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team03,team03
-添加作业，可用队伍 {config.major_teams}
+添加作业，可用队伍 {major_teams}
 /查看作业 [@某人]
 查看自己或某人作业概率
 /作业排名
@@ -171,7 +171,7 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
     for team in arg.extract_plain_text().split(','):
         team = team.strip()
         ok = False
-        for nowteam in config.major_teams:
+        for nowteam in major_teams:
             if team.lower() == nowteam.lower():
                 teams.append(nowteam)
                 ok = True
