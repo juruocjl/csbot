@@ -238,7 +238,7 @@ async def hwupd_function():
 
 @simupd.handle()
 async def calc_simulate():
-    await asyncio.do_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
+    await asyncio.to_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
 
 async def event_update(event_id):
     if event_id == config.major_event_id:
