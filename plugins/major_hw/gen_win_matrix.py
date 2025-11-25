@@ -184,7 +184,7 @@ def gen_win_matrix(file_path, finish_match):
     # ⭐ 现在你可以在这里调节 HLTV 指数
     win_matrix = calculate_win_matrix(teams, hltv_exp=HLTV_EXP)
 
-    for teama, teamb in finish_match:
+    for teama, teamb, _ in finish_match:
         win_matrix[teama][teamb] = 1
         win_matrix[teamb][teama] = 0
         
