@@ -9,11 +9,17 @@ from nonebot import require
 from nonebot import logger
 
 get_cursor = require("utils").get_cursor
+localstorage = require("utils").localstorage
 
 import json
 import re
 import numpy as np
+import asyncio
+from pathlib import Path
 from collections import defaultdict
+
+from .gen_win_matrix import gen_win_matrix
+
 
 from .config import Config
 
@@ -60,7 +66,14 @@ class DataManager:
 
 db = DataManager()
 
-
+teamfile = Path(".") / "assets" / f"{config.major_stage}.json"
+major_teams = []
+try:
+    with open(teamfile, "r") as f:
+        data = json.load(f)
+        major_teams = list(data['teams'].keys())
+except:
+    logger.fail("fail to load teams")
 file_path = "result.txt"
 
 def parse_simulation_results(file_path: str) -> dict:
@@ -116,7 +129,7 @@ def evaluate_combination(combo: dict, results: dict) -> tuple:
     return correct_counts, prob_ge5, expected_value
 
 
-logger.info(f"{config.major_stage}, {config.major_teams}")
+logger.info(f"{config.major_stage}, {major_teams}")
 results, total_simulations = parse_simulation_results(file_path)
 logger.info(f"已加载 {total_simulations} 个模拟结果")
 
@@ -126,6 +139,7 @@ hwadd = on_command("做作业", priority=10, block=True)
 hwsee = on_command("查看作业", priority=10, block=True)
 hwrank = on_command("作业排名", priority=10, block=True)
 hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER)
+simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSER)
 
 @hwhelp.handle()
 async def hwhelp_funtion():
@@ -200,9 +214,12 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     res = sorted(res, key=lambda x: x[3], reverse=True)
     text = f"{config.major_stage} 作业排行"
     for member in res:
-        uid = member[0]
-        name = await getcard(bot, gid, uid)
-        text+= f"\n{name} 通过率 {member[3]}"
+        try:
+            uid = member[0]
+            name = await getcard(bot, gid, uid)
+            text+= f"\n{name} 通过率 {member[3]}"
+        except:
+            logger.info(f"fail to get {member[0]}")
     await hwrank.finish(text)
 
 @hwupd.handle()
@@ -218,6 +235,10 @@ async def hwupd_function():
     for member in res:
         calc_val(member[0])
     await hwupd.finish(f"成功计算 {len(res)} 份作业")
+
+@simupd.handle()
+async def calc_simulate():
+    await asyncio.do_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
 
 async def event_update(event_id):
     if event_id == config.major_event_id:

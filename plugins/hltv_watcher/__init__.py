@@ -9,6 +9,7 @@ from nonebot import logger
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
 import json
+import asyncio
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
@@ -92,6 +93,7 @@ async def update_events():
                     )
                 localstorage.set(f"hltvresult{event}", json.dumps(res))
                 await event_update(event)
+            await asyncio.sleep(2)
 
 @updategame.handle()
 async def updategame_function():
