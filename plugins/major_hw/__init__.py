@@ -228,11 +228,12 @@ async def event_update(event_id):
             )
 
 @hwout.handle()
-async def hwout_function():
+async def hwout_function(bot: Bot, args: Message = CommandArg()):
+    gid = args.extract_plain_text()
     res = db.get_all_hw(config.major_stage)
     out = []
     for member in res:
-        out.append(await getcard(member[0]), json.loads(member[2]))
+        out.append(await getcard(bot, gid, member[0]), json.loads(member[2]))
     await hwout.finish(json.dumps({
         'stage': config.major_stage,
         'games': json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")),
