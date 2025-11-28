@@ -15,6 +15,7 @@ dependencies = [
     "ipykernel>=6.31.0",
     "ipython>=8.18.1",
     "jieba>=0.42.1",
+    "matplotlib>=3.9.4",
     "meme-generator>=0.2.2",
     "msgpack>=1.1.2",
     "nb-cli>=1.4.2",

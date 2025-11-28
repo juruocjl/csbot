@@ -1,0 +1,88 @@
+{
+  "systems": {
+    "valve": "lambda x: x",
+    "hltv": "lambda x: x"
+  },
+  "teams": {
+    "Aurora": {
+      "seed": 1,
+      "valve": 1816,
+      "hltv": 275
+    },
+    "Natus Vincere": {
+      "seed": 2,
+      "valve": 1707,
+      "hltv": 262
+    },
+    "Liquid": {
+      "seed": 3,
+      "valve": 1712,
+      "hltv": 146
+    },
+    "3DMAX": {
+      "seed": 4,
+      "valve": 1607,
+      "hltv": 197
+    },
+    "Astralis": {
+      "seed": 5,
+      "valve": 1656,
+      "hltv": 208
+    },
+    "TYLOO": {
+      "seed": 6,
+      "valve": 1323,
+      "hltv": 64
+    },
+    "MIBR": {
+      "seed": 7,
+      "valve": 1321,
+      "hltv": 31
+    },
+    "Passion UA": {
+      "seed": 8,
+      "valve": 819,
+      "hltv": 76
+    },
+    "M80": {
+      "seed": 9,
+      "valve": 1421,
+      "hltv": 66
+    },
+    "FlyQuest": {
+      "seed": 10,
+      "valve": 1422,
+      "hltv": 44
+    },
+    "B8": {
+      "seed": 11,
+      "valve": 1587,
+      "hltv": 73
+    },
+    "fnatic": {
+      "seed": 12,
+      "valve": 1445,
+      "hltv": 62
+    },
+    "Ninjas in Pyjamas": {
+      "seed": 13,
+      "valve": 1387,
+      "hltv": 40
+    },
+    "PARIVISION": {
+      "seed": 14,
+      "valve": 1496,
+      "hltv": 28
+    },
+    "Imperial": {
+      "seed": 15,
+      "valve": 1330,
+      "hltv": 22
+    },
+    "FaZe": {
+      "seed": 16,
+      "valve": 1562,
+      "hltv": 186
+    }
+  }
+}

@@ -10,6 +10,7 @@ from time import perf_counter_ns
 from typing import TYPE_CHECKING, Callable
 import numpy as np
 from nonebot import logger
+from pathlib import Path
 import tqdm
 
 def _batch_task(args: tuple[Callable[[int], dict], int]) -> tuple[int, dict]:
@@ -569,7 +570,7 @@ class Simulation:
         return reduce(_f, tqdm.tqdm(results))
 
 
-def format_results(results: dict[Team, Result], n: int, run_time: float) -> list[str]:
+def format_results(results: dict[Team, Result], n: int, run_time: float, output_path: Path | str) -> list[str]:
     """
     格式化模拟结果
 
@@ -586,8 +587,7 @@ def format_results(results: dict[Team, Result], n: int, run_time: float) -> list
     # 输出组合统计
     all_combinations = list(results.values())[0].pickem_results
     sorted_combinations = sorted(all_combinations.items(), key=lambda x: x[1], reverse=True)
-    filename = "result.txt"
-    with open(filename, 'w', encoding='utf-8') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         for combination, count in sorted_combinations:
             f.write(f"{combination}: {count}/{n} ({count/n*100:.4f}%)\n")
 
@@ -595,7 +595,7 @@ def format_results(results: dict[Team, Result], n: int, run_time: float) -> list
     return out
 
 
-def simulate(file_path: Path | str):
+def simulate(file_path: Path | str, output_path: Path | str = "result.txt"):
 
     n_iterations = 1000000  # 增加迭代次数以获得更准确的结果
     n_cores = max(1, cpu_count() - 1)  # 保留一个核心给系统使用
@@ -604,4 +604,4 @@ def simulate(file_path: Path | str):
     start = perf_counter_ns()
     results = Simulation(file_path).run(n_iterations, n_cores)
     run_time = (perf_counter_ns() - start) / 1_000_000_000
-    logger.info("\n".join(format_results(results, n_iterations, run_time)))
+    logger.info("\n".join(format_results(results, n_iterations, run_time, output_path)))

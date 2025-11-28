@@ -4,16 +4,17 @@ from typing import TYPE_CHECKING, Tuple, List, Dict
 import json
 import sys
 import csv
+from pathlib import Path
 from nonebot import logger
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 # 评分系统权重配置
-VRS_WEIGHT = 0.162566  # Valve评分系统权重
-HLTV_WEIGHT = 0.837434  # HLTV评分系统权重
-SIGMA = 89.004396  # Valve默认sigma值，用于Elo公式计算
-HLTV_EXP = 0.431806
+VRS_WEIGHT = 0.3  # Valve评分系统权重
+HLTV_WEIGHT = 0.7  # HLTV评分系统权重
+SIGMA = 500
+HLTV_EXP = 0.1
 
 
 @dataclass(frozen=True)
@@ -133,7 +134,7 @@ def print_win_matrix(win_matrix: Dict[str, Dict[str, float]], teams: List[Team])
         print(row)
 
 
-def load_teams(file_path: str) -> List[Team]:
+def load_teams(file_path: str | Path) -> List[Team]:
     """从JSON文件加载队伍数据"""
     with open(file_path) as file:
         data = json.load(file)
@@ -178,7 +179,7 @@ def save_win_matrix_to_csv(win_matrix: Dict[str, Dict[str, float]], teams: List[
             writer.writerow(row)
 
 
-def gen_win_matrix(file_path, finish_match):
+def gen_win_matrix(file_path : Path | str, finish_match : List[Tuple[str, str, str]]):
 
     teams = load_teams(file_path)
 
