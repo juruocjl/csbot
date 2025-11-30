@@ -242,8 +242,6 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
             res[uid][stage] = wr
     text = ""
     for uid, data in res.items():
-        text += await getcard(bot, gid, uid)
-        text += " "
         for stage in config.major_all_stages:
             if stage in data and data[stage] == 0.0:
                 text += "❌"
@@ -251,6 +249,8 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
                 text += "✅"
             else:
                 text += "❔"
+        text += " "
+        text += await getcard(bot, gid, uid)
         text += "\n"
     await allrank.finish(text)
 
