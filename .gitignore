@@ -1,6 +1,6 @@
 .env.prod
 __pycache__
-temp
+temp*
 *.db
 .venv
 avatar

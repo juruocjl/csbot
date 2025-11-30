@@ -85,6 +85,7 @@ hwhelp = on_command("作业帮助", priority=10, block=True)
 hwadd = on_command("做作业", priority=10, block=True)
 hwsee = on_command("查看作业", priority=10, block=True)
 hwrank = on_command("作业排名", priority=10, block=True)
+allrank = on_command("赛事作业结果", priority=10, block=True)
 hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER)
 simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSER)
 hwout = on_command("作业导出", priority=10, block=True, permission=SUPERUSER)
@@ -98,6 +99,8 @@ async def hwhelp_funtion():
 查看自己或某人作业概率
 /作业排名
 查看当前作业排名
+/赛事作业结果
+查看赛事整体结果
 """)
 
 def calc_val(uid: str):
@@ -227,15 +230,42 @@ async def event_update(event_id):
                 message=f"成功计算 {len(res)} 份作业"
             )
 
+@allrank.handle()
+async def allrank_function():
+    res = {}
+    for stage in config.major_all_stages:
+        allres = db.get_all_hw(stage)
+        for uid, _, _, wr, _ in allres:
+            if uid not in res:
+                res[uid] = {}
+            res[uid][stage] = wr
+    text = ""
+    for uid, data in res:
+        text += getcard(uid)
+        text += " "
+        for stage in config.major_all_stages:
+            if stage in data and data[stage] == 0.0:
+                text += "❌"
+            elif stage in data and data[stage] == 1.0:
+                text += "✅"
+            else:
+                text += "❔"
+        text += "\n"
+    await allrank.finish(text)
+
 @hwout.handle()
 async def hwout_function(bot: Bot, args: Message = CommandArg()):
-    gid = args.extract_plain_text()
-    res = db.get_all_hw(config.major_stage)
+    params = args.extract_plain_text().strip().split()
+    gid = params[0]
+    stage = params[1] if len(params) > 1 else config.major_stage
+    eventid = params[2] if len(params) > 2 else config.major_event_id
+
+    res = db.get_all_hw(stage)
     out = []
     for member in res:
         out.append({'nickname': await getcard(bot, gid, member[0]), 'teams': json.loads(member[2])})
     await hwout.finish(json.dumps({
-        'stage': config.major_stage,
-        'games': json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")),
+        'stage': stage,
+        'games': json.loads(localstorage.get(f"hltvresult{eventid}", default="[]")),
         'homework': out
     }))

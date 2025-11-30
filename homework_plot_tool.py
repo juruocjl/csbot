@@ -39,24 +39,34 @@ for i in range(len(games) + 1):
         gen_win_matrix(info_path, games[:i])
         simulate(info_path, out_path)
 
+with open(Path(".") / "temp" / f"{data['stage']}", "r") as f:
+    cachedatas = json.load(f)
 
 members = data['homework']
 for i in range(len(members)):
     members[i]['winrate'] = []
+    for cachedata in cachedatas:
+        if cachedata["teams"] == members[i]["teams"]:
+            members[i]['winrate'] = cachedata['winrate']
 
 for i in tqdm(range(len(games) + 1)):
-    results, total_simulations = parse_simulation_results(Path(".") / "temp" / f"{data['stage']}-{i}.txt")
+    need = False
     for j in range(len(members)):
-        teams = members[j]['teams']
-        combo = {
-            '3-0': teams[: 2],
-            '3-1/3-2': teams[2: 8],
-            '0-3': teams[8: ]
-        }
-        correct_counts, prob_ge5, expected_value = evaluate_combination(combo, results)
-        members[j]['winrate'].append(prob_ge5)
+        if len(members[j]['winrate']) < i:
+            need = True
+    if need:
+        results, total_simulations = parse_simulation_results(Path(".") / "temp" / f"{data['stage']}-{i}.txt")
+        for j in range(len(members)):
+            teams = members[j]['teams']
+            combo = {
+                '3-0': teams[: 2],
+                '3-1/3-2': teams[2: 8],
+                '0-3': teams[8: ]
+            }
+            correct_counts, prob_ge5, expected_value = evaluate_combination(combo, results)
+            members[j]['winrate'].append(prob_ge5)
 
-with open(Path(".") / "temp" / f"{data['stage']}-{len(data['games'])}", "w") as f:
+with open(Path(".") / "temp" / f"{data['stage']}", "w") as f:
     json.dump(members, f)
 
 x_indices = list(range(len(x_name)))
@@ -77,8 +87,8 @@ for member in members:
 
 plt.xlabel("赛程") 
 plt.ylabel("通过率")
+plt.yscale('log')
 plt.title(f"作业通过率变化图")
-# plt.legend(title="昵称") 
 plt.legend(
     title="昵称",
     # 锚点设置在 X 轴的 1.02 位置，Y 轴的 1.0 位置 (右上角外侧)
