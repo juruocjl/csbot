@@ -242,7 +242,7 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
             res[uid][stage] = wr
     text = ""
     for uid, data in res.items():
-        text += getcard(bot, gid, uid)
+        text += await getcard(bot, gid, uid)
         text += " "
         for stage in config.major_all_stages:
             if stage in data and data[stage] == 0.0:
