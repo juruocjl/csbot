@@ -231,7 +231,8 @@ async def event_update(event_id):
             )
 
 @allrank.handle()
-async def allrank_function():
+async def allrank_function(bot: Bot, message: GroupMessageEvent):
+    gid = message.get_session_id().split('_')[1]
     res = {}
     for stage in config.major_all_stages:
         allres = db.get_all_hw(stage)
@@ -240,8 +241,8 @@ async def allrank_function():
                 res[uid] = {}
             res[uid][stage] = wr
     text = ""
-    for uid, data in res:
-        text += getcard(uid)
+    for uid, data in res.items():
+        text += getcard(bot, gid, uid)
         text += " "
         for stage in config.major_all_stages:
             if stage in data and data[stage] == 0.0:
