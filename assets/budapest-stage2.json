@@ -37,7 +37,8 @@
     "TYLOO": {
       "seed": 6,
       "valve": 1323,
-      "hltv": 64
+      "hltv": 64,
+      "alias": []
     },
     "MIBR": {
       "seed": 7,
