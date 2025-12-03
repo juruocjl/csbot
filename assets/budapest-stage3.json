@@ -1,0 +1,104 @@
+{
+  "systems": {
+    "valve": "lambda x: x",
+    "hltv": "lambda x: x"
+  },
+  "teams": {
+    "FURIA": {
+      "seed": 1,
+      "valve": 2008,
+      "hltv": 936,
+      "alias": []
+    },
+    "Vitality": {
+      "seed": 2,
+      "valve": 1888,
+      "hltv": 934,
+      "alias": ["VIT"]
+    },
+    "Falcons": {
+      "seed": 3,
+      "valve": 1923,
+      "hltv": 703,
+      "alias": ["FLC"]
+    },
+    "The MongolZ": {
+      "seed": 4,
+      "valve": 1763,
+      "hltv": 396,
+      "alias": []
+    },
+    "MOUZ": {
+      "seed": 5,
+      "valve": 1808,
+      "hltv": 537,
+      "alias": []
+    },
+    "Spirit": {
+      "seed": 6,
+      "valve": 1716,
+      "hltv": 355,
+      "alias": []
+    },
+    "G2": {
+      "seed": 7,
+      "valve": ,
+      "hltv": 286,
+      "alias": []
+    },
+    "paiN": {
+      "seed": 8,
+      "valve": 1695,
+      "hltv": 219,
+      "alias": []
+    },
+    "Natus Vincere": {
+      "seed": 9,
+      "valve": 1746,
+      "hltv": 288,
+      "alias": ["navi"]
+    },
+    "FaZe": {
+      "seed": 10,
+      "valve": 1617,
+      "hltv": 193,
+      "alias": ["faze clan"]
+    },
+    "B8": {
+      "seed": 11,
+      "valve": 1656,
+      "hltv": 94,
+      "alias": []
+    },
+    "Imperial": {
+      "seed": 12,
+      "valve": 1401,
+      "hltv": 37,
+      "alias": ["IMP"]
+    },
+    "PARIVISION": {
+      "seed": 13,
+      "valve": 1591,
+      "hltv": 68,
+      "alias": ["PV"]
+    },
+    "Liquid": {
+      "seed": 14,
+      "valve": 1695,
+      "hltv": 150,
+      "alias": []
+    },
+    "Passion UA": {
+      "seed": 15,
+      "valve": 1444,
+      "hltv": 80,
+      "alias": ["PUA"]
+    },
+    "3DMAX": {
+      "seed": 16,
+      "valve": 1603,
+      "hltv": 181,
+      "alias": ["3D"]
+    }
+  }
+}
