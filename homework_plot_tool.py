@@ -39,34 +39,42 @@ for i in range(len(games) + 1):
         gen_win_matrix(info_path, games[:i])
         simulate(info_path, out_path)
 
-with open(Path(".") / "temp" / f"{data['stage']}", "r") as f:
-    cachedatas = json.load(f)
 
 members = data['homework']
+
+cachefile = Path(".") / "temp" / f"{data['stage']}"
+
+
 for i in range(len(members)):
     members[i]['winrate'] = []
-    for cachedata in cachedatas:
-        if cachedata["teams"] == members[i]["teams"]:
-            members[i]['winrate'] = cachedata['winrate']
+
+if cachefile.exists():
+    with open(cachefile, "r") as f:
+        cachedatas = json.load(f)
+    for i in range(len(members)):
+        for cachedata in cachedatas:
+            if cachedata["teams"] == members[i]["teams"]:
+                members[i]['winrate'] = cachedata['winrate']
 
 for i in tqdm(range(len(games) + 1)):
     need = False
     for j in range(len(members)):
-        if len(members[j]['winrate']) < i:
+        if len(members[j]['winrate']) <= i:
             need = True
     if need:
         results, total_simulations = parse_simulation_results(Path(".") / "temp" / f"{data['stage']}-{i}.txt")
         for j in range(len(members)):
-            teams = members[j]['teams']
-            combo = {
-                '3-0': teams[: 2],
-                '3-1/3-2': teams[2: 8],
-                '0-3': teams[8: ]
-            }
-            correct_counts, prob_ge5, expected_value = evaluate_combination(combo, results)
-            members[j]['winrate'].append(prob_ge5)
+            if len(members[j]['winrate']) <= i:
+                teams = members[j]['teams']
+                combo = {
+                    '3-0': teams[: 2],
+                    '3-1/3-2': teams[2: 8],
+                    '0-3': teams[8: ]
+                }
+                correct_counts, prob_ge5, expected_value = evaluate_combination(combo, results)
+                members[j]['winrate'].append(prob_ge5)
 
-with open(Path(".") / "temp" / f"{data['stage']}", "w") as f:
+with open(cachefile, "w") as f:
     json.dump(members, f)
 
 x_indices = list(range(len(x_name)))
@@ -77,13 +85,24 @@ plt.rcParams['axes.prop_cycle'] = mpl.cycler(color=cm.get_cmap('tab20').colors)
 
 plt.figure(figsize=(12, 6))
 
+mn = 1e9
+for member in members:
+    mn = min(mn, min([x for x in member["winrate"] if x > 0]))
+
 for member in members:
     nickname = member["nickname"]
     winrate_data = member["winrate"]
 
     assert(len(winrate_data) == len(x_name))
-    plt.plot(x_indices, winrate_data, label=nickname, marker='o')
-
+    filtered_x = [x_indices[k] for k in range(len(winrate_data)) if winrate_data[k] > 0]
+    filtered_winrate = [winrate_data[k] for k in range(len(winrate_data)) if winrate_data[k] > 0]
+    line,  = plt.plot(filtered_x, filtered_winrate, label=nickname, marker='o')
+    line_color = line.get_color()
+    if filtered_x and len(filtered_x) < len(x_indices):  # 确保有非零点
+        last_x = filtered_x[-1]
+        last_y = filtered_winrate[-1]
+        plt.plot([last_x, last_x + 1], [last_y, mn / 5], color=line_color, marker=None, label=None)
+        plt.scatter(last_x + 1, mn / 5, color='black', marker='x', s=100, zorder=5, label=None)
 
 plt.xlabel("赛程") 
 plt.ylabel("通过率")
@@ -100,8 +119,8 @@ plt.legend(
 )
 plt.grid(True)
 
-plt.xticks(x_indices, x_name, rotation=45, ha='right')
-plt.ylim(0, 1)
+plt.xticks(x_indices, x_name, rotation=60, ha='right')
+plt.ylim(mn / 10, 1)
 
 plt.tight_layout()
 plt.savefig("result.png")
