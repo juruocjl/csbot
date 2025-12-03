@@ -7,82 +7,98 @@
     "Legacy": {
       "seed": 1,
       "valve": 1744,
-      "hltv": 170
+      "hltv": 170,
+      "alias": []
     },
     "FaZe": {
       "seed": 2,
       "valve": 1573,
-      "hltv": 182
+      "hltv": 182,
+      "alias": []
     },
     "B8": {
       "seed": 3,
       "valve": 1528,
-      "hltv": 80
+      "hltv": 80,
+      "alias": []
     },
     "GamerLegion": {
       "seed": 4,
       "valve": 1526,
-      "hltv": 105
+      "hltv": 105,
+      "alias": []
     },
     "fnatic": {
       "seed": 5,
       "valve": 1410,
-      "hltv":63
+      "hltv":63,
+      "alias": []
     },
     "PARIVISION": {
       "seed": 6,
       "valve": 1393,
-      "hltv": 34
+      "hltv": 34,
+      "alias": []
     },
     "Ninjas in Pyjamas": {
       "seed": 7,
       "valve": 1284,
-      "hltv": 41
+      "hltv": 41,
+      "alias": []
     },
     "Imperial": {
       "seed": 8,
       "valve": 1308,
-      "hltv": 22
+      "hltv": 22,
+      "alias": []
     },
     "FlyQuest": {
       "seed": 9,
       "valve": 1271,
-      "hltv": 37
+      "hltv": 37,
+      "alias": []
     },
     "Lynn Vision": {
       "seed": 10,
       "valve": 1420,
-      "hltv": 77
+      "hltv": 77,
+      "alias": []
     },
     "M80": {
       "seed": 11,
       "valve": 1321,
-      "hltv": 63
+      "hltv": 63,
+      "alias": []
     },
     "Fluxo": {
       "seed": 12,
       "valve": 1280,
-      "hltv": 28
+      "hltv": 28,
+      "alias": []
     },
     "RED Canids": {
       "seed": 13,
       "valve": 1076,
-      "hltv": 13
+      "hltv": 13,
+      "alias": []
     },
     "The Huns": {
       "seed": 14,
       "valve": 1111,
-      "hltv": 11
+      "hltv": 11,
+      "alias": []
     },
     "NRG": {
       "seed": 15,
       "valve": 1302,
-      "hltv": 30
+      "hltv": 30,
+      "alias": []
     },
     "Rare Atom": {
       "seed": 16,
       "valve": 1175,
-      "hltv": 20
+      "hltv": 20,
+      "alias": []
     }
   }
 }

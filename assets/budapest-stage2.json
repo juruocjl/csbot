@@ -7,27 +7,32 @@
     "Aurora": {
       "seed": 1,
       "valve": 1816,
-      "hltv": 275
+      "hltv": 275,
+      "alias": []
     },
     "Natus Vincere": {
       "seed": 2,
       "valve": 1707,
-      "hltv": 262
+      "hltv": 262,
+      "alias": ["navi"]
     },
     "Liquid": {
       "seed": 3,
       "valve": 1712,
-      "hltv": 146
+      "hltv": 146,
+      "alias": []
     },
     "3DMAX": {
       "seed": 4,
       "valve": 1607,
-      "hltv": 197
+      "hltv": 197,
+      "alias": ["3D"]
     },
     "Astralis": {
       "seed": 5,
       "valve": 1656,
-      "hltv": 208
+      "hltv": 208,
+      "alias": ["AST"]
     },
     "TYLOO": {
       "seed": 6,
@@ -37,52 +42,62 @@
     "MIBR": {
       "seed": 7,
       "valve": 1321,
-      "hltv": 31
+      "hltv": 31,
+      "alias": []
     },
     "Passion UA": {
       "seed": 8,
       "valve": 819,
-      "hltv": 76
+      "hltv": 76,
+      "alias": ["PUA"]
     },
     "M80": {
       "seed": 9,
       "valve": 1421,
-      "hltv": 66
+      "hltv": 66,
+      "alias": []
     },
     "FlyQuest": {
       "seed": 10,
       "valve": 1422,
-      "hltv": 44
+      "hltv": 44,
+      "alias": []
     },
     "B8": {
       "seed": 11,
       "valve": 1587,
-      "hltv": 73
+      "hltv": 73,
+      "alias": []
     },
     "fnatic": {
       "seed": 12,
       "valve": 1445,
-      "hltv": 62
+      "hltv": 62,
+      "alias": ["FNC"]
     },
     "Ninjas in Pyjamas": {
       "seed": 13,
       "valve": 1387,
-      "hltv": 40
+      "hltv": 40,
+      "alias": ["NIP"]
     },
     "PARIVISION": {
       "seed": 14,
       "valve": 1496,
-      "hltv": 28
+      "hltv": 28,
+      "alias": ["PV"]
     },
     "Imperial": {
       "seed": 15,
       "valve": 1330,
-      "hltv": 22
+      "hltv": 22,
+      "alias": ["IMP"]
     },
     "FaZe": {
       "seed": 16,
       "valve": 1562,
-      "hltv": 186
+      "hltv": 186,
+      "alias": ["faze clan"]
     }
   }
 }

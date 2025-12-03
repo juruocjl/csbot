@@ -12,6 +12,8 @@ from nonebot import logger
 get_cursor = require("utils").get_cursor
 localstorage = require("utils").localstorage
 
+from fuzzywuzzy import process
+from unicodedata import normalize
 import json
 import asyncio
 from pathlib import Path
@@ -67,12 +69,24 @@ db = DataManager()
 
 teamfile = Path(".") / "assets" / f"{config.major_stage}.json"
 major_teams = []
+alias2full = {}
 try:
     with open(teamfile, "r") as f:
         data = json.load(f)
         major_teams = list(data['teams'].keys())
+        for team_name, team_data in data['teams'].items():
+            alias2full[team_name] = team_name
+            for alias in team_data['alias']:
+                alias2full[alias] = team_name
 except:
     logger.fail("fail to load teams")
+
+
+def get_name(wuzzyname):
+    # 模糊匹配得到准确名称
+    match, _ = process.extractOne(wuzzyname, alias2full.keys())
+    return alias2full[match]
+
 file_path = "result.txt"
 
 
@@ -119,16 +133,9 @@ def calc_val(uid: str):
 async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
     uid = message.get_user_id()
     teams = []
-    for team in arg.extract_plain_text().split(','):
-        team = team.strip()
-        ok = False
-        for nowteam in major_teams:
-            if team.lower() == nowteam.lower():
-                teams.append(nowteam)
-                ok = True
-                break
-        if not ok:
-            await hwadd.finish(f"未知队伍 {team}")
+    for team in normalize('NFKC', arg.extract_plain_text()).split(','):
+        teams.append(get_name(team))
+    await hwadd.send(f"模糊匹配得到队伍 {teams}，请仔细核对")
     logger.info(teams)
     if len(teams) != 10 or len(set(teams)) != 10:
         await hwadd.finish("请输入十只不同队伍")

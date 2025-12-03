@@ -6,6 +6,7 @@ import sys
 import csv
 from pathlib import Path
 from nonebot import logger
+from fuzzywuzzy import process
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,6 +31,7 @@ class Team:
     id: int
     name: str
     seed: int
+    alias: List[str]
     rating: Tuple[int, ...]
 
 
@@ -150,6 +152,7 @@ def load_teams(file_path: str | Path) -> List[Team]:
                 id=i,
                 name=team_name,
                 seed=team_data["seed"],
+                alias=team_data["alias"],
                 rating=rating
             )
         )
@@ -183,10 +186,21 @@ def gen_win_matrix(file_path : Path | str, finish_match : List[Tuple[str, str, s
 
     teams = load_teams(file_path)
 
+    alias2full = {}
+    for team in teams:
+        alias2full[team.name] = team.name
+        for alias in team.alias:
+            alias2full[alias] = team.name
+    def get_name(wuzzyname):
+        # 模糊匹配得到准确名称
+        match, _ = process.extractOne(wuzzyname, alias2full.keys())
+        return alias2full[match]
     # ⭐ 现在你可以在这里调节 HLTV 指数
     win_matrix = calculate_win_matrix(teams, hltv_exp=HLTV_EXP)
 
     for teama, teamb, _ in finish_match:
+        teama = get_name(teama)
+        teamb = get_name(teamb)
         win_matrix[teama][teamb] = 1
         win_matrix[teamb][teama] = 0
         
