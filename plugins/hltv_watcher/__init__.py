@@ -35,7 +35,7 @@ async def update_events():
     bot = get_bot()
     for event in config.hltv_event_id_list:
         logger.info(f"start get {event}")
-        title, res = get_matches(event)
+        title, res = await get_matches(event)
         oldres = json.loads(localstorage.get(f"hltvresult{event}", default="[]"))
         if len(res) != len(oldres):
             text = title + " 结果有更新"

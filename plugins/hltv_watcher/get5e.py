@@ -18,7 +18,6 @@ async def get_matches(event):
                 if team2_score > team1_score:
                     team1, team2 = team2, team1
                     team1_score, team2_score = team2_score, team1_score
-                print()
                 res.append((team1, team2, f"{team1_score}:{team2_score}"))
         res.reverse()
         return title, res 
