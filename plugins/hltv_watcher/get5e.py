@@ -11,8 +11,8 @@ async def get_matches(event):
         for match in data['data']['matches']:
             if int(match['state']['status']) == 2:
                 title = match['tt_info']['disp_name']
-                team1 = match['mc_info']['t1_info']['disp_name']
-                team2 = match['mc_info']['t2_info']['disp_name']
+                team1 = match['mc_info']['t1_info']['disp_name'].strip()
+                team2 = match['mc_info']['t2_info']['disp_name'].strip()
                 team1_score = int(match['state']['t1_score'])
                 team2_score = int(match['state']['t2_score'])
                 if team2_score > team1_score:
