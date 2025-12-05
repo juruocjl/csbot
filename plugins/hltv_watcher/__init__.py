@@ -8,6 +8,7 @@ from nonebot import logger
 
 from .get5e import get_matches
 
+from typing import List, Tuple
 import json
 import asyncio
 
@@ -35,18 +36,25 @@ async def update_events():
     bot = get_bot()
     for event in config.hltv_event_id_list:
         logger.info(f"start get {event}")
-        title, res = await get_matches(event)
-        oldres = json.loads(localstorage.get(f"hltvresult{event}", default="[]"))
-        if len(res) != len(oldres):
+        title, newres = await get_matches(event)
+        res: List[Tuple[str, str, str, str]] = json.loads(localstorage.get(f"hltvresult{event}", default="[]"))
+        res.reverse()
+        newres.reverse()
+        ids = set([match[3] for match in res])
+        if len(newres) != len(res):
             text = title + " 结果有更新"
-            for i in range(len(res) - len(oldres)):
-                text += f"\n{res[i][0]} {res[i][2]} {res[i][1]}"
+            for match in newres:
+                if match[3] not in ids:
+                    text += f"\n{match[0]} vs {match[1]} {match[2]}"
+                    res.append(match)
+                    ids.add(match[3])
             for groupid in config.cs_group_list:
                 await bot.send_msg(
                     message_type="group",
                     group_id=groupid,
                     message=text
                 )
+            res.reverse()
             localstorage.set(f"hltvresult{event}", json.dumps(res))
             await event_update(event)
         await asyncio.sleep(2)

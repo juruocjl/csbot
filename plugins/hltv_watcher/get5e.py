@@ -15,9 +15,10 @@ async def get_matches(event):
                 team2 = match['mc_info']['t2_info']['disp_name'].strip()
                 team1_score = int(match['state']['t1_score'])
                 team2_score = int(match['state']['t2_score'])
+                matchid = match['mc_info']['id']
                 if team2_score > team1_score:
                     team1, team2 = team2, team1
                     team1_score, team2_score = team2_score, team1_score
-                res.append((team1, team2, f"{team1_score}:{team2_score}"))
+                res.append((team1, team2, f"{team1_score}:{team2_score}", matchid))
         res.reverse()
         return title, res 

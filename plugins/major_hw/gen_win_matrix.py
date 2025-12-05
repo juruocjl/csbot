@@ -182,7 +182,7 @@ def save_win_matrix_to_csv(win_matrix: Dict[str, Dict[str, float]], teams: List[
             writer.writerow(row)
 
 
-def gen_win_matrix(file_path : Path | str, finish_match : List[Tuple[str, str, str]]):
+def gen_win_matrix(file_path : Path | str, finish_match : List[Tuple[str, str, str, str]]):
 
     teams = load_teams(file_path)
 
@@ -198,7 +198,7 @@ def gen_win_matrix(file_path : Path | str, finish_match : List[Tuple[str, str, s
     # ⭐ 现在你可以在这里调节 HLTV 指数
     win_matrix = calculate_win_matrix(teams, hltv_exp=HLTV_EXP)
 
-    for teama, teamb, _ in finish_match:
+    for teama, teamb, _, _ in finish_match:
         teama = get_name(teama)
         teamb = get_name(teamb)
         win_matrix[teama][teamb] = 1
