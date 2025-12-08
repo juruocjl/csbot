@@ -1,0 +1,28 @@
+{
+  "teams": {
+    "FURIA": {
+      "alias": []
+    },
+    "Vitality": {
+      "alias": ["VIT"]
+    },
+    "Falcons": {
+      "alias": ["FLC"]
+    },
+    "The MongolZ": {
+      "alias": []
+    },
+    "MOUZ": {
+      "alias": []
+    },
+    "Spirit": {
+      "alias": []
+    },
+    "Natus Vincere": {
+      "alias": ["navi"]
+    },
+    "FaZe": {
+      "alias": ["faze clan"]
+    }
+  }
+}
