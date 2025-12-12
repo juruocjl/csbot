@@ -205,7 +205,7 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
     await hwadd.send(f"模糊匹配得到队伍 {teams}，请仔细核对")
     if config.major_stage == "playoffs":
         if len(teams) != 7:
-            await hwadd.finish("请输入七只只不同队伍")
+            await hwadd.finish("请输入七只不同队伍")
         quad = teams[:4]
         semi = teams[4:6]
         final = teams[6:]
@@ -355,6 +355,21 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
             res[uid][stage] = wr
     text = ""
     for uid, data in res.items():
+        right = 0
+        wrong = 0
+        for stage in major_all_stages:
+            if data.get(stage, float("nan")) == 1.0:
+                right += 1
+            elif data.get(stage, float("nan")) == 0.0:
+                wrong += 1
+        if right == 6:
+            text += "💎 "
+        elif right >= 3:
+            text += "🥇 "
+        elif wrong > 3:
+            text += "🥈 "
+        else:
+            text += "❔ "
         for stage in major_all_stages:
             text += to_emoji(data.get(stage, float("nan")))
         text += " "
