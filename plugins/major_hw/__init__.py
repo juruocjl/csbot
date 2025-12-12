@@ -364,7 +364,7 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
                 wrong += 1
         if right == 6:
             text += "💎 "
-        elif right >= 3:
+        elif right >= 3 and wrong != 0:
             text += "🥇 "
         elif wrong > 3:
             text += "🥈 "
