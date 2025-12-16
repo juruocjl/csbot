@@ -59,7 +59,7 @@ class DataManager:
         注意：原逻辑会将 winrate 和 expval 重置为 0.0，
         session.merge 会完全覆盖旧记录，行为一致。
         """
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             async with session.begin():
                 new_hw = MajorHW(
                     uid=uid, 
@@ -71,7 +71,7 @@ class DataManager:
                 await session.merge(new_hw)
 
     async def get_uid_hw(self, uid: str, stage: str) -> MajorHW | None:
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             # 复合主键查询：session.get 接收一个元组 (uid, stage)
             result = await session.get(MajorHW, (uid, stage))
             return result  # 返回的是 MajorHW 对象，可以直接用 result.teams 访问
@@ -80,7 +80,7 @@ class DataManager:
         """
         合并了原来的两条 UPDATE 语句，一次性更新
         """
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             async with session.begin():
                 # 使用 update 语句直接更新，效率更高
                 stmt = (
@@ -91,7 +91,7 @@ class DataManager:
                 await session.execute(stmt)
 
     async def get_all_hw(self, stage: str) -> List[MajorHW]:
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             stmt = select(MajorHW).where(MajorHW.stage == stage)
             result = await session.execute(stmt)
             return result.scalars().all()
