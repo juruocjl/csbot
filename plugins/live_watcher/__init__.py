@@ -7,10 +7,15 @@ from nonebot import logger
 
 import asyncio
 import re
+from sqlalchemy import String, Integer
+from sqlalchemy.orm import Mapped, mapped_column
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
-get_cursor = require("utils").get_cursor
+require("utils")
+
+from ..utils import async_session_factory, Base
+
 get_session = require("utils").get_session
 
 from .config import Config
@@ -24,35 +29,26 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+class LiveStatus(Base):
+    __tablename__ = "live_status"
+
+    liveid: Mapped[str] = mapped_column(String, primary_key=True)
+    islive: Mapped[int] = mapped_column(Integer)
 
 class DataManager:
-    def __init__(self):
-        cursor = get_cursor()
+    async def get_live_status(self, liveid: str) -> int:
+        async with async_session_factory() as session:
+            status_obj = await session.get(LiveStatus, liveid)
+            
+            if status_obj:
+                return status_obj.islive
+            return 0
 
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS live_status (
-            liveid TEXT,
-            islive INT,
-            PRIMARY KEY (liveid)
-        )
-        ''')
-   
-    def get_live_status(self, liveid):
-        cursor = get_cursor()
-        cursor.execute(
-            'SELECT islive FROM live_status WHERE liveid = ?',
-            (liveid, )
-        )
-        if result := cursor.fetchone():
-            return result[0]
-        return 0
-
-    def set_live_status(self, liveid, status):
-        cursor = get_cursor()
-        cursor.execute(
-            'INSERT OR REPLACE INTO live_status (liveid, islive) VALUES (?, ?)',
-            (liveid, status)
-        )
+    async def set_live_status(self, liveid: str, status: int):
+        async with async_session_factory() as session:
+            async with session.begin():
+                new_status = LiveStatus(liveid=liveid, islive=status)
+                await session.merge(new_status)
         
 db = DataManager()
 
@@ -88,14 +84,14 @@ async def live_watcher():
         islive, nickname = await get_live_status(liveid)
         logger.info(f"[live_watcher] {nickname} {islive}")
         new_live_state += f"{nickname} {islive}\n"
-        if islive == 1 and db.get_live_status(liveid) == 0:
+        if islive == 1 and await db.get_live_status(liveid) == 0:
             for groupid in config.cs_group_list:
                 await bot.send_msg(
                     message_type="group",
                     group_id=groupid,
                     message=f"{nickname} 开播了"
                 )
-        db.set_live_status(liveid, islive)
+        await db.set_live_status(liveid, islive)
     global now_live_state
     now_live_state = new_live_state.strip()
 

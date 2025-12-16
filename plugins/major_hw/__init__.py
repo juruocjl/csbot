@@ -14,7 +14,7 @@ from nonebot_plugin_orm import AsyncSession
 
 require("utils")
 
-get_cursor = require("utils").get_cursor
+from ..utils import async_session_factory, Base
 from ..utils import local_storage
 
 from fuzzywuzzy import process
@@ -23,6 +23,8 @@ import json
 import asyncio
 from pathlib import Path
 from typing import List, Tuple
+from sqlalchemy import String, Float, update, select
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .gen_win_matrix import gen_win_matrix
 from .simulate import simulate
@@ -39,37 +41,60 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+class MajorHW(Base):
+    __tablename__ = "major_hw"
+
+    # 复合主键：给两个字段都加上 primary_key=True
+    uid: Mapped[str] = mapped_column(String, primary_key=True)
+    stage: Mapped[str] = mapped_column(String, primary_key=True)
+    
+    teams: Mapped[str] = mapped_column(String)
+    winrate: Mapped[float] = mapped_column(Float)
+    expval: Mapped[float] = mapped_column(Float)
+
 class DataManager:
-    def __init__(self):
-        cursor = get_cursor()
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS major_hw (
-            uid TEXT,
-            stage TEXT,
-            teams TEXT,
-            winrate REAL,
-            expval REAL,
-            PRIMARY KEY (uid, stage)
-        )
-        """)
-    def add_hw(self, uid: str, stage: str, teams: str):
-        cursor = get_cursor()
-        cursor.execute("""
-        INSERT OR REPLACE INTO major_hw (uid, stage, teams, winrate, expval) 
-        VALUES (?, ?, ?, ?, ?)
-        """, (uid, stage, teams, 0.0, 0.0))
-    def get_uid_hw(self, uid: str, stage: str):
-        cursor = get_cursor()
-        cursor.execute("SELECT * FROM major_hw WHERE uid = ? AND stage = ?", (uid, stage))
-        return cursor.fetchone()
-    def set_uid_val(self, uid: str, stage: str, new_winrate: float, new_expval: float):
-        cursor = get_cursor()
-        cursor.execute("UPDATE major_hw SET winrate = ? WHERE uid = ? AND stage = ?", (new_winrate, uid, stage))
-        cursor.execute("UPDATE major_hw SET expval = ? WHERE uid = ? AND stage = ?", (new_expval, uid, stage))
-    def get_all_hw(self, stage: str):
-        cursor = get_cursor()
-        cursor.execute("SELECT * FROM major_hw WHERE stage = ?", (stage, ))
-        return cursor.fetchall()
+    async def add_hw(self, uid: str, stage: str, teams: str):
+        """
+        对应 INSERT OR REPLACE
+        注意：原逻辑会将 winrate 和 expval 重置为 0.0，
+        session.merge 会完全覆盖旧记录，行为一致。
+        """
+        async with self.session_factory() as session:
+            async with session.begin():
+                new_hw = MajorHW(
+                    uid=uid, 
+                    stage=stage, 
+                    teams=teams, 
+                    winrate=0.0, 
+                    expval=0.0
+                )
+                await session.merge(new_hw)
+
+    async def get_uid_hw(self, uid: str, stage: str) -> MajorHW | None:
+        async with self.session_factory() as session:
+            # 复合主键查询：session.get 接收一个元组 (uid, stage)
+            result = await session.get(MajorHW, (uid, stage))
+            return result  # 返回的是 MajorHW 对象，可以直接用 result.teams 访问
+
+    async def set_uid_val(self, uid: str, stage: str, new_winrate: float, new_expval: float):
+        """
+        合并了原来的两条 UPDATE 语句，一次性更新
+        """
+        async with self.session_factory() as session:
+            async with session.begin():
+                # 使用 update 语句直接更新，效率更高
+                stmt = (
+                    update(MajorHW)
+                    .where(MajorHW.uid == uid, MajorHW.stage == stage)
+                    .values(winrate=new_winrate, expval=new_expval)
+                )
+                await session.execute(stmt)
+
+    async def get_all_hw(self, stage: str) -> List[MajorHW]:
+        async with self.session_factory() as session:
+            stmt = select(MajorHW).where(MajorHW.stage == stage)
+            result = await session.execute(stmt)
+            return result.scalars().all()
 
 db = DataManager()
 
@@ -151,8 +176,8 @@ async def calc_val(uid: str) -> Tuple[float, float] | None:
     if config.major_stage == "playoffs":
         result: List[Tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
         result.reverse()
-        if res := db.get_uid_hw(uid, major_stage_name + "-quad"):
-            teams = json.loads(res[2])
+        if res := await db.get_uid_hw(uid, major_stage_name + "-quad"):
+            teams = json.loads(res.teams)
             win_teams = [team1 for team1, _, _, _ in result[33:37]]
             loss_teams = [team2 for _, team2, _, _ in result[33:37]]
             if len(result) >= 37:
@@ -164,9 +189,9 @@ async def calc_val(uid: str) -> Tuple[float, float] | None:
                 prob_ge2 = 0.0
             if sum(1 for team in teams if team in win_teams) >= 2:
                 prob_ge2 = 1.0
-            db.set_uid_val(uid, major_stage_name + "-quad", prob_ge2, correct)
-        if res := db.get_uid_hw(uid, major_stage_name + "-semi"):
-            teams = json.loads(res[2])
+            await db.set_uid_val(uid, major_stage_name + "-quad", prob_ge2, correct)
+        if res := await db.get_uid_hw(uid, major_stage_name + "-semi"):
+            teams = json.loads(res.teams)
             win_teams = [team1 for team1, _, _, _ in result[37:39]]
             loss_teams = [team2 for _, team2, _, _ in result[33:39]]
             if len(result) >= 39:
@@ -178,9 +203,9 @@ async def calc_val(uid: str) -> Tuple[float, float] | None:
                 prob_ge1 = 0.0
             if sum(1 for team in teams if team in win_teams) >= 1:
                 prob_ge1 = 1.0
-            db.set_uid_val(uid, major_stage_name + "-semi", prob_ge1, correct)
-        if res := db.get_uid_hw(uid, major_stage_name + "-final"):
-            teams = json.loads(res[2])
+            await db.set_uid_val(uid, major_stage_name + "-semi", prob_ge1, correct)
+        if res := await db.get_uid_hw(uid, major_stage_name + "-final"):
+            teams = json.loads(res.teams)
             win_teams = [team1 for team1, _, _, _ in result[39:40]]
             loss_teams = [team2 for _, team2, _, _ in result[33:40]]
             if len(result) >= 40:
@@ -192,17 +217,17 @@ async def calc_val(uid: str) -> Tuple[float, float] | None:
                 prob_ge1 = 0.0
             if sum(1 for team in teams if team in win_teams) >= 1:
                 prob_ge1 = 1.0
-            db.set_uid_val(uid, major_stage_name + "-final", prob_ge1, correct)
+            await db.set_uid_val(uid, major_stage_name + "-final", prob_ge1, correct)
     else:
-        if res := db.get_uid_hw(uid, major_stage_name):
-            teams = json.loads(res[2])
+        if res := await db.get_uid_hw(uid, major_stage_name):
+            teams = json.loads(res.teams)
             combo = {
                 '3-0': teams[: 2],
                 '3-1/3-2': teams[2: 8],
                 '0-3': teams[8: ]
             }
             correct_counts, prob_ge5, expected_value = evaluate_combination(combo, results)
-            db.set_uid_val(uid, major_stage_name, prob_ge5, expected_value)
+            await db.set_uid_val(uid, major_stage_name, prob_ge5, expected_value)
             return prob_ge5, expected_value
 
 @hwadd.handle()
@@ -222,14 +247,14 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
         final = teams[6:]
         if len(set(quad)) != 4 or len(set(semi)) != 2 or len(set(final)) != 1:
             await hwadd.finish("请输入正确的淘汰赛队伍数量")
-        db.add_hw(uid, major_stage_name + "-quad", json.dumps(quad))
-        db.add_hw(uid, major_stage_name + "-semi", json.dumps(semi))
-        db.add_hw(uid, major_stage_name + "-final", json.dumps(final))
+        await db.add_hw(uid, major_stage_name + "-quad", json.dumps(quad))
+        await db.add_hw(uid, major_stage_name + "-semi", json.dumps(semi))
+        await db.add_hw(uid, major_stage_name + "-final", json.dumps(final))
         await calc_val(uid)
     else:
         if len(teams) != 10 or len(set(teams)) != 10:
             await hwadd.finish("请输入十只不同队伍")
-        db.add_hw(uid, major_stage_name, json.dumps(teams))
+        await db.add_hw(uid, major_stage_name, json.dumps(teams))
         await hwadd.send("成功添加预测，开始计算概率")
         prob_ge5, expected_value = await calc_val(uid)
         await hwadd.finish(f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}")
@@ -241,17 +266,17 @@ async def hwsee_function(message: MessageEvent):
         if seg.type == "at" and seg.data['qq'] != 'all':
             uid = seg.data['qq']
     if config.major_stage == "playoffs":
-        if quad := db.get_uid_hw(uid, major_stage_name + "-quad"):
-            if semi := db.get_uid_hw(uid, major_stage_name + "-semi"):
-                if final := db.get_uid_hw(uid, major_stage_name + "-final"):
-                    text = f"{to_emoji(quad[3])}四强：{json.loads(quad[2])}\n"
-                    text += f"{to_emoji(semi[3])}决赛：{json.loads(semi[2])}\n"
-                    text += f"{to_emoji(final[3])}冠军：{json.loads(final[2])}\n"
+        if quad := await db.get_uid_hw(uid, major_stage_name + "-quad"):
+            if semi := await db.get_uid_hw(uid, major_stage_name + "-semi"):
+                if final := await db.get_uid_hw(uid, major_stage_name + "-final"):
+                    text = f"{to_emoji(quad.winrate)}四强：{json.loads(quad.teams)}\n"
+                    text += f"{to_emoji(semi.winrate)}决赛：{json.loads(semi.teams)}\n"
+                    text += f"{to_emoji(final.winrate)}冠军：{json.loads(final.teams)}\n"
                     await hwsee.finish(text.strip())
     else:
-        if res := db.get_uid_hw(uid, major_stage_name):
-            prob_ge5, expected_value = res[3:]
-            teams = json.loads(res[2])
+        if res := await db.get_uid_hw(uid, major_stage_name):
+            prob_ge5, expected_value = res.winrate, res.expval
+            teams = json.loads(res.teams)
             text = f"3-0 {teams[:2]}\n"
             text += f"3-1/3-2 {teams[2:8]}\n"
             text += f"0-3 {teams[8:]}\n"
@@ -271,16 +296,16 @@ async def getcard(bot: Bot, gid: str, uid: str):
 @hwrank.handle()
 async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     gid = message.get_session_id().split('_')[1]
-    res = db.get_all_hw(major_stage_name)
+    res = await db.get_all_hw(major_stage_name)
     res = sorted(res, key=lambda x: x[3], reverse=True)
     text = f"{major_stage_name} 作业排行"
     for member in res:
         try:
-            uid = member[0]
+            uid = member.uid
             name = await getcard(bot, gid, uid)
-            text+= f"\n{name} 通过率 {member[3]}"
+            text+= f"\n{name} 通过率 {member.winrate}"
         except:
-            logger.info(f"fail to get {member[0]}")
+            logger.info(f"fail to get {member.uid}")
     await hwrank.finish(text)
 
 @hwupd.handle()
@@ -291,10 +316,10 @@ async def hwupd_function():
     results, total_simulations = parse_simulation_results(file_path)
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 
-    res = db.get_all_hw(major_stage_name)
+    res = await db.get_all_hw(major_stage_name)
     await hwupd.send("开始重新计算所有作业")
     for member in res:
-        await calc_val(member[0])
+        await calc_val(member.uid)
     await hwupd.finish(f"成功计算 {len(res)} 份作业")
 
 @simupd.handle()
@@ -311,9 +336,9 @@ async def event_update(event_id):
         bot = get_bot()
         
         if config.major_stage == "playoffs":
-            res = db.get_all_hw(major_stage_name + "-quad")
+            res = await db.get_all_hw(major_stage_name + "-quad")
             for member in res:
-                await calc_val(member[0])
+                await calc_val(member.uid)
             
             for groupid in config.cs_group_list:
                 await bot.send_msg(
@@ -344,9 +369,9 @@ async def event_update(event_id):
             results, total_simulations = parse_simulation_results(file_path)
             logger.info(f"已加载 {total_simulations} 个模拟结果")
 
-            res = db.get_all_hw(major_stage_name)
+            res = await db.get_all_hw(major_stage_name)
             for member in res:
-                await calc_val(member[0])
+                await calc_val(member.uid)
             
             for groupid in config.cs_group_list:
                 await bot.send_msg(
@@ -362,7 +387,7 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
     gid = message.get_session_id().split('_')[1]
     res = {}
     for stage in major_all_stages:
-        allres = db.get_all_hw(stage)
+        allres = await db.get_all_hw(stage)
         for uid, _, _, wr, _ in allres:
             if uid not in res:
                 res[uid] = {}
@@ -399,10 +424,10 @@ async def hwout_function(bot: Bot, args: Message = CommandArg()):
     stage = params[1] if len(params) > 1 else major_stage_name
     eventid = params[2] if len(params) > 2 else config.major_event_id
 
-    res = db.get_all_hw(stage)
+    res = await db.get_all_hw(stage)
     out = []
     for member in res:
-        out.append({'nickname': await getcard(bot, gid, member[0]), 'teams': json.loads(member[2])})
+        out.append({'nickname': await getcard(bot, gid, member.uid), 'teams': json.loads(member.teams)})
     await hwout.finish(json.dumps({
         'stage': stage,
         'games': json.loads(await local_storage.get(f"hltvresult{eventid}", default="[]")),

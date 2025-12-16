@@ -45,11 +45,7 @@ __plugin_meta__ = PluginMetadata(
 
 require("utils")
 from ..utils import async_session_factory, Base
-
-get_cursor = require("utils").get_cursor
-get_session = require("utils").get_session
-
-get_today_start_timestamp = require("utils").get_today_start_timestamp
+from ..utils import get_session, get_today_start_timestamp
 
 config = get_plugin_config(Config)
 
