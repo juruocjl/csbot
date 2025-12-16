@@ -162,16 +162,10 @@ class DataManager:
                 steamids.add(steamid)
         return list(steamids)
 
-    
-    def get_value_config(self, query_type: str, time_type: str | None) -> Tuple[RankConfig, str]:
+    def get_value_config(self, query_type: str) -> RankConfig:
         if query_type not in self._registry:
             raise ValueError(f"无效的查询类型，支持的有 {list(self._registry.keys())}")
-        rank_config = self._registry[query_type]
-        if time_type is None:
-            time_type = rank_config.default_time
-        if time_type not in rank_config.allowed_time:
-            raise ValueError(f"无效的时间范围，支持的有 {rank_config.allowed_time}")
-        return rank_config, time_type
+        return self._registry[query_type]
 
 
     def get_all_value(self, steamid, time_type):
@@ -237,7 +231,7 @@ class DataManager:
             prompt += f"{time_type}场均闪白对手 {avgFS :+.2f}，"
             prompt += f"{time_type}场均闪白队友 {avgFT :+.2f}，"
             try:
-                var = await (self.get_value_config("方差rt", time_type)[0].func(steamid, time_type))
+                var = await (self.get_value_config("方差rt").func(steamid, time_type))
                 prompt += f"{time_type}rating方差 {var :+.2f}，"
             except ValueError as e:
                 pass

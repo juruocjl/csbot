@@ -38,7 +38,11 @@ dayreport = on_command("日报", priority=10, block=True)
 async def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
     prize_name = "🥇🥈🥉456789"
     datas = []
-    config, time_type = db_val.get_value_config(rank_type, time_type)
+    config = db_val.get_value_config(rank_type)
+    if time_type is None:
+        time_type = config.default_time
+    if time_type not in config.allowed_time:
+        raise ValueError(f"无效的时间范围，支持的有 {config.allowed_time}")
     for steamid in steamids:
         try:
             val = await config.func(steamid, time_type)

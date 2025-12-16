@@ -144,7 +144,11 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
             if len(cmd) >= 2:
                 time_type = cmd[1]
             try:
-                config, time_type = db_val.get_value_config(rank_type, time_type)
+                config = db_val.get_value_config(rank_type)
+                if time_type is None:
+                    time_type = config.default_time
+                if time_type not in config.allowed_time:
+                    raise ValueError(f"无效的时间范围，支持的有 {config.allowed_time}")
                 datas = []
                 for steamid in steamids:
                     try:

@@ -160,7 +160,9 @@ async def ai_ask2(uid, sid, type, text) -> str:
             data = json.loads(data.strip())
             rank_type = process.extractOne(data['type'], valid_rank)[0]
             time_type = process.extractOne(data['time'], valid_time)[0]
-            rankconfig, time_type = db_val.get_value_config(rank_type, time_type)
+            rankconfig = db_val.get_value_config(rank_type)
+            if time_type not in rankconfig.allowed_time:
+                time_type = rankconfig.default_time
             rv = data['reverse']
             rv_name = "降序" if rv else "升序"
             datas = []
@@ -176,7 +178,7 @@ async def ai_ask2(uid, sid, type, text) -> str:
             datas = sorted(datas, key=lambda x: x[1][0], reverse=rv)
             avg = sum([x[1][0] for x in datas]) / len(datas)
             datas = datas[:5]
-            res = f"{rank_type}平均值{avg}，{rv_name}前五名："
+            res = f"{time_type} {rank_type}平均值{avg}，{rv_name}前五名："
             for x in datas:
                 res += f"{steamid_username[x[0]]} {x[1][0]}，"
             msgs.append({"role": "system", "content":res})
