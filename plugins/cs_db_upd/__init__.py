@@ -12,7 +12,7 @@ get_session = require("utils").get_session
 async_download = require("utils").async_download
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
-from sqlalchemy import String, select, delete
+from sqlalchemy import String, Float, Integer, select, delete, func
 from sqlalchemy.orm import Mapped, mapped_column
 from pathlib import Path
 import asyncio
@@ -44,7 +44,69 @@ class MemberSteamID(Base):
     uid: Mapped[str] = mapped_column(String, primary_key=True)
     steamid: Mapped[str] = mapped_column(String)
 
+class MatchStatsGP(Base):
+    __tablename__ = "matches_gp"
 
+    # --- 复合主键 ---
+    mid: Mapped[str] = mapped_column(String, primary_key=True)
+    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+
+    # --- 基础信息 ---
+    mapName: Mapped[str] = mapped_column(String)
+    team: Mapped[int] = mapped_column(Integer)
+    winTeam: Mapped[int] = mapped_column(Integer)
+    score1: Mapped[int] = mapped_column(Integer)
+    score2: Mapped[int] = mapped_column(Integer)
+    timeStamp: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String)
+    duration: Mapped[int] = mapped_column(Integer)
+    
+    # --- 击杀/死亡数据 ---
+    kill: Mapped[int] = mapped_column(Integer)
+    handGunKill: Mapped[int] = mapped_column(Integer)
+    entryKill: Mapped[int] = mapped_column(Integer)
+    awpKill: Mapped[int] = mapped_column(Integer)
+    death: Mapped[int] = mapped_column(Integer)
+    entryDeath: Mapped[int] = mapped_column(Integer)
+    assist: Mapped[int] = mapped_column(Integer)
+    headShot: Mapped[int] = mapped_column(Integer)
+    
+    # --- 评分 (Float) ---
+    rating: Mapped[float] = mapped_column(Float)
+    
+    # --- 投掷物/战术 ---
+    itemThrow: Mapped[int] = mapped_column(Integer)
+    flash: Mapped[int] = mapped_column(Integer)
+    flashTeammate: Mapped[int] = mapped_column(Integer)
+    flashSuccess: Mapped[int] = mapped_column(Integer)
+    
+    # --- 多杀统计 ---
+    twoKill: Mapped[int] = mapped_column(Integer)
+    threeKill: Mapped[int] = mapped_column(Integer)
+    fourKill: Mapped[int] = mapped_column(Integer)
+    fiveKill: Mapped[int] = mapped_column(Integer)
+    
+    # --- 残局 (Clutch) ---
+    vs1: Mapped[int] = mapped_column(Integer)
+    vs2: Mapped[int] = mapped_column(Integer)
+    vs3: Mapped[int] = mapped_column(Integer)
+    vs4: Mapped[int] = mapped_column(Integer)
+    vs5: Mapped[int] = mapped_column(Integer)
+    
+    # --- 进阶数据 (Float) ---
+    adpr: Mapped[float] = mapped_column(Float)
+    rws: Mapped[float] = mapped_column(Float)
+    kast: Mapped[float] = mapped_column(Float)
+    
+    # --- 其他 ---
+    rank: Mapped[int] = mapped_column(Integer)
+    throwsCnt: Mapped[int] = mapped_column(Integer)
+    bombPlanted: Mapped[int] = mapped_column(Integer)
+    bombDefused: Mapped[int] = mapped_column(Integer)
+    smokeThrows: Mapped[int] = mapped_column(Integer)
+    grenadeDamage: Mapped[int] = mapped_column(Integer)
+    infernoDamage: Mapped[int] = mapped_column(Integer)
+    mvp: Mapped[int] = mapped_column(Integer)
 
 class DataManager:
     def __init__(self):
@@ -126,54 +188,6 @@ class DataManager:
         )
         ''')
 
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS matches_gp (
-            mid TEXT,
-            steamid TEXT,
-            mapName TEXT,
-            team INT,
-            winTeam INT,
-            score1 INT,
-            score2 INT,
-            timeStamp INT,
-            mode TEXT,
-            duration INT,
-            kill INT,
-            handGunKill INT,
-            entryKill INT,
-            awpKill INT,
-            death INT,
-            entryDeath INT,
-            assist INT,
-            headShot INT,
-            rating FLOAT,
-            itemThrow INT,
-            flash INT,
-            flashTeammate INT,
-            flashSuccess INT,
-            twoKill INT,
-            threeKill INT,
-            fourKill INT,
-            fiveKill INT,
-            vs1 INT,
-            vs2 INT,
-            vs3 INT,
-            vs4 INT,
-            vs5 INT,
-            adpr FLOAT,
-            rws FLOAT,
-            kast FLOAT,
-            rank INT,
-            throwsCnt INT,
-            bombPlanted INT,
-            bombDefused INT,
-            smokeThrows INT,
-            grenadeDamage INT,
-            infernoDamage INT,
-            mvp INT,
-            PRIMARY KEY (mid, steamid)
-        )
-        ''')
 
     async def bind(self, uid: str, steamid: str):
         """
@@ -252,14 +266,15 @@ class DataManager:
         return 1
 
     async def update_matchgp(self, mid, timeStamp):
-        cursor = get_cursor()
-        cursor.execute('''
-            SELECT COUNT(*) as cnt FROM matches_gp WHERE mid == ?
-        ''', (mid,))
-        result = cursor.fetchone()
-        if result[0] > 0:
-            # logger.info(f"update_matchgp {mid} already in db")
-            return 0
+        async with async_session_factory() as session:
+            stmt = select(func.count()).select_from(MatchStatsGP).where(MatchStatsGP.mid == mid)
+            
+            result = await session.execute(stmt)
+            count = result.scalar()
+            if count > 0:
+                # logger.info(f"update_matchgp {mid} in db")
+                return 0
+
 
         url = "https://api.wmpvp.com/api/v1/csgo/match"
         payload = {"matchId": mid}
@@ -278,63 +293,73 @@ class DataManager:
 
         base = data['data']['base']
         players = data['data']['players']
-
-        for player in players:
-            cursor.execute('''
-                INSERT OR REPLACE INTO matches_gp (
-                    mid, steamid, mapName, team, winTeam, score1, score2,
-                    timeStamp, mode, duration, kill, handGunKill, entryKill,
-                    awpKill, death, entryDeath, assist, headShot, rating,
-                    itemThrow, flash, flashTeammate, flashSuccess, twoKill,
-                    threeKill, fourKill, fiveKill, vs1, vs2, vs3, vs4, vs5,
-                    adpr, rws, kast, rank, throwsCnt, bombPlanted, bombDefused,
-                    smokeThrows, grenadeDamage, infernoDamage, mvp
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                mid,
-                player['playerId'],
-                base['map'],
-                player['team'],
-                base['winTeam'],
-                base['score1'],
-                base['score2'],
-                timeStamp,
-                base['mode'],
-                base['duration'],
-                player['kill'],
-                player['handGunKill'],
-                player['entryKill'],
-                player['awpKill'],
-                player['death'],
-                player['entryDeath'],
-                player['assist'],
-                player['headShot'],
-                player['rating'],
-                player['itemThrow'],
-                player['flash'],
-                player['flashTeammate'],
-                player['flashSuccess'],
-                player['twoKill'],
-                player['threeKill'],
-                player['fourKill'],
-                player['fiveKill'],
-                player['vs1'],
-                player['vs2'],
-                player['vs3'],
-                player['vs4'],
-                player['vs5'],
-                player['adpr'],
-                player['rws'],
-                player['kast'],
-                player['rank'],
-                player['throwsCnt'],
-                player['bombPlanted'],
-                player['bombDefused'],
-                player['smokeThrows'],
-                player['grenadeDamage'],
-                player['infernoDamage'],
-                int(player['mvp'])
-            ))
+        async with async_session_factory() as session:
+            for player in players:
+                async with session.begin():
+                    # 显式赋值，左边是数据库列名，右边是数据来源
+                    stats_entry = MatchStatsGP(
+                        # --- 主键 ---
+                        mid=mid,
+                        steamid=player['playerId'],
+                        
+                        # --- 基础信息 (来自 base) ---
+                        mapName=base['map'],
+                        team=player['team'],
+                        winTeam=base['winTeam'],
+                        score1=base['score1'],
+                        score2=base['score2'],
+                        timeStamp=timeStamp,
+                        mode=base['mode'],
+                        duration=base['duration'],
+                        
+                        # --- 玩家数据 (来自 player) ---
+                        kill=player['kill'],
+                        handGunKill=player['handGunKill'],
+                        entryKill=player['entryKill'],
+                        awpKill=player['awpKill'],
+                        death=player['death'],
+                        entryDeath=player['entryDeath'],
+                        assist=player['assist'],
+                        headShot=player['headShot'],
+                        rating=player['rating'],
+                        
+                        # --- 投掷物 ---
+                        itemThrow=player['itemThrow'],
+                        flash=player['flash'],
+                        flashTeammate=player['flashTeammate'],
+                        flashSuccess=player['flashSuccess'],
+                        
+                        # --- 多杀 ---
+                        twoKill=player['twoKill'],
+                        threeKill=player['threeKill'],
+                        fourKill=player['fourKill'],
+                        fiveKill=player['fiveKill'],
+                        
+                        # --- 残局 ---
+                        vs1=player['vs1'],
+                        vs2=player['vs2'],
+                        vs3=player['vs3'],
+                        vs4=player['vs4'],
+                        vs5=player['vs5'],
+                        
+                        # --- 进阶数据 ---
+                        adpr=player['adpr'],
+                        rws=player['rws'],
+                        kast=player['kast'],
+                        
+                        # --- 其他 ---
+                        rank=player['rank'],
+                        throwsCnt=player['throwsCnt'],
+                        bombPlanted=player['bombPlanted'],
+                        bombDefused=player['bombDefused'],
+                        smokeThrows=player['smokeThrows'],
+                        grenadeDamage=player['grenadeDamage'],
+                        infernoDamage=player['infernoDamage'],
+                        mvp=int(player['mvp']) # 类型转换
+                    )
+                    
+                    # 执行 Upsert (存在则更新，不存在则插入)
+                    await session.merge(stats_entry)
 
         logger.info(f"update_matchgp {mid} success")
         return 1

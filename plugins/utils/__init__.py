@@ -7,7 +7,7 @@ from sqlalchemy import select, String, Text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass, Mapped, mapped_column
 
 import datetime
 import time
@@ -61,7 +61,7 @@ def output(val, format):
     elif format.startswith("p"):
         return f"{val * 100: .{int(format[1:])}f}%"
 
-class Base(DeclarativeBase):
+class Base(MappedAsDataclass, DeclarativeBase):
     pass
 
 class StorageItem(Base):
