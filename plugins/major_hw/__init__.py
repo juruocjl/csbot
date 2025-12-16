@@ -202,6 +202,8 @@ def calc_val(uid: str) -> Tuple[float, float] | None:
 
 @hwadd.handle()
 async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
+    if len(major_teams) == 0:
+        await hwadd.finish("当前阶段不可做作业")
     uid = message.get_user_id()
     teams = []
     for team in normalize('NFKC', arg.extract_plain_text()).split(','):

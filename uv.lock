@@ -3040,7 +3040,13 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+aiosqlite = [
+    { name = "sqlalchemy", extra = ["aiosqlite"] },
+]
 default = [
+    { name = "sqlalchemy", extra = ["aiosqlite"] },
+]
+sqlite = [
     { name = "sqlalchemy", extra = ["aiosqlite"] },
 ]
 
@@ -4724,7 +4730,7 @@ dependencies = [
     { name = "nonebot-adapter-onebot" },
     { name = "nonebot-plugin-apscheduler" },
     { name = "nonebot-plugin-memes" },
-    { name = "nonebot-plugin-orm", extra = ["default"] },
+    { name = "nonebot-plugin-orm", extra = ["aiosqlite", "default", "sqlite"] },
     { name = "nonebot2", extra = ["fastapi", "httpx"] },
     { name = "openai" },
     { name = "pip" },
@@ -4753,7 +4759,7 @@ requires-dist = [
     { name = "nonebot-adapter-onebot", specifier = ">=2.4.6" },
     { name = "nonebot-plugin-apscheduler", specifier = ">=0.5.0" },
     { name = "nonebot-plugin-memes", specifier = ">=0.8.1" },
-    { name = "nonebot-plugin-orm", extras = ["default"], specifier = ">=0.8.2" },
+    { name = "nonebot-plugin-orm", extras = ["aiosqlite", "default", "sqlite"], specifier = ">=0.8.2" },
     { name = "nonebot2", extras = ["fastapi", "httpx"], specifier = ">=2.4.3" },
     { name = "openai", specifier = ">=2.6.1" },
     { name = "pip", specifier = ">=25.3" },
