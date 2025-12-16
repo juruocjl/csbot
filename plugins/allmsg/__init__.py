@@ -593,11 +593,11 @@ async def roll_admin(groupid: str):
         if userid != adminuid:
             if steamid := await db_val.get_steamid(userid):
                 try:
-                    ttcount = await ttconfig.func(steamid, "昨日")
+                    ttcount = await ttconfig.func(steamid, "昨日")[0]
                 except:
                     ttcount = 0
                 try:
-                    gpcount = await gpconfig.func(steamid, "昨日")
+                    gpcount = await gpconfig.func(steamid, "昨日")[0]
                 except:
                     gpcount = 0
                 point = (sum_point / (cnt_ban + 1) + 1) * (math.log(1 + ttcount + 0.5 * gpcount))
