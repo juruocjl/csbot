@@ -9,7 +9,6 @@ from nonebot import logger
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
-get_cursor = require("utils").get_cursor
 output = require("utils").output
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
@@ -23,7 +22,8 @@ from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time,valid_rank
 from ..cs_db_val import NoValueError
 
-db_upd = require("cs_db_upd").db
+require("cs_db_upd")
+from ..cs_db_upd import db as db_upd
 
 
 from .config import Config
@@ -85,7 +85,7 @@ async def update_function(message: MessageEvent):
     uid = message.get_user_id()
     sid = message.get_session_id()
 
-    db_upd.add_member(sid, uid)
+    await db_upd.add_member(sid, uid)
 
     print("user: %s\nsession: %s\n" % (uid, sid))
     steamid = db_val.get_steamid(uid)
@@ -107,7 +107,7 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     
-    db_upd.add_member(sid, uid)
+    await db_upd.add_member(sid, uid)
     print("user: %s\nsession: %s\n" % (uid, sid))
     steamid = db_val.get_steamid(uid)
     if user := db_val.work_msg(args):
@@ -134,7 +134,7 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
 
     text = args.extract_plain_text()
-    steamids = db_val.get_member_steamid(sid)
+    steamids = await db_val.get_member_steamid(sid)
 
     if text:
         cmd = text.split()

@@ -76,13 +76,13 @@ async def get_report(time_type, steamids):
 @weekreport.handle()
 async def weekreport_function(message: MessageEvent):
     sid = message.get_session_id()
-    steamids = db_val.get_member_steamid(sid)
+    steamids = await db_val.get_member_steamid(sid)
     await weekreport.finish("== 周报 ==\n" + await get_report("本周", steamids))
     
 @dayreport.handle()
 async def dayreport_function(message: MessageEvent):
     sid = message.get_session_id()
-    steamids = db_val.get_member_steamid(sid)
+    steamids = await db_val.get_member_steamid(sid)
     await dayreport.finish("== 日报 ==\n" + await get_report("今日", steamids))
 
 @scheduler.scheduled_job("cron", hour="23", minute="30", id="dayreport")
@@ -91,7 +91,7 @@ async def send_day_report():
         result = await db_upd.update_stats(steamid)
     bot = get_bot()
     for groupid in config.cs_group_list:
-        steamids = db_val.get_member_steamid(f"group_{groupid}")
+        steamids = await db_val.get_member_steamid(f"group_{groupid}")
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
@@ -102,7 +102,7 @@ async def send_day_report():
 async def send_week_report():
     bot = get_bot()
     for groupid in config.cs_group_list:
-        steamids = db_val.get_member_steamid(f"group_{groupid}")
+        steamids = await db_val.get_member_steamid(f"group_{groupid}")
         await bot.send_msg(
             message_type="group",
             group_id=groupid,

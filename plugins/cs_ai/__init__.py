@@ -86,7 +86,7 @@ aimem = on_command("ai记忆", priority=10, block=True)
 model_name = config.cs_ai_model
 
 async def ai_ask2(uid, sid, type, text) -> str:
-    steamids = db_val.get_member_steamid(sid)
+    steamids = await db_val.get_member_steamid(sid)
     mysteamid = db_val.get_steamid(uid)
     try:
         client = OpenAI(

@@ -3,6 +3,9 @@ from nonebot.plugin import PluginMetadata
 from nonebot import require
 from nonebot import logger
 
+require("cs_db_upd")
+from ..cs_db_upd import GroupMember
+
 get_cursor = require("utils").get_cursor
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
@@ -10,6 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Callable, Awaitable
 import time
+from sqlalchemy import select
 
 from .config import Config
 
@@ -110,20 +114,25 @@ class DataManager:
         cursor.execute('SELECT steamid FROM members_steamid',)
         return [row[0] for row in cursor.fetchall()]
     
-    def get_member(self, gid):
-        if gid.startswith("group_"):
-            gid = gid.split("_")[1]
-            cursor = get_cursor()
-            cursor.execute(
-                'SELECT uid FROM group_members WHERE gid = ?',
-                (gid, )
-            )
-            members = [row[0] for row in cursor.fetchall()]
-            return members
+    async def get_member(self, sid: str) -> list[str]:
+        """
+        获取群成员列表
+        """
+        # 保持原有逻辑：检查前缀
+        if sid.startswith("group_"):
+            gid = sid.split("_")[1]
+
+            async with self.session_factory() as session:
+                stmt = select(GroupMember.uid).where(GroupMember.gid == gid)
+                
+                result = await session.execute(stmt)
+                
+                return list(result.scalars().all())
+        
         return []
     
-    def get_member_steamid(self, gid):
-        uids = self.get_member(gid)
+    async def get_member_steamid(self, sid):
+        uids = await self.get_member(sid)
         steamids = set()
         for uid in uids:
             if steamid := self.get_steamid(uid):

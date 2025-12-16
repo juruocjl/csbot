@@ -3,11 +3,17 @@ from nonebot.plugin import PluginMetadata
 from nonebot import require
 from nonebot import logger
 
+require("utils")
+
+from ..utils import Base, async_session_factory
+
 get_cursor = require("utils").get_cursor
 get_session = require("utils").get_session
 async_download = require("utils").async_download
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
+from sqlalchemy import String, select, delete
+from sqlalchemy.orm import Mapped, mapped_column
 from pathlib import Path
 import asyncio
 
@@ -26,17 +32,17 @@ config = get_plugin_config(Config)
 SeasonId = config.cs_season_id
 lastSeasonId = config.cs_last_season_id
 
+class GroupMember(Base):
+    __tablename__ = "group_members"
+
+    # 复合主键：两个字段都设为 primary_key=True
+    gid: Mapped[str] = mapped_column(String, primary_key=True)
+    uid: Mapped[str] = mapped_column(String, primary_key=True)
+
 class DataManager:
     def __init__(self):
         cursor = get_cursor()
         
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS group_members (
-            gid TEXT,
-            uid TEXT,
-            PRIMARY KEY (gid, uid)
-        )
-        ''')
 
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS members_steamid (
@@ -442,13 +448,14 @@ class DataManager:
         
         return (True, name, addMatches, addMatchesGP)
     
-    def add_member(self, gid, uid):
+    async def add_member(self, gid, uid):
         if gid.startswith("group_"):
-            gid = gid.split("_")[1]
-            cursor = get_cursor()
-            cursor.execute(
-                'INSERT OR IGNORE INTO group_members (gid, uid) VALUES (?, ?)',
-                (gid, uid)
-            )
+            clean_gid = gid.split("_")[1]
+
+            async with async_session_factory() as session:
+                async with session.begin():
+                    
+                    new_member = GroupMember(gid=clean_gid, uid=uid)
+                    await session.merge(new_member)
   
 db = DataManager()
