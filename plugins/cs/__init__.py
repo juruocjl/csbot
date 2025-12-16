@@ -21,6 +21,7 @@ gen_stats_image = require("cs_img").gen_stats_image
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time,valid_rank
+from ..cs_db_val import NoValueError
 
 db_upd = require("cs_db_upd").db
 
@@ -150,7 +151,7 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                         val = await config.func(steamid, time_type)
                         print(val)
                         datas.append((steamid, val))
-                    except ValueError as e:
+                    except NoValueError as e:
                         print(e)
                         pass
                 print(datas)

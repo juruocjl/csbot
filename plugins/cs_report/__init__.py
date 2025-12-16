@@ -13,6 +13,7 @@ output = require("utils").output
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
+from ..cs_db_val import NoValueError
 
 db_upd = require("cs_db_upd").db
 
@@ -43,7 +44,7 @@ async def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, fil
             val = await config.func(steamid, time_type)
             if filter(val[0]):
                 datas.append((steamid, val))
-        except ValueError as e:
+        except NoValueError as e:
             pass
     datas = sorted(datas, key=lambda x: x[1][0], reverse=reverse)
     if len(datas) == 0:
@@ -60,30 +61,29 @@ async def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, fil
             result += prize_name[rk[i]] + ". " + db_val.get_stats(datas[i][0])[2] + " " + output(datas[i][1][0], fmt) + "\n"
     return result
 
-def get_report(time_type, steamids):
+async def get_report(time_type, steamids):
     result = ""
-    result += "= 场次榜 =\n" + get_report_part("场次", time_type, steamids, True, "d0")
-    result += "= 高手榜 =\n" + get_report_part("rt", time_type, steamids, True, "d2", filter = lambda x: x > 1)
-    result += "= 菜逼榜 =\n" + get_report_part("rt", time_type, steamids, False, "d2", filter = lambda x: x < 1)
-    result += "= 演员榜 =\n" + get_report_part("演员", time_type, steamids, False, "d2", filter = lambda x: x < 1)
-    result += "= 上分榜 =\n" + get_report_part("上分", time_type, steamids, True, "d0", filter = lambda x: x > 0)
-    result += "= 掉分榜 =\n" + get_report_part("上分", time_type, steamids, False, "d0", filter = lambda x: x < 0)
-    result += "= 本周受益者 = " + get_report_part("受益", "本周", steamids, True, "p2", n=1, filter = lambda x: x > 0)
-    result += "= 本周受害者 = " + get_report_part("受益", "本周", steamids, False, "p2", n=1, filter = lambda x: x < 0)
-
+    result += "= 场次榜 =\n" + await get_report_part("场次", time_type, steamids, True, "d0")
+    result += "= 高手榜 =\n" + await get_report_part("rt", time_type, steamids, True, "d2", filter = lambda x: x > 1)
+    result += "= 菜逼榜 =\n" + await get_report_part("rt", time_type, steamids, False, "d2", filter = lambda x: x < 1)
+    result += "= 演员榜 =\n" + await get_report_part("演员", time_type, steamids, False, "d2", filter = lambda x: x < 1)
+    result += "= 上分榜 =\n" + await get_report_part("上分", time_type, steamids, True, "d0", filter = lambda x: x > 0)
+    result += "= 掉分榜 =\n" + await get_report_part("上分", time_type, steamids, False, "d0", filter = lambda x: x < 0)
+    result += "= 本周受益者 = " + await get_report_part("受益", "本周", steamids, True, "p2", n=1, filter = lambda x: x > 0)
+    result += "= 本周受害者 = " + await get_report_part("受益", "本周", steamids, False, "p2", n=1, filter = lambda x: x < 0)
     return result
 
 @weekreport.handle()
 async def weekreport_function(message: MessageEvent):
     sid = message.get_session_id()
     steamids = db_val.get_member_steamid(sid)
-    await weekreport.finish("== 周报 ==\n" + get_report("本周", steamids))
+    await weekreport.finish("== 周报 ==\n" + await get_report("本周", steamids))
     
 @dayreport.handle()
 async def dayreport_function(message: MessageEvent):
     sid = message.get_session_id()
     steamids = db_val.get_member_steamid(sid)
-    await weekreport.finish("== 日报 ==\n" + get_report("今日", steamids))
+    await dayreport.finish("== 日报 ==\n" + await get_report("今日", steamids))
 
 @scheduler.scheduled_job("cron", hour="23", minute="30", id="dayreport")
 async def send_day_report():
@@ -95,7 +95,7 @@ async def send_day_report():
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message="== 23:30自动日报 ==\n" + get_report("今日", steamids)
+            message="== 23:30自动日报 ==\n" + await get_report("今日", steamids)
         )
 
 @scheduler.scheduled_job("cron", day_of_week="sun", hour="23", minute="45", id="weekreport")
@@ -106,5 +106,5 @@ async def send_week_report():
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message="== 周日23:45自动周报 ==\n" + get_report("本周", steamids)
+            message="== 周日23:45自动周报 ==\n" + await get_report("本周", steamids)
         )
