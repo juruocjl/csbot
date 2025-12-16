@@ -54,8 +54,7 @@ jieba.load_userdict(str(Path("assets") / "dict.txt"))
 class FuduPoint(Base):
     __tablename__ = "fudu_points"
 
-    # 注意：ORM 必须有主键。旧表没有，这里新加一个自增 ID 是最佳实践。
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
     uid: Mapped[str] = mapped_column(String)
     timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
     point: Mapped[int] = mapped_column(Integer)
@@ -63,7 +62,7 @@ class FuduPoint(Base):
 class GroupMsg(Base):
     __tablename__ = "groupmsg"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
     mid: Mapped[int] = mapped_column(Integer)
     sid: Mapped[str] = mapped_column(String)
     timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
