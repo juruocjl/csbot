@@ -74,6 +74,25 @@ class RankConfig:
 valid_rank: List[str] = []
 
 
+def get_time_sql(time_type):
+    if time_type == "今日":
+        return f"(timeStamp >= {get_today_start_timestamp()})"
+    elif time_type == "昨日":
+        return f"({get_today_start_timestamp() - 24 * 3600} <= timeStamp and timeStamp < {get_today_start_timestamp()})"
+    elif time_type == "本周":
+        return f"({int(time.time()) - 7 * 24 * 3600} <= timeStamp)"
+    elif time_type == "本赛季":
+        return f"(seasonId == '{SeasonId}')"
+    elif time_type == "两赛季":
+        return f"(seasonId == '{SeasonId}' or seasonId == '{lastSeasonId}')"
+    elif time_type == "上赛季":
+        return f"(seasonId == '{lastSeasonId}')"
+    elif time_type == "全部":
+        return f"( 1 == 1 )"
+    else:
+        raise ValueError("err time")
+
+
 class DataManager:
     def __init__(self):
         self._registry: Dict[str, RankConfig] = {}
@@ -156,7 +175,7 @@ class DataManager:
 
 
     def get_all_value(self, steamid, time_type):
-        time_sql = self.get_time_sql(time_type)
+        time_sql = get_time_sql(time_type)
         steamid_sql = f"steamid == '{steamid}'"
         cursor = get_cursor()
         cursor.execute(f'''SELECT 
@@ -228,7 +247,7 @@ class DataManager:
         cursor = get_cursor()
         cursor.execute(f'''SELECT * FROM 'matches'
                             WHERE 
-                            {self.get_time_sql(time_type)} and steamid == ?
+                            {get_time_sql(time_type)} and steamid == ?
                             ORDER BY timeStamp DESC
                             LIMIT ?
                         ''', (steamid, LIMIT, ))
@@ -264,24 +283,6 @@ db = DataManager()
 valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
 gp_time = ["今日", "昨日", "本周", "全部"]
 
-
-def get_time_sql(time_type):
-    if time_type == "今日":
-        return f"(timeStamp >= {get_today_start_timestamp()})"
-    elif time_type == "昨日":
-        return f"({get_today_start_timestamp() - 24 * 3600} <= timeStamp and timeStamp < {get_today_start_timestamp()})"
-    elif time_type == "本周":
-        return f"({int(time.time()) - 7 * 24 * 3600} <= timeStamp)"
-    elif time_type == "本赛季":
-        return f"(seasonId == '{SeasonId}')"
-    elif time_type == "两赛季":
-        return f"(seasonId == '{SeasonId}' or seasonId == '{lastSeasonId}')"
-    elif time_type == "上赛季":
-        return f"(seasonId == '{lastSeasonId}')"
-    elif time_type == "全部":
-        return f"( 1 == 1 )"
-    else:
-        raise ValueError("err time")
 
 class NoValueError(Exception):
     pass
