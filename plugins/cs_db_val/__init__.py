@@ -233,7 +233,7 @@ class DataManager:
             try:
                 var, _ = await (self.get_value_config("方差rt").func(steamid, time_type))
                 prompt += f"{time_type}rating方差 {var :+.2f}，"
-            except ValueError as e:
+            except NoValueError as e:
                 pass
         return prompt
 

@@ -170,7 +170,7 @@ async def ai_ask2(uid, sid, type, text) -> str:
                 val = await rankconfig.func(steamid, time_type)
                 datas.append((steamid, val))
             except NoValueError as e:
-                print(e)
+                pass
         print(rank_type, time_type, datas)
         if len(datas) == 0:
             continue
