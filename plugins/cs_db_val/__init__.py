@@ -6,8 +6,11 @@ from nonebot import logger
 require("cs_db_upd")
 from ..cs_db_upd import GroupMember
 
-get_cursor = require("utils").get_cursor
-get_today_start_timestamp = require("utils").get_today_start_timestamp
+require("utils")
+
+from ..utils import async_session_factory
+from ..utils import get_today_start_timestamp
+from ..utils import get_cursor
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -122,7 +125,7 @@ class DataManager:
         if sid.startswith("group_"):
             gid = sid.split("_")[1]
 
-            async with self.session_factory() as session:
+            async with async_session_factory() as session:
                 stmt = select(GroupMember.uid).where(GroupMember.gid == gid)
                 
                 result = await session.execute(stmt)
