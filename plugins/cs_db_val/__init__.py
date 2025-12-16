@@ -8,7 +8,7 @@ get_today_start_timestamp = require("utils").get_today_start_timestamp
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple, Dict, Callable, Awaitable
 import time
 
 from .config import Config
@@ -25,7 +25,63 @@ config = get_plugin_config(Config)
 SeasonId = config.cs_season_id
 lastSeasonId = config.cs_last_season_id
 
+
+class RangeGen(ABC):
+    @abstractmethod
+    def getval(self, a: int, b: int) -> tuple[int, int]:
+        pass
+class MinAdd(RangeGen):
+    def __init__(self, val):
+        self.val = val
+    def getval(self, minvalue, maxvalue):
+        return minvalue + self.val, maxvalue
+class Fix(RangeGen):
+    def __init__(self, val):
+        self.val = val
+    def getval(self, minvalue, maxvalue):
+        return self.val, maxvalue
+class ZeroIn(RangeGen):
+    def __init__(self, val):
+        self.val = val
+    def getval(self, minvalue, maxvalue):
+        minvalue = min(0, minvalue)
+        maxvalue = max(0, maxvalue)
+        if minvalue == maxvalue:
+            minvalue = self.val
+        return minvalue, maxvalue
+
+
+AsyncFloatFunc = Callable[[str, str], Awaitable[Tuple[float, int]]]
+
+@dataclass
+class RankConfig:
+    title: str
+    default_time: str
+    allowed_time: List[str]
+    reversed: bool
+    range_gen: RangeGen
+    outputfmt: str
+    template: int
+    func: AsyncFloatFunc
+
+valid_rank: List[str] = []
+
+
 class DataManager:
+    def __init__(self):
+        self._registry: Dict[str, RankConfig] = {}
+
+    def register(self, name: str, title: str, default_time: str, allowed_time: List[str], reversed: bool, range_gen: RangeGen, outputfmt: str, template: int):
+        if allowed_time is None:
+            allowed_time = [default_time]
+        
+        valid_rank.append(name)
+
+        def decorator(func: Callable):
+            self._registry[name] = RankConfig(title, default_time, allowed_time, reversed, range_gen, outputfmt, template, func)
+            return func
+        return decorator
+
     def get_steamid(self, uid):
         cursor = get_cursor()
         cursor.execute('''
@@ -74,508 +130,16 @@ class DataManager:
                 steamids.add(steamid)
         return list(steamids)
 
-    def get_time_sql(self, time_type):
-        if time_type == "今日":
-            return f"(timeStamp >= {get_today_start_timestamp()})"
-        elif time_type == "昨日":
-            return f"({get_today_start_timestamp() - 24 * 3600} <= timeStamp and timeStamp < {get_today_start_timestamp()})"
-        elif time_type == "本周":
-            return f"({int(time.time()) - 7 * 24 * 3600} <= timeStamp)"
-        elif time_type == "本赛季":
-            return f"(seasonId == '{SeasonId}')"
-        elif time_type == "两赛季":
-            return f"(seasonId == '{SeasonId}' or seasonId == '{lastSeasonId}')"
-        elif time_type == "上赛季":
-            return f"(seasonId == '{lastSeasonId}')"
-        elif time_type == "全部":
-            return f"( 1 == 1 )"
-        else:
-            raise ValueError("err time")
     
-    def get_value(self, steamid, query_type, time_type):
-        time_sql = self.get_time_sql(time_type)
-        steamid_sql = f"steamid == '{steamid}'"
-        cursor = get_cursor()
-        
-        if query_type == "ELO":
-            assert(time_type == "本赛季")
-            result = self.get_stats(steamid)
-            if result and result[18] == SeasonId and result[3] != 0:
-                return result[3], result[4]
-            raise ValueError(f"no {query_type}")
-        if query_type == "rt":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "WE":
-            cursor.execute(f'''SELECT AVG(we) as avgwe, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "ADR":
-            cursor.execute(f'''SELECT AVG(adpr) as avgADR, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "场次":
-            cursor.execute(f'''SELECT COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[0] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "胜率":
-            cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "首杀":
-            assert(time_type == "本赛季")
-            result = self.get_stats(steamid)
-            if result and result[18] == SeasonId and result[4] != 0:
-                return result[15], result[4]
-            raise ValueError(f"no {query_type}")
-        if query_type == "爆头":
-            cursor.execute(f'''SELECT SUM(headShot) as totHS, SUM(kill) as totK, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "1v1":
-            assert(time_type == "本赛季")
-            result = self.get_stats(steamid)
-            if result and result[18] == SeasonId and result[4] != 0:
-                return result[16], result[4]
-            raise ValueError(f"no {query_type}")
-        if query_type == "击杀":
-            cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "死亡":
-            cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "助攻":
-            cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "尽力":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and winTeam != team  
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "带飞":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and winTeam == team  
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "炸鱼":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and winTeam == team  
-                                and min(score1, score2) <= 6
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "演员":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and isgroup == 1  
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "鼓励":
-            cursor.execute(f'''SELECT COUNT(mid) AS total_count
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and isgroup == 0
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[0] > 0:
-               return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "悲情":
-            cursor.execute(f'''SELECT COUNT(mid) AS total_count
-                                FROM 'matches'
-                                WHERE 
-                                (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                and winTeam != team  
-                                and pwRating > 1.2
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[0] > 0:
-               return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "内战":
-            cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                mode == "PVP自定义"
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")        
-        if query_type == "内战胜率":
-            cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
-                                FROM 'matches'
-                                WHERE 
-                                mode == "PVP自定义"
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")       
-        if query_type == "上分":
-            cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "回均首杀":
-            cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "回均首死":
-            cursor.execute(f'''SELECT SUM(firstDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "回均狙杀":
-            cursor.execute(f'''SELECT SUM(snipeNum) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "多杀":
-            cursor.execute(f'''SELECT SUM(twoKill + threeKill + fourKill + fiveKill) as totMK, SUM(score1 + score2) as totR, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "内鬼":
-            cursor.execute(f'''SELECT AVG(flashTeammate) as avgFT, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "投掷":
-            cursor.execute(f'''SELECT AVG(throwsCnt) as avgFT, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "闪白":
-            cursor.execute(f'''SELECT AVG(flashSuccess) as avgFS, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "白给":
-            cursor.execute(f'''SELECT SUM(entryKill - firstDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "方差rt":
-            cursor.execute(f"""
-                                WITH filtered_matches AS (
-                                    SELECT pwRating FROM 'matches'
-                                    WHERE 
-                                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                    and {time_sql} and {steamid_sql}
-                                )
-                                SELECT SUM((pwRating - avg_val) * (pwRating - avg_val)) AS SUM2, COUNT(pwRating) AS CNT
-                                FROM filtered_matches, 
-                                    (SELECT AVG(pwRating) AS avg_val FROM filtered_matches) AS sub
-                            """)
-            result = cursor.fetchone()
-            if result[1] > 1:
-                return (result[0] / (result[1] - 1), result[1])
-            raise ValueError(f"no {query_type}")
-        if query_type == "方差ADR":
-            cursor.execute(f"""
-                                WITH filtered_matches AS (
-                                    SELECT adpr FROM 'matches'
-                                    WHERE 
-                                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                                    and {time_sql} and {steamid_sql}
-                                )
-                                SELECT SUM((adpr - avg_val) * (adpr - avg_val)) AS SUM2, COUNT(adpr) AS CNT
-                                FROM filtered_matches, 
-                                    (SELECT AVG(adpr) AS avg_val FROM filtered_matches) AS sub
-                            """)
-            result = cursor.fetchone()
-            if result[1] > 1:
-                return (result[0] / (result[1] - 1), result[1])
-            raise ValueError(f"no {query_type}")
-        if query_type == "受益":
-            cursor.execute(f'''SELECT AVG(winTeam==Team)-AVG(MAX(0, (we-2.29)/(16-2.29))), COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gprt":
-            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
-                                FROM 'matches_gp'
-                                WHERE 
-                                {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp场次":
-            cursor.execute(f'''SELECT COUNT(*) as cnt
-                                FROM 'matches_gp'
-                                WHERE 
-                                {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[0] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp回均首杀":
-            cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
-                            WHERE 
-                            {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp回均首死":
-            cursor.execute(f'''SELECT SUM(entryDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
-                            WHERE 
-                            {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp回均狙杀":
-            cursor.execute(f'''SELECT SUM(awpKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
-                            WHERE 
-                            {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp白给":
-            cursor.execute(f'''SELECT SUM(entryKill - entryDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt  FROM 'matches_gp'
-                            WHERE 
-                            {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[2] > 0:
-                return (result[0] / result[1], result[2])
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp击杀":
-            cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt FROM 'matches_gp'
-                                WHERE 
-                                {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp死亡":
-            cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt FROM 'matches_gp'
-                                WHERE 
-                                {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp助攻":
-            cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt FROM 'matches_gp'
-                                WHERE 
-                                {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp尽力":
-            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
-                                WHERE 
-                                winTeam != team  
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp带飞":
-            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
-                                WHERE 
-                                winTeam == team  
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "gp炸鱼":
-            cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt FROM 'matches_gp'
-                                WHERE 
-                                winTeam == team  
-                                and min(score1, score2) <= 6
-                                and {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        if query_type == "皮蛋":
-            cursor.execute(f'''SELECT AVG(bombPlanted) as avgBombPlanted, COUNT(mid) as cnt FROM 'matches_gp'
-                                WHERE 
-                                {time_sql} and {steamid_sql}
-                            ''')
-            result = cursor.fetchone()
-            if result[1] > 0:
-                return result
-            raise ValueError(f"no {query_type}")
-        raise ValueError(f"unknown {query_type}")
+    def get_value_config(self, query_type: str, time_type: str | None) -> Tuple[RankConfig, str]:
+        if query_type not in self._registry:
+            raise ValueError(f"无效的查询类型，支持的有 {list(self._registry.keys())}")
+        rank_config = self._registry[query_type]
+        if time_type is None:
+            time_type = rank_config.default_time
+        if time_type not in rank_config.allowed_time:
+            raise ValueError(f"无效的时间范围，支持的有 {rank_config.allowed_time}")
+        return rank_config, time_type
 
 
     def get_all_value(self, steamid, time_type):
@@ -610,7 +174,7 @@ class DataManager:
                         ''')
         return cursor.fetchone()
         
-    def get_propmt(self, steamid, times = ['本赛季']):
+    async def get_propmt(self, steamid, times = ['本赛季']):
         result = self.get_stats(steamid)
         if not result:
             return None
@@ -641,7 +205,7 @@ class DataManager:
             prompt += f"{time_type}场均闪白对手 {avgFS :+.2f}，"
             prompt += f"{time_type}场均闪白队友 {avgFT :+.2f}，"
             try:
-                var = self.get_value(steamid, "方差rt", time_type)[0]
+                var = await (self.get_value_config("方差rt", time_type)[0].func(steamid, time_type))
                 prompt += f"{time_type}rating方差 {var :+.2f}，"
             except ValueError as e:
                 pass
@@ -661,8 +225,7 @@ class DataManager:
             # return await gen_matches_html(result, steamid, self.get_stats(steamid)[2])
         else:
             return None
-
-          
+         
     def get_username(self, uid):
         if steamid := self.get_steamid(uid):
             if result := self.get_stats(steamid):
@@ -684,97 +247,742 @@ class DataManager:
 db = DataManager()
 
 
-class RangeGen(ABC):
-    @abstractmethod
-    def getval(self, a: int, b: int) -> tuple[int, int]:
-        pass
-
-class MinAdd(RangeGen):
-    def __init__(self, val):
-        self.val = val
-    def getval(self, minvalue, maxvalue):
-        return minvalue + self.val, maxvalue
-class Fix(RangeGen):
-    def __init__(self, val):
-        self.val = val
-    def getval(self, minvalue, maxvalue):
-        return self.val, maxvalue
-class ZeroIn(RangeGen):
-    def __init__(self, val):
-        self.val = val
-    def getval(self, minvalue, maxvalue):
-        minvalue = min(0, minvalue)
-        maxvalue = max(0, maxvalue)
-        if minvalue == maxvalue:
-            minvalue = self.val
-        return minvalue, maxvalue
-
 
 valid_time = ["今日", "昨日", "本周", "本赛季", "两赛季", "上赛季", "全部"]
 gp_time = ["今日", "昨日", "本周", "全部"]
 
-@dataclass
-class RankConfig:
-    name: str
-    title: str
-    default_time: str
-    allowed_time: List[str]
-    reversed: bool
-    range_gen: RangeGen
-    outputfmt: str
-    template: int
+
+def get_time_sql(time_type):
+    if time_type == "今日":
+        return f"(timeStamp >= {get_today_start_timestamp()})"
+    elif time_type == "昨日":
+        return f"({get_today_start_timestamp() - 24 * 3600} <= timeStamp and timeStamp < {get_today_start_timestamp()})"
+    elif time_type == "本周":
+        return f"({int(time.time()) - 7 * 24 * 3600} <= timeStamp)"
+    elif time_type == "本赛季":
+        return f"(seasonId == '{SeasonId}')"
+    elif time_type == "两赛季":
+        return f"(seasonId == '{SeasonId}' or seasonId == '{lastSeasonId}')"
+    elif time_type == "上赛季":
+        return f"(seasonId == '{lastSeasonId}')"
+    elif time_type == "全部":
+        return f"( 1 == 1 )"
+    else:
+        raise ValueError("err time")
+
+class NoValueError(Exception):
+    pass
+
+@db.register("ELO", "天梯分数", "本赛季", None, True, MinAdd(-10), "d0", 1)
+async def get_elo(steamid: str, time_type: str) -> Tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = db.get_stats(steamid)
+    if result and result[18] == SeasonId and result[3] != 0:
+        return result[3], result[4]
+    raise NoValueError()
+
+@db.register("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+async def get_rt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2", 1, )
+async def get_we(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(we) as avgwe, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("ADR", "ADR", "本赛季", valid_time, True, MinAdd(-10), "d2", 1)
+async def get_adr(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(adpr) as avgADR, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("场次", "场次", "本赛季", valid_time, True, Fix(0), "d0", 1)
+async def get_matches_cnt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[0] > 0:
+        return result[0], result[0]
+    raise NoValueError()
+
+@db.register("胜率", "胜率", "本赛季", valid_time, True, Fix(0), "p2", 1)
+async def get_winrate(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0", 1)
+async def get_ekrate(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    assert(time_type == "本赛季")
+    result = db.get_stats(steamid)
+    if result and result[18] == SeasonId and result[4] != 0:
+        return result[15], result[4]
+    raise NoValueError()
     
-    def __post_init__(self):
-        if self.allowed_time is None:
-            self.allowed_time = [self.default_time]
+@db.register("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0", 1)
+async def get_hsrate(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(headShot) as totHS, SUM(kill) as totK, COUNT(mid) as cnt
+                    FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0 and result[1] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
 
-rank_config = [
-    RankConfig("ELO", "天梯分数", "本赛季", None, True, MinAdd(-10), "d0", 1),
-    RankConfig("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2", 1, ),
-    RankConfig("ADR", "ADR", "本赛季", valid_time, True, MinAdd(-10), "d2", 1),
-    RankConfig("场次", "场次", "本赛季", valid_time, True, Fix(0), "d0", 1),
-    RankConfig("胜率", "胜率", "本赛季", valid_time, True, Fix(0), "p2", 1),
-    RankConfig("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0", 1),
-    RankConfig("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0", 1),
-    RankConfig("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0", 1),
-    RankConfig("击杀", "场均击杀", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1),
-    RankConfig("死亡", "场均死亡", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1),
-    RankConfig("助攻", "场均助攻", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1),
-    RankConfig("尽力", "未胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("带飞", "胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("炸鱼", "小分平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("演员", "组排平均rt", "两赛季", valid_time, False, MinAdd(-0.05), "d2", 1),
-    RankConfig("鼓励", "单排场次", "两赛季", valid_time, True, Fix(0), "d0", 1),
-    RankConfig("悲情", ">1.2rt未胜利场次", "两赛季", valid_time, True, Fix(0), "d0", 1),
-    RankConfig("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("内战胜率", "pvp自定义胜率", "两赛季", valid_time, True, Fix(0), "p2", 1),
-    RankConfig("上分", "上分", "本周", valid_time, True, ZeroIn(-1), "d0", 2),
-    RankConfig("回均首杀", "平均每回合首杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("回均狙杀", "平均每回合狙杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("多杀", "多杀回合占比", "本赛季", valid_time, True, MinAdd(-0.01), "p0", 1),
-    RankConfig("内鬼", "场均闪白队友", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1),
-    RankConfig("投掷", "场均道具投掷数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1),
-    RankConfig("闪白", "场均闪白数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1),
-    RankConfig("白给", "平均每回合首杀-首死", "本赛季", valid_time, False, ZeroIn(-0.01), "d2", 2),
-    RankConfig("方差rt", "rt方差", "两赛季", valid_time, True, Fix(0) , "d2", 1),
-    RankConfig("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0", 1),
-    RankConfig("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0", 2),
+@db.register("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0", 1)
+async def get_1v1wr(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    assert(time_type == "本赛季")
+    result = db.get_stats(steamid)
+    if result and result[18] == SeasonId and result[4] != 0:
+        return result[16], result[4]
+    raise NoValueError()
 
-    RankConfig("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2),
-    RankConfig("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0", 1),
-    RankConfig("gp回均首杀", "官匹平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("gp回均首死", "官匹平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("gp回均狙杀", "官匹平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1),
-    RankConfig("gp白给", "官匹平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2", 2),
-    RankConfig("gp击杀", "官匹场均击杀", "全部", gp_time, True, MinAdd(-0.1), "d2", 1),
-    RankConfig("gp死亡", "官匹场均死亡", "全部", gp_time, True, MinAdd(-0.1), "d2", 1),
-    RankConfig("gp助攻", "官匹场均助攻", "全部", gp_time, True, MinAdd(-0.1), "d2", 1),
-    RankConfig("gp尽力", "官匹未胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("gp带飞", "官匹胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("gp炸鱼", "官匹小分平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1),
-    RankConfig("皮蛋", "官匹场均下包数", "全部", gp_time, True, Fix(0), "d2", 1),
-]
+@db.register("击杀", "场均击杀", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
+async def get_kills(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
 
-valid_rank = [a.name for a in rank_config]
+@db.register("死亡", "场均死亡", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
+async def get_deaths(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("助攻", "场均助攻", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
+async def get_assists(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("尽力", "未胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+async def get_tryhard(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and winTeam != team  
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("带飞", "胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+async def get_carry(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and winTeam == team  
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("炸鱼", "小分平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+async def get_fish(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and winTeam == team  
+                        and min(score1, score2) <= 6
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("演员", "组排平均rt", "两赛季", valid_time, False, MinAdd(-0.05), "d2", 1)
+async def get_duoqi(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and isgroup == 1  
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("鼓励", "单排场次", "两赛季", valid_time, True, Fix(0), "d0", 1)
+async def get_solo_cnt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT COUNT(mid) AS total_count
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and isgroup == 0
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[0] > 0:
+        return result[0], result[0]
+    raise NoValueError()
+
+@db.register("悲情", ">1.2rt未胜利场次", "两赛季", valid_time, True, Fix(0), "d0", 1)
+async def get_sad_cnt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT COUNT(mid) AS total_count
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and pwRating > 1.2
+                        and winTeam != team
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[0] > 0:
+        return result[0], result[0]
+    raise NoValueError()
+
+@db.register("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+async def get_pvp_rt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        mode == "PVP自定义"
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("内战胜率", "pvp自定义胜率", "两赛季", valid_time, True, Fix(0), "p2", 1)
+async def get_pvp_wr(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        mode == "PVP自定义"
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("上分", "上分", "本周", valid_time, True, ZeroIn(-1), "d0", 2)
+async def get_upscore(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(mid) as cnt
+                        FROM 'matches'
+                        WHERE 
+                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("回均首杀", "平均每回合首杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
+async def get_rpek(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
+async def get_rpfd(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(firstDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("回均狙杀", "平均每回合狙杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
+async def get_rpsn(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(snipeNum) as totSK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("多杀", "多杀回合占比", "本赛季", valid_time, True, MinAdd(-0.01), "p0", 1)
+async def get_rpmk(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(twoKill + threeKill + fourKill + fiveKill) as totMK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("内鬼", "场均闪白队友", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
+async def get_rpft(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(flashTeammate) as avgFT, COUNT(mid) as cnt FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("投掷", "场均道具投掷数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
+async def get_rptr(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(throwsCnt) as avgTR, COUNT(mid) as cnt FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("闪白", "场均闪白数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
+async def get_rpfs(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(flashSuccess) as avgFS, COUNT(mid) as cnt FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("白给", "平均每回合首杀-首死", "本赛季", valid_time, False, ZeroIn(-0.01), "d2", 2)
+async def get_rpbg(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT 
+                        SUM(entryKill) as totEK, 
+                        SUM(firstDeath) as totFD, 
+                        SUM(score1 + score2) as totR, 
+                        COUNT(mid) as cnt 
+                    FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[3] > 0:
+        return ((result[0] - result[1]) / result[2], result[3])
+    raise NoValueError()
+
+@db.register("方差rt", "rt方差", "两赛季", valid_time, True, Fix(0) , "d2", 1)
+async def get_var_rt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f"""
+                        WITH filtered_matches AS (
+                            SELECT pwRating FROM 'matches'
+                            WHERE 
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                        )
+                        SELECT SUM((pwRating - avg_val) * (pwRating - avg_val)) AS SUM2, COUNT(pwRating) AS CNT
+                        FROM filtered_matches, 
+                            (SELECT AVG(pwRating) AS avg_val FROM filtered_matches) AS sub
+                    """)
+    result = cursor.fetchone()
+    if result[1] > 1:
+        return (result[0] / (result[1] - 1), result[1])
+    raise NoValueError()
+
+@db.register("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0", 1)
+async def get_var_adr(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f"""
+                        WITH filtered_matches AS (
+                            SELECT adpr FROM 'matches'
+                            WHERE 
+                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                            and {time_sql} and {steamid_sql}
+                        )
+                        SELECT SUM((adpr - avg_val) * (adpr - avg_val)) AS SUM2, COUNT(adpr) AS CNT
+                        FROM filtered_matches, 
+                            (SELECT AVG(adpr) AS avg_val FROM filtered_matches) AS sub
+                    """)
+    result = cursor.fetchone()
+    if result[1] > 1:
+        return (result[0] / (result[1] - 1), result[1])
+    raise NoValueError()
+
+@db.register("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0", 2)
+async def get_benefit(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(winTeam==Team)-AVG(MAX(0, (we-2.29)/(16-2.29))), COUNT(mid) as cnt
+                    FROM 'matches'
+                    WHERE 
+                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
+                    and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2)
+async def get_gprt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0", 1)
+async def get_gp_matches_cnt(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[0] > 0:
+        return result[0], result[0]
+    raise NoValueError()
+
+@db.register("gp回均首杀", "官匹平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
+async def get_gp_rpek(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
+                    WHERE 
+                    {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("gp回均首死", "官匹平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
+async def get_gp_rpfd(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(firstDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
+                    WHERE 
+                    {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("gp回均狙杀", "官匹平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
+async def get_gp_rpsn(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(snipeNum) as totSK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
+                    WHERE 
+                    {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("gp白给", "官匹平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2", 2)
+async def get_gp_rpbg(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT SUM(entryKill - entryDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt  FROM 'matches_gp'
+                    WHERE 
+                    {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[2] > 0:
+        return (result[0] / result[1], result[2])
+    raise NoValueError()
+
+@db.register("gp击杀", "官匹场均击杀", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
+async def get_gp_kills(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("gp死亡", "官匹场均死亡", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
+async def get_gp_deaths(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("gp助攻", "官匹场均助攻", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
+async def get_gp_assists(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("gp尽力", "官匹未胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
+async def get_gp_tryhard(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        winTeam != team  
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("gp带飞", "官匹胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
+async def get_gp_carry(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        winTeam == team  
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("gp炸鱼", "官匹小分平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
+async def get_gp_fish(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        winTeam == team  
+                        and min(score1, score2) <= 6
+                        and {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+@db.register("皮蛋", "官匹场均下包数", "全部", gp_time, True, Fix(0), "d2", 1)
+async def get_gp_c4(steamid: str, time_type: str) -> Tuple[float, int]:
+    time_sql = get_time_sql(time_type)
+    steamid_sql = f"steamid == '{steamid}'"
+    cursor = get_cursor()
+    cursor.execute(f'''SELECT AVG(bombPlanted) as avgC4, COUNT(mid) as cnt
+                        FROM 'matches_gp'
+                        WHERE 
+                        {time_sql} and {steamid_sql}
+                    ''')
+    result = cursor.fetchone()
+    if result[1] > 0:
+        return result
+    raise NoValueError()
+
+
+
+
+
+
+
+
+
+

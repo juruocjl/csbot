@@ -18,11 +18,11 @@ gen_rank_image2 = require("cs_img").gen_rank_image2
 gen_matches_image = require("cs_img").gen_matches_image
 gen_stats_image = require("cs_img").gen_stats_image
 
+require("cs_db_val")
+from ..cs_db_val import db as db_val
+from ..cs_db_val import valid_time,valid_rank
+
 db_upd = require("cs_db_upd").db
-db_val = require("cs_db_val").db
-valid_time = require("cs_db_val").valid_time
-valid_rank = require("cs_db_val").valid_rank
-rank_config = require("cs_db_val").rank_config
 
 
 from .config import Config
@@ -139,18 +139,15 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
         cmd = text.split()
         if len(cmd) > 0:
             rank_type = cmd[0]
-            if rank_type in valid_rank:
-                index = valid_rank.index(rank_type)
-                config = rank_config[index]
-                time_type = config.default_time
-                if len(cmd) >= 2:
-                    time_type = cmd[1]
-                if time_type not in config.allowed_time:
-                    await rank.finish(f"{rank_type} 仅支持 {config.allowed_time}")
+            time_type = None
+            if len(cmd) >= 2:
+                time_type = cmd[1]
+            try:
+                config, time_type = db_val.get_value_config(rank_type, time_type)
                 datas = []
                 for steamid in steamids:
                     try:
-                        val = db_val.get_value(steamid, rank_type, time_type)
+                        val = await config.func(steamid, time_type)
                         print(val)
                         datas.append((steamid, val))
                     except ValueError as e:
@@ -172,6 +169,8 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                 elif config.template == 2:
                     image = await gen_rank_image2(datas, min_value, max_value, f"{time_type} {config.title}", config.outputfmt)
                 await rank.finish(MessageSegment.image(image))
+            except ValueError as e:
+                await rank.finish(str(e))
 
     await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可选 [选项]：{valid_rank}\n可用 (时间)：{valid_time}")
         

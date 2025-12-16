@@ -11,8 +11,10 @@ scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 output = require("utils").output
 
+require("cs_db_val")
+from ..cs_db_val import db as db_val
+
 db_upd = require("cs_db_upd").db
-db_val = require("cs_db_val").db
 
 from .config import Config
 
@@ -32,12 +34,13 @@ dayreport = on_command("日报", priority=10, block=True)
 
 
 
-def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
+async def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
     prize_name = "🥇🥈🥉456789"
     datas = []
+    config, time_type = db_val.get_value_config(rank_type, time_type)
     for steamid in steamids:
         try:
-            val = db_val.get_value(steamid, rank_type, time_type)
+            val = await config.func(steamid, time_type)
             if filter(val[0]):
                 datas.append((steamid, val))
         except ValueError as e:
