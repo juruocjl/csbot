@@ -6,8 +6,12 @@ from nonebot.params import Arg
 from nonebot import on_command, on_message
 from nonebot import require
 from nonebot import logger
+from nonebot import get_driver
 
-localstorage = require("utils").localstorage
+require("utils")
+
+from ..utils import local_storage
+
 async_download = require("utils").async_download
 
 from .config import Config
@@ -52,13 +56,17 @@ class PicDir:
     def __init__(self, dirname):
         self.dirname = dirname
         self.keyname = f"hashset{dirname}"
+        self.hashset = set()
         if not os.path.exists(dirname):
             os.makedirs(dirname, exist_ok=True)
-        if localstorage.get(self.keyname):
-            self.hashset = ast.literal_eval(localstorage.get(self.keyname))
+
+    async def real_init(self):
+        if await local_storage.get(self.keyname):
+            self.hashset = ast.literal_eval(await local_storage.get(self.keyname))
         else:
             self.hashset = set()
-            self.rebuild()
+            await self.rebuild()
+        logger.info(f"init {self.dirname} with {len(self.hashset)} pics")
     
     def __len__(self):
         return len(self.hashset)
@@ -69,14 +77,14 @@ class PicDir:
             return None
         return random.choice(files)
     
-    def rebuild(self):
+    async def rebuild(self):
         files = [f for f in Path(self.dirname).iterdir() if f.is_file()]
         for f in files:
             hashval = get_file_hash(f)
             if hashval in self.hashset:
                 f.unlink()
             self.hashset.add(hashval)
-        localstorage.set(self.keyname, str(self.hashset))
+        await local_storage.set(self.keyname, str(self.hashset))
 
     async def addpic(self, filename, url):
         filepath = Path(self.dirname) / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
@@ -88,13 +96,22 @@ class PicDir:
             return 0
         logger.info(f"add{self.dirname} {filename}")
         self.hashset.add(hashval)
-        localstorage.set(self.keyname, str(self.hashset))
+        await local_storage.set(self.keyname, str(self.hashset))
         return 1
-
 
 Pic1 = PicDir("pic")
 lastpic = None
 Pic2 = PicDir("mgz")
+
+
+driver = get_driver()
+@driver.on_startup
+async def init_picdir():
+    await Pic1.real_init()
+    await Pic2.real_init()
+    logger.info("图片库初始化完成")
+
+
 
 @getpic.handle()
 async def getpic_function(bot: Bot, message: MessageEvent):

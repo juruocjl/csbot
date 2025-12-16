@@ -9,9 +9,13 @@ from nonebot.permission import SUPERUSER
 from nonebot.params import CommandArg
 from nonebot import get_bot
 
-scheduler = require("nonebot_plugin_apscheduler").scheduler
 
-localstorage = require("utils").localstorage
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
+
+require("utils")
+from ..utils import local_storage
+
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
 from .config import Config
@@ -432,7 +436,7 @@ async def fudupoint_function(message: GroupMessageEvent):
         if seg.type == "at":
             uid = seg.data["qq"]
     admin = False
-    if uid == localstorage.get(f'adminqq{gid}') and int(localstorage.get(f'adminqqalive{gid}')):
+    if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}')):
         admin = True
     point = db.get_point(f"group_{gid}_{uid}")
     prob1 = sigmoid_step((point + 1), admin=admin)
@@ -445,14 +449,14 @@ async def fudupoint_function(message: GroupMessageEvent):
     else:
         await fudupoint.finish(f"当前点数：{point}  下一次禁言时间：{tm}min\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
 
-async def addpoint(gid: str, uid: str, nowpoint: int):
+async def addpoint(gid: str, uid: str, nowpoint: int) -> bool:
     bot = get_bot()
     sid = f"group_{gid}_{uid}"
-    if uid == localstorage.get(f'adminqq{gid}') and int(localstorage.get(f'adminqqalive{gid}')):
+    if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}')):
         db.add_point(sid, nowpoint)
         prob = sigmoid_step(nowpoint * db.get_point(sid), admin=True)
         if random.random() < prob:
-            localstorage.set(f'adminqqalive{gid}', '0')
+            await local_storage.set(f'adminqqalive{gid}', '0')
             await bot.set_group_admin(group_id=gid, user_id=uid, enable=False)
             await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被下放"]))
             return True
@@ -541,11 +545,12 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
 
 async def roll_admin(groupid: str):
     bot = get_bot()
+
     adminuid = None
-    if localstorage.get(f'adminqq{groupid}'):
-        adminuid = int(localstorage.get(f'adminqq{groupid}'))
-    if int(localstorage.get(f'adminqqalive{groupid}')):
-        await bot.set_group_admin(group_id=groupid, user_id=localstorage.get(f'adminqq{groupid}'), enable=False)
+    if await local_storage.get(f'adminqq{groupid}'):
+        adminuid = int(await local_storage.get(f'adminqq{groupid}'))
+    if int(await local_storage.get(f'adminqqalive{groupid}')):
+        await bot.set_group_admin(group_id=groupid, user_id=await local_storage.get(f'adminqq{groupid}'), enable=False)
     users = []
     weights = []
     sid_list = db.get_active_user(groupid)
@@ -559,8 +564,8 @@ async def roll_admin(groupid: str):
     newadmin, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
     await bot.send_group_msg(group_id=groupid, message=Message(['恭喜', MessageSegment.at(newadmin), f" 以{point}/{totsum}选为管理员"]))
-    localstorage.set(f'adminqq{groupid}', newadmin)
-    localstorage.set(f'adminqqalive{groupid}', '1')
+    await local_storage.set(f'adminqq{groupid}', str(newadmin))
+    await local_storage.set(f'adminqqalive{groupid}', '1')
     await bot.set_group_admin(group_id=groupid, user_id=newadmin, enable=True)
 
 @roll.handle()

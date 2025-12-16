@@ -5,17 +5,20 @@ from nonebot import on_command
 from nonebot import require
 from nonebot import get_bot
 from nonebot import logger
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
+
+require("utils")
+from ..utils import local_storage
+
+event_update = require("major_hw").event_update
+
 
 from .get5e import get_matches
 
 from typing import List, Tuple
 import json
 import asyncio
-
-scheduler = require("nonebot_plugin_apscheduler").scheduler
-
-localstorage = require("utils").localstorage
-event_update = require("major_hw").event_update
 
 from .config import Config
 
@@ -37,7 +40,7 @@ async def update_events():
     for event in config.hltv_event_id_list:
         logger.info(f"start get {event}")
         title, newres = await get_matches(event)
-        res: List[Tuple[str, str, str, str]] = json.loads(localstorage.get(f"hltvresult{event}", default="[]"))
+        res: List[Tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{event}", default="[]"))
         res.reverse()
         newres.reverse()
         ids = set([match[3] for match in res])
@@ -55,6 +58,6 @@ async def update_events():
                     message=text
                 )
             res.reverse()
-            localstorage.set(f"hltvresult{event}", json.dumps(res))
+            await local_storage.set(f"hltvresult{event}", json.dumps(res))
             await event_update(event)
         await asyncio.sleep(2)

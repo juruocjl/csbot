@@ -1,9 +1,13 @@
 from nonebot import get_plugin_config
 from nonebot import get_driver
+from nonebot import require
+from nonebot import logger
 
-from nonebot.plugin import PluginMetadata
-
-from .config import Config
+from sqlalchemy import select, String, Text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 import datetime
 import time
@@ -12,6 +16,11 @@ import aiohttp
 import os
 from pyppeteer import launch
 import asyncio
+
+from nonebot.plugin import PluginMetadata
+
+from .config import Config
+
 
 
 __plugin_meta__ = PluginMetadata(
@@ -22,6 +31,8 @@ __plugin_meta__ = PluginMetadata(
 )
 
 config = get_plugin_config(Config)
+
+logger.info("开始加载基本组件...")
 
 driver = get_driver()
 
@@ -50,41 +61,41 @@ def output(val, format):
     elif format.startswith("p"):
         return f"{val * 100: .{int(format[1:])}f}%"
 
+class Base(DeclarativeBase):
+    pass
+
+class StorageItem(Base):
+    __tablename__ = "local_storage"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    val: Mapped[str] = mapped_column(Text)
+
+
+engine = create_async_engine("sqlite+aiosqlite:///main.db")
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 class LocalStorage:
-    def __init__(self):
-        cursor = get_cursor()
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS local_storage (
-            key TEXT,
-            val TEXT,
-            PRIMARY KEY (key)
-        )
-        ''')
-    
-    def set(self, key: str, val: str) -> None:
-        cursor = get_cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO local_storage (key, val)
-            VALUES (?, ?)
-        ''', (key, val))
-    
-    def get(self, key: str, default = None) -> str | None:
-        cursor = get_cursor()
-        cursor.execute('''
-            SELECT val FROM local_storage WHERE key == ?
-        ''', (key,))
-        result = cursor.fetchone()
-        return result[0] if result else default
+    async def set(self, key: str, val: str) -> None:
+        async with async_session_factory() as session:
+            async with session.begin():
+                new_item = StorageItem(key=key, val=val)
+                await session.merge(new_item)
 
-localstorage = LocalStorage()
+    async def get(self, key: str, default=None) -> str | None:
+        async with async_session_factory() as session:
+            item = await session.get(StorageItem, key)
+            return item.val if item else default
 
 session = None
+local_storage = LocalStorage()
 
 @driver.on_startup
 async def init_session():
     global session
     session = aiohttp.ClientSession()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("表结构初始化完成！")
 
 def get_session():
     global session

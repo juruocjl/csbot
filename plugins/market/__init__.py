@@ -44,12 +44,12 @@ headers = {'ApiToken': config.csqaq_api, 'Content-Type': 'application/json'}
 
 import requests
 
-res = requests.post("https://api.csqaq.com/api/v1/sys/bind_local_ip", headers=headers)
 try:
+    res = requests.post("https://api.csqaq.com/api/v1/sys/bind_local_ip", headers=headers, timeout=5)
     assert(res.json()['code'] == 200)
     logger.info("Bind csqaq api success: " + res.text)
 except:
-    logger.info("Bind csqaq api fail: " + res.text)
+    logger.error("Bind csqaq api fail")
 
 class DataManager:
     def __init__(self):

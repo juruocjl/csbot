@@ -9,8 +9,13 @@ from nonebot import on_command
 from nonebot import require
 from nonebot import logger
 
+require("nonebot_plugin_orm")
+from nonebot_plugin_orm import AsyncSession
+
+require("utils")
+
 get_cursor = require("utils").get_cursor
-localstorage = require("utils").localstorage
+from ..utils import local_storage
 
 from fuzzywuzzy import process
 from unicodedata import normalize
@@ -142,9 +147,9 @@ async def hwhelp_funtion():
 /赛事作业结果
 查看赛事整体结果""")
 
-def calc_val(uid: str) -> Tuple[float, float] | None:
+async def calc_val(uid: str) -> Tuple[float, float] | None:
     if config.major_stage == "playoffs":
-        result: List[Tuple[str, str, str, str]] = json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]"))
+        result: List[Tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
         result.reverse()
         if res := db.get_uid_hw(uid, major_stage_name + "-quad"):
             teams = json.loads(res[2])
@@ -220,13 +225,13 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
         db.add_hw(uid, major_stage_name + "-quad", json.dumps(quad))
         db.add_hw(uid, major_stage_name + "-semi", json.dumps(semi))
         db.add_hw(uid, major_stage_name + "-final", json.dumps(final))
-        calc_val(uid)
+        await calc_val(uid)
     else:
         if len(teams) != 10 or len(set(teams)) != 10:
             await hwadd.finish("请输入十只不同队伍")
         db.add_hw(uid, major_stage_name, json.dumps(teams))
         await hwadd.send("成功添加预测，开始计算概率")
-        prob_ge5, expected_value = calc_val(uid)
+        prob_ge5, expected_value = await calc_val(uid)
         await hwadd.finish(f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}")
 
 @hwsee.handle()
@@ -286,19 +291,21 @@ async def hwupd_function():
     results, total_simulations = parse_simulation_results(file_path)
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 
-    res = db.get_all_hw(major_stage)
+    res = db.get_all_hw(major_stage_name)
     await hwupd.send("开始重新计算所有作业")
     for member in res:
-        calc_val(member[0])
+        await calc_val(member[0])
     await hwupd.finish(f"成功计算 {len(res)} 份作业")
 
 @simupd.handle()
 async def calc_simulate():
-    await asyncio.to_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
+    await asyncio.to_thread(gen_win_matrix, str(teamfile),
+                             json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")))
     await asyncio.to_thread(simulate, teamfile)
     await simupd.finish("结果模拟完成")
 
 async def event_update(event_id):
+
     if event_id == config.major_event_id:
         logger.info(f"{event_id} updated")
         bot = get_bot()
@@ -306,7 +313,7 @@ async def event_update(event_id):
         if config.major_stage == "playoffs":
             res = db.get_all_hw(major_stage_name + "-quad")
             for member in res:
-                calc_val(member[0])
+                await calc_val(member[0])
             
             for groupid in config.cs_group_list:
                 await bot.send_msg(
@@ -322,7 +329,8 @@ async def event_update(event_id):
                     message="开始重新模拟"
                 )
             
-            await asyncio.to_thread(gen_win_matrix, str(teamfile), json.loads(localstorage.get(f"hltvresult{config.major_event_id}", default="[]")))
+            await asyncio.to_thread(gen_win_matrix, str(teamfile), 
+                                    json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")))
             await asyncio.to_thread(simulate, teamfile)
 
             for groupid in config.cs_group_list:
@@ -338,7 +346,7 @@ async def event_update(event_id):
 
             res = db.get_all_hw(major_stage_name)
             for member in res:
-                calc_val(member[0])
+                await calc_val(member[0])
             
             for groupid in config.cs_group_list:
                 await bot.send_msg(
@@ -385,6 +393,7 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
 
 @hwout.handle()
 async def hwout_function(bot: Bot, args: Message = CommandArg()):
+
     params = args.extract_plain_text().strip().split()
     gid = params[0]
     stage = params[1] if len(params) > 1 else major_stage_name
@@ -396,6 +405,6 @@ async def hwout_function(bot: Bot, args: Message = CommandArg()):
         out.append({'nickname': await getcard(bot, gid, member[0]), 'teams': json.loads(member[2])})
     await hwout.finish(json.dumps({
         'stage': stage,
-        'games': json.loads(localstorage.get(f"hltvresult{eventid}", default="[]")),
+        'games': json.loads(await local_storage.get(f"hltvresult{eventid}", default="[]")),
         'homework': out
     }))
