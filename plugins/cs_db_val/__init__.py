@@ -662,26 +662,6 @@ class DataManager:
         else:
             return None
 
-    def get_mem(self, gid):
-        if gid.startswith("group_"):
-            gid = gid.split("_")[1]
-            cursor = get_cursor()
-            cursor.execute(
-                'SELECT mem FROM ai_mem WHERE gid = ?',
-                (gid, )
-            )
-            if result := cursor.fetchone():
-              return result[0]
-        return ""
-
-    def set_mem(self, gid, mem):
-        if gid.startswith("group_"):
-            gid = gid.split("_")[1]
-            cursor = get_cursor()
-            cursor.execute(
-                'INSERT OR REPLACE INTO  ai_mem (gid, mem) VALUES (?, ?)',
-                (gid, mem)
-            )
           
     def get_username(self, uid):
         if steamid := self.get_steamid(uid):

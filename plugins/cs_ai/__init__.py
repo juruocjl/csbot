@@ -7,6 +7,9 @@ from nonebot.permission import SUPERUSER
 from nonebot.params import CommandArg
 from nonebot import logger
 
+require("utils")
+from ..utils import Base, async_session_factory
+
 db_val = require("cs_db_val").db
 valid_time = require("cs_db_val").valid_time
 valid_rank = require("cs_db_val").valid_rank
@@ -14,6 +17,8 @@ valid_rank = require("cs_db_val").valid_rank
 from openai import OpenAI
 import json
 from fuzzywuzzy import process
+from sqlalchemy import String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 import re
 
 from .config import Config
@@ -27,6 +32,40 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+class AIMemory(Base):
+    __tablename__ = "ai_mem"
+
+    gid: Mapped[str] = mapped_column(String, primary_key=True)
+    # 使用 Text 类型，因为 'mem' 看起来可能存储较长的文本或 JSON
+    mem: Mapped[str] = mapped_column(Text)
+
+class DataManager:
+
+    def _process_gid(self, gid: str) -> str:
+        if gid.startswith("group_"):
+            return gid.split("_")[1]
+        raise ValueError("Invalid gid format")
+
+    async def get_mem(self, gid: str) -> str:
+        clean_gid = self._process_gid(gid)
+
+        async with async_session_factory() as session:
+            memory_obj = await session.get(AIMemory, clean_gid)
+            
+            if memory_obj:
+                return memory_obj.mem
+            return ""
+
+    async def set_mem(self, gid: str, mem: str):
+        clean_gid = self._process_gid(gid)
+
+        async with self.session_factory() as session:
+            async with session.begin():
+                new_memory = AIMemory(gid=clean_gid, mem=mem)
+                
+                await session.merge(new_memory)
+
+db = DataManager()
 
 aiask = on_command("ai", priority=10, block=True)
 
@@ -45,7 +84,7 @@ aimem = on_command("ai记忆", priority=10, block=True)
 
 model_name = config.cs_ai_model
 
-def ai_ask2(uid, sid, type, text):
+async def ai_ask2(uid, sid, type, text) -> str:
     steamids = db_val.get_member_steamid(sid)
     mysteamid = db_val.get_steamid(uid)
     try:
@@ -72,7 +111,8 @@ def ai_ask2(uid, sid, type, text):
                 steamid_username[steamid] = result[2]
         if result:
             msgs.append({"role": "system", "content": f"这是可以选择的用户名：{usernames}。你需要保证调用工具时 name 用户名在此列表内。"})
-        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db_val.get_mem(sid)}"})
+        mem = await db.get_mem(sid)
+        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
         msgs.append({"role": "assistant", "content": f"我会参考这些信息，并根据你的问题分析需要调用的工具，并且不输出额外的内容。"})
         msgs.append({"role": "user","content": text,})
         response = client.chat.completions.create(
@@ -143,7 +183,7 @@ def ai_ask2(uid, sid, type, text):
                 import sys
                 exc_type, exc_value, _ = sys.exc_info()
                 logger.warning(f"{data} 解析失败 {exc_type} {exc_value}")
-        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db_val.get_mem(sid)}"})
+        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
         msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
         msgs.append({"role": "user","content": text,})
         # logger.info(f"{msgs}")
@@ -162,7 +202,7 @@ async def aiasktest_function(message: MessageEvent, args: Message = CommandArg()
     sid = message.get_session_id()
     await aiasktest.finish(Message([
         MessageSegment.at(uid), " ",
-        ai_ask2(uid, sid, None, db_val.work_msg(args))
+        await ai_ask2(uid, sid, None, db_val.work_msg(args))
     ]))
 
 @aiask.handle()
@@ -171,7 +211,7 @@ async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     await aiasktb.finish(Message([
         MessageSegment.at(uid), " ",
-        ai_ask2(uid, sid, None, db_val.work_msg(args))
+        await ai_ask2(uid, sid, None, db_val.work_msg(args))
     ]))
 
 @aiasktb.handle()
@@ -180,7 +220,7 @@ async def aiasktb_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     await aiasktb.finish(Message([
         MessageSegment.at(uid), " ",
-        ai_ask2(uid, sid, "贴吧", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "贴吧", db_val.work_msg(args))
     ]))
 
 @aiaskxmm.handle()
@@ -189,7 +229,7 @@ async def aiaskxmm_function(message: MessageEvent, args: Message = CommandArg())
     sid = message.get_session_id()
     await aiaskxmm.finish(Message([
         MessageSegment.at(uid), " ",
-        ai_ask2(uid, sid, "xmm", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "xmm", db_val.work_msg(args))
     ]))
 
 @aiaskxhs.handle()
@@ -198,7 +238,7 @@ async def aiaskxhs_function(message: MessageEvent, args: Message = CommandArg())
     sid = message.get_session_id()
     await aiaskxhs.finish(Message([
         MessageSegment.at(uid), " ",
-        ai_ask2(uid, sid, "xhs", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "xhs", db_val.work_msg(args))
     ]))
 
 @aiasktmr.handle()
@@ -207,7 +247,7 @@ async def aiasktmr_function(message: MessageEvent, args: Message = CommandArg())
     sid = message.get_session_id()
     await aiasktmr.finish(Message([
         MessageSegment.at(uid), " ",
-        ai_ask2(uid, sid, "tmr", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "tmr", db_val.work_msg(args))
     ]))
 
 @aimem.handle()
@@ -221,7 +261,8 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
             base_url=config.cs_ai_url,
         )
         msgs = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
-        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{db_val.get_mem(sid)}"})
+        mem = await db.get_mem(sid)
+        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
         msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
         msgs.append({"role": "user", "content": db_val.work_msg(args)})
         print(msgs)
@@ -233,7 +274,7 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
         if len(result) > 1000:
             result = result[:1000] + "……"
         print(result)
-        db_val.set_mem(sid, result)
+        await db.set_mem(sid, result)
     except Exception as e:
         result = f"发生错误: {str(e)}"
     await aimem.finish(Message([

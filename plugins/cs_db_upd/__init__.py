@@ -22,6 +22,7 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+
 SeasonId = config.cs_season_id
 lastSeasonId = config.cs_last_season_id
 
@@ -166,14 +167,6 @@ class DataManager:
             infernoDamage INT,
             mvp INT,
             PRIMARY KEY (mid, steamid)
-        )
-        ''')
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ai_mem (
-            gid TEXT,
-            mem TEXT,
-            PRIMARY KEY (gid)
         )
         ''')
 
