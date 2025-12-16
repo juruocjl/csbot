@@ -157,34 +157,29 @@ async def ai_ask2(uid, sid, type, text) -> str:
         queryallpattern = r'<queryall>(.*?)</queryall>'
         all_matches = re.findall(queryallpattern, first_result, re.DOTALL)[:10]
         for data in all_matches:
-            try:
-                data = json.loads(data.strip())
-                rank_type = process.extractOne(data['type'], valid_rank)[0]
-                time_type = process.extractOne(data['time'], valid_time)[0]
-                rankconfig, time_type = db_val.get_value_config(rank_type, time_type)
-                rv = data['reverse']
-                rv_name = "降序" if rv else "升序"
-                datas = []
-                for steamid in steamids:
-                    try:
-                        val = await rankconfig.func(steamid, time_type)
-                        datas.append((steamid, val))
-                    except NoValueError as e:
-                        print(e)
-                print(rank_type, time_type, datas)
-                if len(datas) == 0:
-                    continue
-                datas = sorted(datas, key=lambda x: x[1][0], reverse=rv)
-                avg = sum([x[1][0] for x in datas]) / len(datas)
-                datas = datas[:5]
-                res = f"{rank_type}平均值{avg}，{rv_name}前五名："
-                for x in datas:
-                    res += f"{steamid_username[x[0]]} {x[1][0]}，"
-                msgs.append({"role": "system", "content":res})
-            except:
-                import sys
-                exc_type, exc_value, _ = sys.exc_info()
-                logger.warning(f"{data} 解析失败 {exc_type} {exc_value}")
+            data = json.loads(data.strip())
+            rank_type = process.extractOne(data['type'], valid_rank)[0]
+            time_type = process.extractOne(data['time'], valid_time)[0]
+            rankconfig, time_type = db_val.get_value_config(rank_type, time_type)
+            rv = data['reverse']
+            rv_name = "降序" if rv else "升序"
+            datas = []
+            for steamid in steamids:
+                try:
+                    val = await rankconfig.func(steamid, time_type)
+                    datas.append((steamid, val))
+                except NoValueError as e:
+                    print(e)
+            print(rank_type, time_type, datas)
+            if len(datas) == 0:
+                continue
+            datas = sorted(datas, key=lambda x: x[1][0], reverse=rv)
+            avg = sum([x[1][0] for x in datas]) / len(datas)
+            datas = datas[:5]
+            res = f"{rank_type}平均值{avg}，{rv_name}前五名："
+            for x in datas:
+                res += f"{steamid_username[x[0]]} {x[1][0]}，"
+            msgs.append({"role": "system", "content":res})
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
         msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
         msgs.append({"role": "user","content": text,})
