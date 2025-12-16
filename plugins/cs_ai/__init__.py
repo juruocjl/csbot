@@ -59,7 +59,7 @@ class DataManager:
     async def set_mem(self, gid: str, mem: str):
         clean_gid = self._process_gid(gid)
 
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             async with session.begin():
                 new_memory = AIMemory(gid=clean_gid, mem=mem)
                 
