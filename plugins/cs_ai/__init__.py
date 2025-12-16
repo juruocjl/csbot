@@ -10,9 +10,9 @@ from nonebot import logger
 require("utils")
 from ..utils import Base, async_session_factory
 
-db_val = require("cs_db_val").db
-valid_time = require("cs_db_val").valid_time
-valid_rank = require("cs_db_val").valid_rank
+require("cs_db_val")
+from ..cs_db_val import db_val
+from ..cs_db_val import valid_time,valid_rank
 
 from openai import OpenAI
 import json
