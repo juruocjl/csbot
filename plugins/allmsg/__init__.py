@@ -11,6 +11,7 @@ from nonebot import get_bot
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
+from ..cs_db_val import NoValueError
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -593,23 +594,23 @@ async def roll_admin(groupid: str):
         if userid != adminuid:
             if steamid := await db_val.get_steamid(userid):
                 try:
-                    ttcount = await ttconfig.func(steamid, "昨日")[0]
-                except:
+                    ttcount = (await ttconfig.func(steamid, "昨日"))[0]
+                except NoValueError:
                     ttcount = 0
                 try:
-                    gpcount = await gpconfig.func(steamid, "昨日")[0]
-                except:
+                    gpcount = (await gpconfig.func(steamid, "昨日"))[0]
+                except NoValueError:
                     gpcount = 0
                 point = (sum_point / (cnt_ban + 1) + 1) * (math.log(1 + ttcount + 0.5 * gpcount))
-                users.append((userid, f"({sum_point}/({cnt_ban+1})+1)*log({1 + ttcount + 0.5 * gpcount})", point))
+                users.append((userid, f"({sum_point}/{cnt_ban+1}+1)*log({1 + ttcount + 0.5 * gpcount})", point))
                 weights.append(point)
     print(users)
     newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
     await bot.send_group_msg(group_id=groupid, message=Message(['恭喜', MessageSegment.at(newadmin), f" 以{point:.2f}/{totsum:.2f}选为管理员"]))
-    text = "各候选人得分：\n"
-    for uid, expr, _ in users:
-        text += f"{await getcard(bot, groupid, uid)}: {expr}\n"
+    text = "得分：\n"
+    for uid, expr, point in users:
+        text += f"{await getcard(bot, groupid, uid)}: {expr}={point:.2f}\n"
     await bot.send_group_msg(group_id=groupid, message=Message(text.strip()))
     await local_storage.set(f'adminqq{groupid}', str(newadmin))
     await local_storage.set(f'adminqqalive{groupid}', '1')
