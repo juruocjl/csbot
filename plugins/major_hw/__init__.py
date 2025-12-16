@@ -388,10 +388,10 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
     res = {}
     for stage in major_all_stages:
         allres = await db.get_all_hw(stage)
-        for uid, _, _, wr, _ in allres:
-            if uid not in res:
-                res[uid] = {}
-            res[uid][stage] = wr
+        for member in allres:
+            if member.uid not in res:
+                res[member.uid] = {}
+            res[member.uid][stage] = member.winrate
     text = ""
     for uid, data in res.items():
         right = 0
