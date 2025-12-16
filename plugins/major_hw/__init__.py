@@ -82,7 +82,7 @@ try:
             for alias in team_data['alias']:
                 alias2full[alias] = team_name
 except:
-    logger.fail("fail to load teams")
+    logger.error("fail to load teams")
 
 
 def get_name(wuzzyname):
