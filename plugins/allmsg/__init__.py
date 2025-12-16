@@ -9,6 +9,8 @@ from nonebot.permission import SUPERUSER
 from nonebot.params import CommandArg
 from nonebot import get_bot
 
+require("cs_db_val")
+from ..cs_db_val import db as db_val
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -580,16 +582,29 @@ async def roll_admin(groupid: str):
     users = []
     weights = []
     sid_list = await db.get_active_user(groupid)
+
+    ttconfig = db_val.get_value_config("场次")
+    gpconfig = db_val.get_value_config("gp场次")
+
     for sid in sid_list:
-        point = await db.get_point(sid, day = 1) / (await db.get_zero_point(sid, day = 1) + 1) + 1
+        sum_point = await db.get_point(sid, day = 1)
+        cnt_ban = await db.get_zero_point(sid, day = 1)
         userid = int(sid.split('_')[2])
         if userid != adminuid:
-            users.append((userid, point))
-            weights.append(point)
+            if steamid := await db_val.get_steamid(userid):
+                ttcount = await ttconfig.func(steamid, "昨日")
+                gpcount = await gpconfig.func(steamid, "昨日")
+                point = (sum_point / (cnt_ban + 1) + 1) * (math.log(1 + ttcount + 0.5 * gpcount))
+                users.append((userid, f"({sum_point}/({cnt_ban+1})+1)*log({1 + ttcount + 0.5 * gpcount})", point))
+                weights.append(point)
     print(users)
-    newadmin, point = random.choices(users, weights=weights, k=1)[0]
+    newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
-    await bot.send_group_msg(group_id=groupid, message=Message(['恭喜', MessageSegment.at(newadmin), f" 以{point}/{totsum}选为管理员"]))
+    await bot.send_group_msg(group_id=groupid, message=Message(['恭喜', MessageSegment.at(newadmin), f" 以{point:.2f}/{totsum:.2f}选为管理员"]))
+    text = "各候选人得分：\n"
+    for uid, expr, _ in users:
+        text += f"{await getcard(bot, groupid, uid)}: {expr}\n"
+    await bot.send_group_msg(group_id=groupid, message=Message(text.strip()))
     await local_storage.set(f'adminqq{groupid}', str(newadmin))
     await local_storage.set(f'adminqqalive{groupid}', '1')
     await bot.set_group_admin(group_id=groupid, user_id=newadmin, enable=True)
