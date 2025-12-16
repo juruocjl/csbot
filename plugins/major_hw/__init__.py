@@ -94,8 +94,12 @@ file_path = "result.txt"
 
 
 logger.info(f"{major_stage_name}, {major_teams}")
-results, total_simulations = parse_simulation_results(file_path)
-logger.info(f"已加载 {total_simulations} 个模拟结果")
+try:
+    results, total_simulations = parse_simulation_results(file_path)
+    logger.info(f"已加载 {total_simulations} 个模拟结果")
+except:
+    results = []
+    logger.error("未能加载模拟结果")
 
 
 hwhelp = on_command("作业帮助", priority=10, block=True)
