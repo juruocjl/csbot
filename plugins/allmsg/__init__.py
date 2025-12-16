@@ -587,6 +587,11 @@ async def roll_admin(groupid: str):
     ttconfig = db_val.get_value_config("场次")
     gpconfig = db_val.get_value_config("gp场次")
 
+    if time.time() - get_today_start_timestamp() < 86100:
+        time_type = "昨日"
+    else:
+        time_type = "今日"
+
     for sid in sid_list:
         sum_point = await db.get_point(sid, day = 1)
         cnt_ban = await db.get_zero_point(sid, day = 1)
@@ -594,11 +599,11 @@ async def roll_admin(groupid: str):
         if userid != adminuid:
             if steamid := await db_val.get_steamid(userid):
                 try:
-                    ttcount = (await ttconfig.func(steamid, "昨日"))[0]
+                    ttcount = (await ttconfig.func(steamid, time_type))[0]
                 except NoValueError:
                     ttcount = 0
                 try:
-                    gpcount = (await gpconfig.func(steamid, "昨日"))[0]
+                    gpcount = (await gpconfig.func(steamid, time_type))[0]
                 except NoValueError:
                     gpcount = 0
                 point = (sum_point / (cnt_ban + 1) + 1) * (math.log(1 + ttcount + 0.5 * gpcount))
