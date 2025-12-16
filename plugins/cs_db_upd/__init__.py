@@ -35,22 +35,21 @@ lastSeasonId = config.cs_last_season_id
 class GroupMember(Base):
     __tablename__ = "group_members"
 
-    # 复合主键：两个字段都设为 primary_key=True
     gid: Mapped[str] = mapped_column(String, primary_key=True)
     uid: Mapped[str] = mapped_column(String, primary_key=True)
+
+class MemberSteamID(Base):
+    __tablename__ = "members_steamid"
+
+    uid: Mapped[str] = mapped_column(String, primary_key=True)
+    steamid: Mapped[str] = mapped_column(String)
+
+
 
 class DataManager:
     def __init__(self):
         cursor = get_cursor()
         
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS members_steamid (
-            uid TEXT,
-            steamid TEXT,
-            PRIMARY KEY (uid)
-        )
-        ''')
 
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS steamid_detail (
