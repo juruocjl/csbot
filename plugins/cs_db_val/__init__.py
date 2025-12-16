@@ -231,7 +231,7 @@ class DataManager:
             prompt += f"{time_type}场均闪白对手 {avgFS :+.2f}，"
             prompt += f"{time_type}场均闪白队友 {avgFT :+.2f}，"
             try:
-                var = await (self.get_value_config("方差rt").func(steamid, time_type))
+                var, _ = await (self.get_value_config("方差rt").func(steamid, time_type))
                 prompt += f"{time_type}rating方差 {var :+.2f}，"
             except ValueError as e:
                 pass
