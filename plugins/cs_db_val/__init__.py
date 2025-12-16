@@ -4,7 +4,7 @@ from nonebot import require
 from nonebot import logger
 
 require("cs_db_upd")
-from ..cs_db_upd import GroupMember
+from ..cs_db_upd import GroupMember, MemberSteamID
 
 require("utils")
 
@@ -89,13 +89,11 @@ class DataManager:
             return func
         return decorator
 
-    def get_steamid(self, uid):
-        cursor = get_cursor()
-        cursor.execute('''
-        SELECT steamid FROM members_steamid WHERE uid = ?
-        ''', (uid,))
-        result = cursor.fetchone()
-        return result[0] if result else None
+    async def get_steamid(self, uid: str) -> str | None:
+        async with async_session_factory() as session:
+            record = await session.get(MemberSteamID, uid)
+            
+            return record.steamid if record else None
 
     def get_stats(self, steamid):
         cursor = get_cursor()
@@ -112,16 +110,19 @@ class DataManager:
             LIMIT 1 OFFSET ?''', (name, id - 1))
         return cursor.fetchone()
 
-    def get_all_steamid(self):
-        cursor = get_cursor()
-        cursor.execute('SELECT steamid FROM members_steamid',)
-        return [row[0] for row in cursor.fetchall()]
+    async def get_all_steamid(self) -> list[str]:
+        """
+        获取所有绑定的 SteamID
+        """
+        async with async_session_factory() as session:
+            stmt = select(MemberSteamID.steamid)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
     
     async def get_member(self, sid: str) -> list[str]:
         """
         获取群成员列表
         """
-        # 保持原有逻辑：检查前缀
         if sid.startswith("group_"):
             gid = sid.split("_")[1]
 
@@ -138,7 +139,7 @@ class DataManager:
         uids = await self.get_member(sid)
         steamids = set()
         for uid in uids:
-            if steamid := self.get_steamid(uid):
+            if steamid := await self.get_steamid(uid):
                 steamids.add(steamid)
         return list(steamids)
 
@@ -238,19 +239,19 @@ class DataManager:
         else:
             return None
          
-    def get_username(self, uid):
-        if steamid := self.get_steamid(uid):
+    async def get_username(self, uid):
+        if steamid := await self.get_steamid(uid):
             if result := self.get_stats(steamid):
                 return result[2]
         return None
 
-    def work_msg(self, msg):
+    async def work_msg(self, msg):
         result = ""
         for seg in msg:
             if seg.type == "text":
                 result += seg.data['text']
             elif seg.type == "at":
-                if name := self.get_username(seg.data['qq']):
+                if name := await self.get_username(seg.data['qq']):
                     result += name
                 else:
                     result += "<未找到用户>"

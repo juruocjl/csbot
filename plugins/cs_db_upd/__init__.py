@@ -175,17 +175,29 @@ class DataManager:
         )
         ''')
 
-    def bind(self, uid, steamid):
-        cursor = get_cursor()
-        cursor.execute('''
-        INSERT OR REPLACE INTO members_steamid (uid, steamid) VALUES (?, ?)
-        ''', (uid, steamid))
-        
-    def unbind(self, uid):
-        cursor = get_cursor()
-        cursor.execute('''
-        DELETE FROM members_steamid WHERE uid == ?;
-        ''', (uid,))
+    async def bind(self, uid: str, steamid: str):
+        """
+        绑定 SteamID
+        对应 SQL: INSERT OR REPLACE ...
+        """
+        async with async_session_factory() as session:
+            async with session.begin():
+                # merge 会自动检查主键 uid
+                # 1. 存在 -> 更新 steamid
+                # 2. 不存在 -> 插入新记录
+                record = MemberSteamID(uid=uid, steamid=steamid)
+                await session.merge(record)
+
+    async def unbind(self, uid: str):
+        """
+        解绑 SteamID
+        对应 SQL: DELETE FROM ... WHERE uid == ?
+        """
+        async with async_session_factory() as session:
+            async with session.begin():
+                # 使用 delete 语句构造器
+                stmt = delete(MemberSteamID).where(MemberSteamID.uid == uid)
+                await session.execute(stmt)
         
     async def update_match(self, mid, timeStamp, season):
         cursor = get_cursor()

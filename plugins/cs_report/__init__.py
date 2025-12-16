@@ -87,7 +87,7 @@ async def dayreport_function(message: MessageEvent):
 
 @scheduler.scheduled_job("cron", hour="23", minute="30", id="dayreport")
 async def send_day_report():
-    for steamid in db_val.get_all_steamid():
+    for steamid in await db_val.get_all_steamid():
         result = await db_upd.update_stats(steamid)
     bot = get_bot()
     for groupid in config.cs_group_list:

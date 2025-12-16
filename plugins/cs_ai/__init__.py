@@ -87,7 +87,7 @@ model_name = config.cs_ai_model
 
 async def ai_ask2(uid, sid, type, text) -> str:
     steamids = await db_val.get_member_steamid(sid)
-    mysteamid = db_val.get_steamid(uid)
+    mysteamid = await db_val.get_steamid(uid)
     try:
         client = OpenAI(
             api_key=config.cs_ai_api_key,
@@ -204,7 +204,7 @@ async def aiasktest_function(message: MessageEvent, args: Message = CommandArg()
     sid = message.get_session_id()
     await aiasktest.finish(Message([
         MessageSegment.at(uid), " ",
-        await ai_ask2(uid, sid, None, db_val.work_msg(args))
+        await ai_ask2(uid, sid, None, await db_val.work_msg(args))
     ]))
 
 @aiask.handle()
@@ -213,7 +213,7 @@ async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     await aiasktb.finish(Message([
         MessageSegment.at(uid), " ",
-        await ai_ask2(uid, sid, None, db_val.work_msg(args))
+        await ai_ask2(uid, sid, None, await db_val.work_msg(args))
     ]))
 
 @aiasktb.handle()
@@ -222,7 +222,7 @@ async def aiasktb_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     await aiasktb.finish(Message([
         MessageSegment.at(uid), " ",
-        await ai_ask2(uid, sid, "贴吧", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "贴吧", await db_val.work_msg(args))
     ]))
 
 @aiaskxmm.handle()
@@ -231,7 +231,7 @@ async def aiaskxmm_function(message: MessageEvent, args: Message = CommandArg())
     sid = message.get_session_id()
     await aiaskxmm.finish(Message([
         MessageSegment.at(uid), " ",
-        await ai_ask2(uid, sid, "xmm", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "xmm", await db_val.work_msg(args))
     ]))
 
 @aiaskxhs.handle()
@@ -240,7 +240,7 @@ async def aiaskxhs_function(message: MessageEvent, args: Message = CommandArg())
     sid = message.get_session_id()
     await aiaskxhs.finish(Message([
         MessageSegment.at(uid), " ",
-        await ai_ask2(uid, sid, "xhs", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "xhs", await db_val.work_msg(args))
     ]))
 
 @aiasktmr.handle()
@@ -249,7 +249,7 @@ async def aiasktmr_function(message: MessageEvent, args: Message = CommandArg())
     sid = message.get_session_id()
     await aiasktmr.finish(Message([
         MessageSegment.at(uid), " ",
-        await ai_ask2(uid, sid, "tmr", db_val.work_msg(args))
+        await ai_ask2(uid, sid, "tmr", await db_val.work_msg(args))
     ]))
 
 @aimem.handle()
@@ -266,7 +266,7 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
         mem = await db.get_mem(sid)
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
         msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
-        msgs.append({"role": "user", "content": db_val.work_msg(args)})
+        msgs.append({"role": "user", "content": await db_val.work_msg(args)})
         print(msgs)
         response = client.chat.completions.create(
             model=model_name,

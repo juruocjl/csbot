@@ -67,7 +67,7 @@ async def bind_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     print("user: %s\nsession: %s\n" % (uid, sid))
     if (steamid := args.extract_plain_text()) and re.match(r'^\d{17}$', steamid):
-        db_upd.bind(uid, steamid)
+        await db_upd.bind(uid, steamid)
         await bind.finish(f"成功绑定{steamid}。你可以使用 /更新数据 获取战绩。")
     else:
         await bind.finish("请输入steamid64，应该是一个17位整数。你可以使用steamidfinder等工具找到此值。")
@@ -77,7 +77,7 @@ async def unbind_function(message: MessageEvent):
     uid = message.get_user_id()
     sid = message.get_session_id()
     print("user: %s\nsession: %s\n" % (uid, sid))
-    db_upd.unbind(uid)
+    await db_upd.unbind(uid)
     await unbind.finish(f"解绑成功。")
 
 @update.handle()
@@ -88,7 +88,7 @@ async def update_function(message: MessageEvent):
     await db_upd.add_member(sid, uid)
 
     print("user: %s\nsession: %s\n" % (uid, sid))
-    steamid = db_val.get_steamid(uid)
+    steamid = await db_val.get_steamid(uid)
     if steamid != None:
         print(f"更新{steamid}战绩")
         result = await db_upd.update_stats(steamid)
@@ -109,8 +109,8 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
     
     await db_upd.add_member(sid, uid)
     print("user: %s\nsession: %s\n" % (uid, sid))
-    steamid = db_val.get_steamid(uid)
-    if user := db_val.work_msg(args):
+    steamid = await db_val.get_steamid(uid)
+    if user := await db_val.work_msg(args):
         print(user)
         if result := db_val.search_user(user):
             await show.send(f"找到用户 {result[1]}")
@@ -180,9 +180,9 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
 
-    text = db_val.work_msg(args)
+    text = await db_val.work_msg(args)
 
-    steamid = db_val.get_steamid(uid)
+    steamid = await db_val.get_steamid(uid)
     time_type = "全部"
 
     if text:
@@ -222,7 +222,7 @@ async def updateall_function():
     await updateall.send("开始更新所有数据")
     cntwm = 0
     cntgp = 0
-    for steamid in db_val.get_all_steamid():
+    for steamid in await db_val.get_all_steamid():
         result = await db_upd.update_stats(steamid)
         cntwm += result[2]
         cntgp += result[3]
