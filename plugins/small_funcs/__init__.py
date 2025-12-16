@@ -5,8 +5,10 @@ from nonebot.adapters import Bot
 from nonebot import on_command
 from nonebot import require
 
+require("allmsg")
+from ..allmsg import get_msg_status
+
 get_pic_status = require("pic").get_pic_status
-get_msg_status = require("allmsg").get_msg_status
 get_session = require("utils").get_session
 
 import time
@@ -100,7 +102,7 @@ async def getstatus_function(message: GroupMessageEvent):
 
     tuku = get_pic_status()
 
-    msgcount = get_msg_status(message.group_id)
+    msgcount = await get_msg_status(message.group_id)
 
     await getstatus.finish(Message([
         MessageSegment.at(message.get_user_id()),

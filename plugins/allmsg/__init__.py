@@ -32,6 +32,9 @@ from wordcloud import WordCloud
 from io import BytesIO
 import emoji
 import json
+from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text
+from sqlalchemy.orm import Mapped, mapped_column
+from typing import Dict, List
 
 __plugin_meta__ = PluginMetadata(
     name="allmsg",
@@ -39,6 +42,9 @@ __plugin_meta__ = PluginMetadata(
     usage="",
     config=Config,
 )
+
+require("utils")
+from ..utils import async_session_factory, Base
 
 get_cursor = require("utils").get_cursor
 get_session = require("utils").get_session
@@ -49,97 +55,122 @@ config = get_plugin_config(Config)
 
 jieba.load_userdict(str(Path("assets") / "dict.txt"))
 
+class FuduPoint(Base):
+    __tablename__ = "fudu_points"
+
+    # 注意：ORM 必须有主键。旧表没有，这里新加一个自增 ID 是最佳实践。
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uid: Mapped[str] = mapped_column(String)
+    timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
+    point: Mapped[int] = mapped_column(Integer)
+
+class GroupMsg(Base):
+    __tablename__ = "groupmsg"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mid: Mapped[int] = mapped_column(Integer)
+    sid: Mapped[str] = mapped_column(String)
+    timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
+    data: Mapped[bytes] = mapped_column(LargeBinary) # 对应 BLOB 类型
+
 class DataManager:
-    def __init__(self):
-        cursor = get_cursor()
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS fudu_points (
-            uid TEXT,
-            timeStamp INT,
-            point INT
-        )
-        ''')
-        
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS groupmsg (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mid INTEGER NOT NULL,
-            sid TEXT NOT NULL,
-            timeStamp INTEGER NOT NULL,
-            data BLOB NOT NULL
-        )
-        ''')
-
-    def add_point(self, uid, point):
+    async def add_point(self, uid: str, point: int):
         timestamp = int(time.time())
-        cursor = get_cursor()
-        cursor.execute(
-            "INSERT INTO fudu_points (uid, timeStamp, point) VALUES (?, ?, ?)",
-            (uid, timestamp, point)
-        )
-         
-    def get_point(self, uid, day = 0):
-        cursor = get_cursor()
+        async with async_session_factory() as session:
+            async with session.begin():
+                new_point = FuduPoint(uid=uid, timestamp=timestamp, point=point)
+                session.add(new_point)
+
+    async def get_point(self, uid: str, day: int = 0) -> int:
         starttime = get_today_start_timestamp(refreshtime=86100) - day * 86400
-        cursor.execute(
-            "SELECT SUM(point) FROM fudu_points WHERE uid = ? AND ? <= timeStamp AND timeStamp < ?",
-            (uid, starttime, starttime + 86400)
-        )
-        result = cursor.fetchone()
-        return result[0] if result[0] is not None else 0
+        endtime = starttime + 86400
+        
+        async with async_session_factory() as session:
+            stmt = select(func.sum(FuduPoint.point)).where(
+                FuduPoint.uid == uid,
+                FuduPoint.timestamp >= starttime,
+                FuduPoint.timestamp < endtime
+            )
+            result = await session.execute(stmt)
+            total = result.scalar() # scalar() 获取第一行第一列
+            return total if total is not None else 0
 
-    def get_zero_point(self, uid, day = 0):
-        cursor = get_cursor()
+    async def get_zero_point(self, uid: str, day: int = 0) -> int:
         starttime = get_today_start_timestamp(refreshtime=86100) - day * 86400
-        cursor.execute(
-            "SELECT COUNT(point) FROM fudu_points WHERE uid = ? AND ? <= timeStamp AND timeStamp < ? AND point == 0",
-            (uid, starttime, starttime + 86400)
-        )
-        result = cursor.fetchone()
-        return result[0] if result[0] is not None else 0
+        endtime = starttime + 86400
 
-    def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes):
-        cursor = get_cursor()
-        cursor.execute('''
-            INSERT INTO groupmsg (mid, sid, timeStamp, data)
-            VALUES (?, ?, ?, ?)
-        ''', (mid, sid, timestamp, data_bytes))
-    
-    def get_id_by_mid(self, mid: int):
-        cursor = get_cursor()
-        cursor.execute('''
-            SELECT id FROM groupmsg 
-            WHERE mid = ? 
-            ORDER BY timeStamp DESC 
-            LIMIT 1
-        ''', (mid,))
-        result = cursor.fetchone()
-        return result[0] if result else -1
+        async with async_session_factory() as session:
+            # 对应 SQL: SELECT COUNT(point) ... WHERE point == 0
+            stmt = select(func.count(FuduPoint.point)).where(
+                FuduPoint.uid == uid,
+                FuduPoint.timestamp >= starttime,
+                FuduPoint.timestamp < endtime,
+                FuduPoint.point == 0
+            )
+            result = await session.execute(stmt)
+            count = result.scalar()
+            return count if count is not None else 0
 
-    def get_all_msg(self, groupid, userid = "%", tmrange = (0, 1e10)):
-        cursor = get_cursor()
-        cursor.execute("SELECT * from groupmsg WHERE sid LIKE ? and ? <= timeStamp and timeStamp <= ?",
-                       (f"group_{groupid}_{userid}", int(tmrange[0]), int(tmrange[1])))
-        result = cursor.fetchall()
-        msgdict = {}
-        for id, _, sid, tm, msg in result:
-            msgdict[id] = (sid, tm, msgpack.loads(msg))
-        return msgdict
+    async def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes):
+        async with async_session_factory() as session:
+            async with session.begin():
+                msg = GroupMsg(mid=mid, sid=sid, timestamp=timestamp, data=data_bytes)
+                session.add(msg)
 
-    def get_active_user(self, groupid):
-        cursor = get_cursor()
-        cursor.execute('SELECT DISTINCT sid FROM groupmsg WHERE sid LIKE ? and timeStamp >= ?',
-                       (f"group_{groupid}_%", get_today_start_timestamp(), ))
-        res = cursor.fetchall()
-        return [a[0] for a in res]
+    async def get_id_by_mid(self, mid: int) -> int:
+        async with async_session_factory() as session:
+            stmt = select(GroupMsg.id).where(GroupMsg.mid == mid)\
+                .order_by(desc(GroupMsg.timestamp))\
+                .limit(1)
+            
+            result = await session.execute(stmt)
+            row_id = result.scalar()
+            return row_id if row_id is not None else -1
 
-    def get_msg_count(self, groupid):
-        cursor = get_cursor()
-        cursor.execute('SELECT COUNT(*) FROM groupmsg WHERE sid LIKE ?',
-                       (f"group_{groupid}_%", ))
-        res = cursor.fetchone()
-        return res[0] if res else 0
+    async def get_all_msg(self, groupid, userid="%", tmrange=(0, 1e10)) -> Dict:
+        async with async_session_factory() as session:
+            # 构造 LIKE 字符串: group_{groupid}_{userid}
+            like_str = f"group_{groupid}_{userid}"
+            
+            stmt = select(GroupMsg).where(
+                GroupMsg.sid.like(like_str),
+                GroupMsg.timestamp >= int(tmrange[0]),
+                GroupMsg.timestamp <= int(tmrange[1])
+            )
+            
+            result = await session.execute(stmt)
+            msgs = result.scalars().all() # 获取所有对象列表
+            
+            msgdict = {}
+            for msg in msgs:
+                # 保持原本的返回格式
+                msgdict[msg.id] = (msg.sid, msg.timestamp, msgpack.loads(msg.data))
+            return msgdict
+
+    async def get_active_user(self, groupid) -> List[str]:
+        async with async_session_factory() as session:
+            like_str = f"group_{groupid}_%"
+            today_start = get_today_start_timestamp()
+            
+            stmt = select(GroupMsg.sid).distinct().where(
+                GroupMsg.sid.like(like_str),
+                GroupMsg.timestamp >= today_start
+            )
+            
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_msg_count(self, groupid) -> int:
+        async with async_session_factory() as session:
+            like_str = f"group_{groupid}_%"
+            
+            stmt = select(func.count()).select_from(GroupMsg).where(
+                GroupMsg.sid.like(like_str)
+            )
+            
+            result = await session.execute(stmt)
+            count = result.scalar()
+            return count if count is not None else 0
 
 
 db = DataManager()
@@ -167,8 +198,8 @@ wordcloud = on_command("词云", priority=10, block=True)
 
 mywordcloud = on_command("我的词云", priority=10, block=True)
 
-def get_msg_status(groupid):
-    count = db.get_msg_count(groupid)
+async def get_msg_status(groupid):
+    count = await db.get_msg_count(groupid)
     return f"本群已记录消息数：{count}"
 
 def get_bytes_hash(data, algorithm='sha256'):
@@ -201,13 +232,13 @@ async def process_message_segments(segments):
 
     return get_bytes_hash(hash_source)
 
-def encode_msg(segments):
+async def encode_msg(segments):
     msglist = []
     for seg in segments:
         if seg["type"] == "text":
             msglist.append(("text", seg["data"]["text"]))
         if seg["type"] == "reply":
-            msglist.append(("reply", db.get_id_by_mid(seg["data"]["id"])))
+            msglist.append(("reply", await db.get_id_by_mid(seg["data"]["id"])))
         elif seg["type"] == "at":
             msglist.append(("at", seg["data"]["qq"]))
         elif seg["type"] == "face":
@@ -216,12 +247,12 @@ def encode_msg(segments):
             msglist.append(("image", ))
     return msgpack.dumps(msglist)
 
-def insert_msg(message):
-    db.insert_groupmsg(
+async def insert_msg(message):
+    await db.insert_groupmsg(
         message["message_id"],
         "group_{}_{}".format(message["group_id"], message["user_id"]),
         message["time"],
-        encode_msg(message["message"])
+        await encode_msg(message["message"])
     )
 
 @allmsg.handle()
@@ -229,7 +260,7 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     # logger.info(await bot.get_msg(message_id=message.message_id))
-    insert_msg(await bot.get_msg(message_id=message.message_id))
+    await insert_msg(await bot.get_msg(message_id=message.message_id))
 
 async def getcard(bot, gid, uid):
     info = await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False)
@@ -246,7 +277,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     attocnt = defaultdict(int)
     atfromcnt = defaultdict(int)
     atpaircnt = defaultdict(int)
-    msgdict = db.get_all_msg(gid)
+    msgdict = await db.get_all_msg(gid)
     # print(len(msgdict))
     for sid, _, msg in msgdict.values():
         atset = set()
@@ -340,10 +371,10 @@ def get_time_range(time_type):
         return 0, 1e10
     raise RuntimeError("no time type")
 
-def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
+async def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
     if time_type not in valid_time:
         time_type = "全部"
-    msgdict = db.get_all_msg(groud_id, userid=user_id, tmrange=get_time_range(time_type))
+    msgdict = await db.get_all_msg(groud_id, userid=user_id, tmrange=get_time_range(time_type))
     stopwords = {
         "怎么", "感觉", "什么", "真是", "不是", "一个", "可以", "没有", "你们", "但是", "现在", "这个",
     }
@@ -382,7 +413,7 @@ async def wordcloud_function(message: GroupMessageEvent, args: Message = Command
     for seg in message.get_message():
         if seg.type == "at":
             uid = seg.data["qq"]
-    image = get_wordcloud(gid, user_id=uid, time_type=msg)
+    image = await get_wordcloud(gid, user_id=uid, time_type=msg)
     await wordcloud.finish(MessageSegment.image(image))
 
 @mywordcloud.handle()
@@ -392,14 +423,14 @@ async def wordcloud_function(message: GroupMessageEvent, args: Message = Command
     gid = sid.split('_')[1]
     msg = args.extract_plain_text().strip()
     uid = message.get_user_id()
-    image = get_wordcloud(gid, user_id=uid, time_type=msg)
+    image = await get_wordcloud(gid, user_id=uid, time_type=msg)
     await mywordcloud.finish(MessageSegment.image(image))
 
 @scheduler.scheduled_job("cron", hour="23", minute="50", id="todaywc")
 async def todaywc():
     bot = get_bot()
     for group in config.cs_group_list:
-        image = get_wordcloud(group, time_type="今日")
+        image = await get_wordcloud(group, time_type="今日")
         await bot.send_group_msg(group_id=group, message=Message([MessageSegment.image(image)]))
 
 @debug_updmsg.handle()
@@ -438,12 +469,12 @@ async def fudupoint_function(message: GroupMessageEvent):
     admin = False
     if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}')):
         admin = True
-    point = db.get_point(f"group_{gid}_{uid}")
+    point = await db.get_point(f"group_{gid}_{uid}")
     prob1 = sigmoid_step((point + 1), admin=admin)
     prob2 = sigmoid_step((point + 2) * 2, admin=admin)
     prob3 = sigmoid_step((point + 3) * 3, admin=admin)
     prob5 = sigmoid_step((point + 5) * 5, admin=admin)
-    tm = db.get_zero_point(f"group_{gid}_{uid}") + 1
+    tm = await db.get_zero_point(f"group_{gid}_{uid}") + 1
     if admin:
         await fudupoint.finish(f"[管理员]当前点数：{point}  下一次被下放\n点数：复读自己5({prob5:.2f})，第一遍复读1({prob1:.2f})，二遍复读2({prob2:.2f})，之后复读3({prob3:.2f})")
     else:
@@ -453,19 +484,19 @@ async def addpoint(gid: str, uid: str, nowpoint: int) -> bool:
     bot = get_bot()
     sid = f"group_{gid}_{uid}"
     if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}')):
-        db.add_point(sid, nowpoint)
-        prob = sigmoid_step(nowpoint * db.get_point(sid), admin=True)
+        await db.add_point(sid, nowpoint)
+        prob = sigmoid_step(nowpoint * await db.get_point(sid), admin=True)
         if random.random() < prob:
             await local_storage.set(f'adminqqalive{gid}', '0')
             await bot.set_group_admin(group_id=gid, user_id=uid, enable=False)
             await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被下放"]))
             return True
     else:
-        db.add_point(sid, nowpoint)
-        prob = sigmoid_step(nowpoint * db.get_point(sid), admin=False)
+        await db.add_point(sid, nowpoint)
+        prob = sigmoid_step(nowpoint * await db.get_point(sid), admin=False)
         if random.random() < prob:
-            db.add_point(sid, 0)
-            tm = db.get_zero_point(sid)
+            await db.add_point(sid, 0)
+            tm = await db.get_zero_point(sid)
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
             await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
             return True
@@ -517,7 +548,7 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
         if len(msglst) == 3:
             await fuducheck.send(msglst[0][1])
             if issb:
-                tm = db.get_zero_point(f"group_{gid}_{whosb}") + 1
+                tm = await db.get_zero_point(f"group_{gid}_{whosb}") + 1
                 await bot.set_group_ban(group_id=gid, user_id=whosb, duration=60 * tm)
     lastmsg[gid] = msglst
     if nowpoint > 0:
@@ -553,9 +584,9 @@ async def roll_admin(groupid: str):
         await bot.set_group_admin(group_id=groupid, user_id=await local_storage.get(f'adminqq{groupid}'), enable=False)
     users = []
     weights = []
-    sid_list = db.get_active_user(groupid)
+    sid_list = await db.get_active_user(groupid)
     for sid in sid_list:
-        point = db.get_point(sid, day = 1) / (db.get_zero_point(sid, day = 1) + 1) + 1
+        point = await db.get_point(sid, day = 1) / (await db.get_zero_point(sid, day = 1) + 1) + 1
         userid = int(sid.split('_')[2])
         if userid != adminuid:
             users.append((userid, point))
