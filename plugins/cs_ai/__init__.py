@@ -161,13 +161,13 @@ async def ai_ask2(uid, sid, type, text) -> str:
                 data = json.loads(data.strip())
                 rank_type = process.extractOne(data['type'], valid_rank)[0]
                 time_type = process.extractOne(data['time'], valid_time)[0]
-                config, time_type = db_val.get_value_config(rank_type, time_type)
+                rankconfig, time_type = db_val.get_value_config(rank_type, time_type)
                 rv = data['reverse']
                 rv_name = "降序" if rv else "升序"
                 datas = []
                 for steamid in steamids:
                     try:
-                        val = await config.func(steamid, time_type)
+                        val = await rankconfig.func(steamid, time_type)
                         datas.append((steamid, val))
                     except NoValueError as e:
                         print(e)
