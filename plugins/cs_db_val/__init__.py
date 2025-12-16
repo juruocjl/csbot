@@ -4,7 +4,7 @@ from nonebot import require
 from nonebot import logger
 
 require("cs_db_upd")
-from ..cs_db_upd import GroupMember, MemberSteamID
+from ..cs_db_upd import GroupMember, MemberSteamID, MatchStatsGP
 
 require("utils")
 
@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Callable, Awaitable
 import time
-from sqlalchemy import select
+from sqlalchemy import select, func, text
 
 from .config import Config
 
@@ -793,16 +793,18 @@ async def get_benefit(steamid: str, time_type: str) -> Tuple[float, int]:
 @db.register("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2)
 async def get_gprt(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.avg(MatchStatsGP.rating),
+                func.count(MatchStatsGP.mid)
+            )
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        result = (await session.execute(stmt)).one()
+        if result[1] > 0:
+            return result
     raise NoValueError()
 
 @db.register("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0", 1)
