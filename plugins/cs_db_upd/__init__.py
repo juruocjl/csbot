@@ -508,7 +508,7 @@ class DataManager:
 
     async def insert_detail_info(self, data: dict):
         logger.info(f"Inserting detail info: {data['steamId']}, {data['seasonId']}")
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             async with session.begin():
 
                 # --- 准备引用变量 (简化后续写法) ---
@@ -630,7 +630,7 @@ class DataManager:
         if data["statusCode"] != 0:
             logger.error(f"爬取失败 {steamid} {data}")
             return (False, "爬取失败：" + data["errorMessage"])
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             async with session.begin():
                 result: SteamBaseInfo = await session.get(SteamBaseInfo, steamid)
         if not result or result.avatarlink != data["data"]["avatar"]:
@@ -706,7 +706,7 @@ class DataManager:
         except RuntimeError as e:
             return (False, "比赛爬取失败：" + str(e))
         
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             async with session.begin():
                 record = SteamBaseInfo(
                     steamid=steamid,
@@ -717,7 +717,7 @@ class DataManager:
                 await session.merge(record)
         
         self.insert_detail_info(data["data"])
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             result: SteamDetailInfo = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
             if result == None:
                 payload = {
