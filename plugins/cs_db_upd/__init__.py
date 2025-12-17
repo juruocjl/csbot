@@ -717,6 +717,7 @@ class DataManager:
                 await session.merge(record)
         
         await self.insert_detail_info(data["data"])
+        await asyncio.sleep(0.2)
         async with async_session_factory() as session:
             result: SteamDetailInfo = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
             if result == None:
@@ -731,6 +732,7 @@ class DataManager:
                     logger.error(f"上赛季爬取失败 {steamid} {data}")
                     return (False, "上赛季爬取失败：" + data["errorMessage"])
                 await self.insert_detail_info(data["data"])
+                await asyncio.sleep(0.2)
         return (True, name, addMatches, addMatchesGP)
     
     async def add_member(self, gid, uid):

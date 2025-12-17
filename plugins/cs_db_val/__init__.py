@@ -104,6 +104,8 @@ class DataManager:
         valid_rank.append(name)
 
         def decorator(func: Callable):
+            if name in self._registry:
+                raise ValueError(f"重复注册排名类型: {name}")
             self._registry[name] = RankConfig(title, default_time, allowed_time, reversed, range_gen, outputfmt, template, func)
             return func
         return decorator
@@ -311,7 +313,6 @@ def get_custom_filter(steamid: str, time_type: str) -> list:
         MatchStatsPW.mode == "PVP自定义"
     ]
 
-
 @db.register("ELO", "天梯分数", "本赛季", ["本赛季", "上赛季"], True, MinAdd(-10), "d0", 1)
 async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
@@ -339,7 +340,6 @@ async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
 
         return float(current_elo), total_count
 
-
 @db.register("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
 async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
@@ -366,7 +366,6 @@ async def get_we(steamid: str, time_type: str) -> tuple[float, int]:
         row = (await session.execute(stmt)).one()
         if row[1] > 0: return (float(row[0]), row[1])
     raise NoValueError()
-
 
 @db.register("ADR", "ADR", "本赛季", valid_time, True, MinAdd(-10), "d2", 1)
 async def get_adr(steamid: str, time_type: str) -> tuple[float, int]:
@@ -768,6 +767,62 @@ async def get_benefit(steamid: str, time_type: str) -> tuple[float, int]:
         row = (await session.execute(stmt)).one()
         if row[1] > 0:
             return (float(row[0]) if row[0] is not None else 0.0, row[1])
+    raise NoValueError()
+
+@db.register("火力", "火力分", "本赛季", None, True, Fix(0), "d0", 1)
+async def get_firepower(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.firePowerScore, result.cnt
+    raise NoValueError()
+
+@db.register("枪法", "枪法分", "本赛季", None, True, Fix(0), "d0", 1)
+async def get_firepower(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.marksmanshipScore, result.cnt
+    raise NoValueError()
+
+@db.register("补枪", "补枪分", "本赛季", None, True, Fix(0), "d0", 1)
+async def get_follow_up_shot_score(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.followUpShotScore, result.cnt
+    raise NoValueError()
+
+@db.register("突破", "突破分", "本赛季", None, True, Fix(0), "d0", 1)
+async def get_breakthrough_score(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.firstScore, result.cnt
+    raise NoValueError()
+
+@db.register("残局", "残局分", "本赛季", None, True, Fix(0), "d0", 1)
+async def get_endgame_score(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.oneVnScore, result.cnt
+    raise NoValueError()
+
+@db.register("道具", "道具分", "本赛季", None, True, Fix(0), "d0", 1)
+async def get_utility_score(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.itemScore, result.cnt
+    raise NoValueError()
+
+@db.register("狙击", "狙击分", "本赛季", None, True, Fix(0), "d0", 1)
+async def get_sniper_score(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.sniperScore, result.cnt
     raise NoValueError()
 
 @db.register("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2)
