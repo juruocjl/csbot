@@ -240,7 +240,7 @@ class DataManager:
     async def get_matches(self, steamid: str, time_type: str, limit = 20) -> list[MatchStatsPW] | None:
         raw_time_sql = get_time_sql(time_type)
 
-        async with self.session_factory() as session:
+        async with async_session_factory() as session:
             stmt = (
                 select(MatchStatsPW)
                 .where(MatchStatsPW.steamid == steamid)
@@ -285,13 +285,40 @@ gp_time = ["今日", "昨日", "本周", "全部"]
 class NoValueError(Exception):
     pass
 
-@db.register("ELO", "天梯分数", "本赛季", None, True, MinAdd(-10), "d0", 1)
+@db.register("ELO", "天梯分数", "本赛季", ["本赛季", "上赛季"], True, MinAdd(-10), "d0", 1)
 async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
-    assert(time_type == "本赛季")
-    result = db.get_stats(steamid)
-    if result and result[18] == SeasonId and result[3] != 0:
-        return result[3], result[4]
-    raise NoValueError()
+    time_sql = get_time_sql(time_type)
+
+    async with async_session_factory() as session:
+        filters = [
+            MatchStatsPW.steamid == steamid,
+            text(time_sql),
+            (MatchStatsPW.mode.like("天梯%")) | (MatchStatsPW.mode == "PVP周末联赛")
+        ]
+
+        stmt_latest = (
+            select(MatchStatsPW.pvpScore)
+            .where(*filters)
+            .order_by(MatchStatsPW.timeStamp.desc())
+            .limit(1)
+        )
+        
+        stmt_count = (
+            select(func.count(MatchStatsPW.mid))
+            .where(*filters)
+        )
+
+        latest_score_res = await session.execute(stmt_latest)
+        current_elo = latest_score_res.scalar() 
+        
+        if current_elo is None or current_elo == 0:
+            raise NoValueError()
+
+        count_res = await session.execute(stmt_count)
+        total_count = count_res.scalar()
+
+        return float(current_elo), total_count
+
 
 @db.register("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
 async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
