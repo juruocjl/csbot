@@ -3,12 +3,12 @@ from collections import defaultdict
 import re
 import numpy as np
 
-def parse_simulation_results(file_path: str) -> dict:
+def parse_simulation_results(file_path: str) -> tuple[dict[tuple[frozenset[str], frozenset[str], frozenset[str]], int], int]:
     """
     解析模拟结果文件，返回每个组合及其出现频率的字典
     格式: {('3-0': set, '3-1/3-2': set, '0-3': set): frequency}
     """
-    results = defaultdict(int)
+    results: dict[tuple[frozenset[str], frozenset[str], frozenset[str]], int] = defaultdict(int)
     total_simulations = 0
     pattern = r"3-0: (.*?) \| 3-1/3-2: (.*?) \| 0-3: (.*?): (\d+)/\d+"
 
@@ -49,8 +49,8 @@ def evaluate_combination(combo: dict, results: dict) -> tuple:
         correct += len(set(combo['0-3']) & set(zero_three))
         correct_counts.extend([correct] * count)
 
-    correct_counts = np.array(correct_counts)
-    prob_ge5 = np.mean(correct_counts >= 5)
-    expected_value = np.mean(correct_counts)
+    correct_counts_np = np.array(correct_counts)
+    prob_ge5 = np.mean(correct_counts_np >= 5)
+    expected_value = np.mean(correct_counts_np)
 
     return correct_counts, prob_ge5, expected_value

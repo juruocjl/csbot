@@ -114,39 +114,10 @@ def get_elo_info(pvpScore, seasonId = "S21"):
         
         return pool, color, arc
 
-async def gen_rank_image1(datas: list[tuple[float, int]], min_value: float, max_value: float, title: str, format: str):
-    html = rank_content[0]
-    sum = 0
-    for (steamid, value) in datas:
-        score = (value[0] - min_value) / (max_value - min_value)
-        temp_html = rank_content[1]
-        temp_html = temp_html.replace('_AVATAR_', path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
-        temp_html = temp_html.replace('_COLOR_', red_to_green_color(score))
-        temp_html = temp_html.replace('_LEN_', f"{round(500 * score)}")
-        temp_html = temp_html.replace('_LEFTPX_', f"10")
-        if len(value) == 1:
-            temp_html = temp_html.replace('_VALUE_', output(value[0], format))
-        else:
-            temp_html = temp_html.replace('_VALUE_', f"{output(value[0], format)} <span style='font-size:20px;'>{value[1]}场</span>")
-        html += temp_html
-        sum += value[0]
-    html += rank_content[2]
-    avg = sum / len(datas)
-    score = (avg - min_value) / (max_value - min_value)
-    html = html.replace("_AVG_", output(avg, format))
-    html = html.replace("_AVGPOS_", f"{round(score * 500) + 98}")
-    html = html.replace("_AVGLEN_", f"{round(len(datas) * 90) + 40}")
-    html = html.replace("_TITLE_", title)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
-        temp_file.write(html)
-        temp_file.close()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 200 + len(datas) * 90)
-        os.remove(temp_file.name)
-    return BytesIO(img)
 
-async def gen_rank_image2(datas: list[tuple[float, int]], min_value: float, max_value: float, title: str, format: str):
+async def gen_rank_image2(datas: list[tuple[int, tuple[float, int]]], min_value: float, max_value: float, title: str, format: str):
     html = rank_content[0]
-    sum = 0
+    sum: float = 0
     zeroscore = - min_value / (max_value - min_value)
     for (steamid, value) in datas:
         score = (value[0] - min_value) / (max_value - min_value)

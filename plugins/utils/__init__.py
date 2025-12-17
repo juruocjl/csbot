@@ -2,20 +2,19 @@ from nonebot import get_plugin_config
 from nonebot import get_driver
 from nonebot import require
 from nonebot import logger
+from typing import overload
 
-from sqlalchemy import select, String, Text
+from sqlalchemy import String, Text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass, Mapped, mapped_column
 
 import datetime
 import time
-import sqlite3
 import aiohttp
 import os
 from pyppeteer import launch
 import asyncio
+from pathlib import Path
 
 from nonebot.plugin import PluginMetadata
 
@@ -36,13 +35,8 @@ logger.info("开始加载基本组件...")
 
 driver = get_driver()
 
-conn = sqlite3.connect("groups.db", autocommit=True)
-
 if not os.path.exists("temp"):
     os.makedirs("temp", exist_ok=True)
-
-def get_cursor():
-    return conn.cursor()
 
 def get_today_start_timestamp(refreshtime = 0):
     today = datetime.date.today()
@@ -81,7 +75,16 @@ class LocalStorage:
                 new_item = StorageItem(key=key, val=val)
                 await session.merge(new_item)
 
-    async def get(self, key: str, default=None) -> str | None:
+    @overload
+    async def get(self, key: str) -> str | None: ...
+
+    @overload
+    async def get(self, key: str, default: str) -> str: ...
+
+    @overload
+    async def get(self, key: str, default: None) -> str | None: ...
+
+    async def get(self, key: str, default: str | None = None) -> str | None:
         async with async_session_factory() as session:
             item = await session.get(StorageItem, key)
             return item.val if item else default
@@ -97,12 +100,13 @@ async def init_session():
         await conn.run_sync(Base.metadata.create_all)
     logger.info("表结构初始化完成！")
 
-def get_session():
+def get_session() -> aiohttp.ClientSession:
     global session
+    assert session is not None, "Session 未初始化完成"
     return session
 
-async def async_download(url, file_path):
-    async with session.get(url) as response:
+async def async_download(url: str, file_path: str | Path) -> None:
+    async with get_session().get(url) as response:
         if response.status == 200:
             with open(file_path, "wb") as f:
                 while True:
@@ -110,15 +114,14 @@ async def async_download(url, file_path):
                     if not chunk:
                         break
                     f.write(chunk)
-            return file_path
         else:
             raise Exception(f"下载失败，状态码：{response.status}")
         
-def path_to_file_url(path):
-    absolute_path = os.path.abspath(path)
+def path_to_file_url(path: str | Path) -> str:
+    absolute_path = os.path.abspath(str(path))
     return 'file://' + absolute_path
 
-async def screenshot_html_to_png(url, width, height):
+async def screenshot_html_to_png(url: str, width: int, height: int):
     browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
     page = await browser.newPage()
     await page.setViewport({'width': width, 'height': height})

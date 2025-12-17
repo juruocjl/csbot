@@ -218,7 +218,7 @@ class SwissSystem:
             round_num: 当前轮次
         """
         # 按战绩分组
-        groups = {}  # 用字典存储不同战绩的组
+        groups: dict[int, list[Team]] = {}  # 用字典存储不同战绩的组
         for team in self.remaining:
             diff = self.records[team].diff
             if diff not in groups:
@@ -449,7 +449,7 @@ class Simulation:
         运行n次模拟
         """
         results = {team: Result.new() for team in self.teams}
-        all_combinations = {}
+        all_combinations: dict[str, int] = {}
 
         # 预生成随机数
         random_values = np.random.random(n * 10)  # 预生成足够的随机数
@@ -598,7 +598,8 @@ def format_results(results: dict[Team, Result], n: int, run_time: float, output_
 def simulate(file_path: Path | str, output_path: Path | str = "result.txt"):
 
     n_iterations = 1000000  # 增加迭代次数以获得更准确的结果
-    n_cores = max(1, cpu_count() - 1)  # 保留一个核心给系统使用
+    cpu_c = cpu_count()
+    n_cores = max(1, cpu_c - 1 if cpu_c is not None else 0)  # 保留一个核心给系统使用
 
     # 运行模拟并打印格式化结果
     start = perf_counter_ns()

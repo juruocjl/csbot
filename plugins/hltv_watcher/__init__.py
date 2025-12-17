@@ -34,7 +34,7 @@ updategame = on_command("更新比赛", priority=10, block=True)
 
 @scheduler.scheduled_job("cron", minute="*/5", id="hltv")
 @updategame.handle()
-async def update_events():
+async def update_events() -> None:
     bot = get_bot()
     for event in config.hltv_event_id_list:
         logger.info(f"start get {event}")

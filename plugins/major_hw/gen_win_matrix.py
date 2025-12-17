@@ -81,7 +81,7 @@ def calculate_win_matrix(
     """
     计算所有队伍之间的胜率矩阵
     """
-    win_matrix = {}
+    win_matrix: dict[str, dict[str, float]] = {}
 
     for team1 in teams:
         win_matrix[team1.name] = {}

@@ -104,14 +104,14 @@ async def getstatus_function(message: GroupMessageEvent):
 
     msgcount = await get_msg_status(message.group_id)
 
-    await getstatus.finish(Message([
-        MessageSegment.at(message.get_user_id()),
+    await getstatus.finish(
+        MessageSegment.at(message.get_user_id()) +
         f"""\nCPU 总使用率: {status['cpu_usage_percent']}%
 内存总容量: {status['memory']['total_gb']}GB
 已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
 可用内存: {status['memory']['available_gb']}GB
 当前图库: {tuku}
-{msgcount}"""]))
+{msgcount}""")
 
 @langeng.handle()
 async def langeng_function():

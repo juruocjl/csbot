@@ -614,7 +614,7 @@ class DataManager:
 
                 await session.merge(detail_info)
 
-    async def update_stats(self, steamid):
+    async def update_stats(self, steamid: str) -> tuple[bool, str, int, int]:
         url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats/v2"
         payload = {
             "mySteamId": config.cs_mysteam_id,
@@ -628,21 +628,20 @@ class DataManager:
         async with get_session().post(url,headers=header,json=payload) as result:
             data = await result.json()
         if data["statusCode"] != 0:
-            logger.error(f"爬取失败 {steamid} {data}")
-            return (False, "爬取失败：" + data["errorMessage"])
+            raise RuntimeError("爬取失败：" + data["errorMessage"])
         async with async_session_factory() as session:
             async with session.begin():
-                result: SteamBaseInfo = await session.get(SteamBaseInfo, steamid)
-        if not result or result.avatarlink != data["data"]["avatar"]:
+                result_info: SteamBaseInfo | None = await session.get(SteamBaseInfo, steamid)
+        if not result_info or result_info.avatarlink != data["data"]["avatar"]:
             await async_download(data["data"]["avatar"], Path(f"./avatar/{steamid}.png"))
         LastTime = 0
-        if result:
-            LastTime = result.lasttime
+        if result_info:
+            LastTime = result_info.lasttime
         newLastTime = LastTime
         name = data["data"]["name"]
         addMatches = 0
         addMatchesGP = 0
-        async def work():
+        async def work() -> None:
             nonlocal newLastTime
             nonlocal addMatches
             for SeasonID in [SeasonId, lastSeasonId]:
@@ -677,7 +676,7 @@ class DataManager:
                     if len(ddata['data']['matchList']) == 0:
                         break
                     page += 1
-        async def work_gp():
+        async def work_gp() -> None:
             nonlocal addMatchesGP
             url = "https://api.wmpvp.com/api/csgo/home/match/list"  
             headers = {
@@ -700,11 +699,8 @@ class DataManager:
             if ddata['data']['dataPublic']:
                 for match in ddata['data']['matchList']:
                     addMatchesGP += await self.update_matchgp(match["matchId"], match["timeStamp"])
-        try:
-            await work()
-            await work_gp()
-        except RuntimeError as e:
-            return (False, "比赛爬取失败：" + str(e))
+        await work()
+        await work_gp()
         
         async with async_session_factory() as session:
             async with session.begin():
@@ -719,8 +715,8 @@ class DataManager:
         await self.insert_detail_info(data["data"])
         await asyncio.sleep(0.2)
         async with async_session_factory() as session:
-            result: SteamDetailInfo = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
-            if result == None:
+            result_detail: SteamDetailInfo | None = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
+            if result_detail == None:
                 payload = {
                     "mySteamId": config.cs_mysteam_id,
                     "toSteamId": steamid,
@@ -729,8 +725,7 @@ class DataManager:
                 async with get_session().post(url,headers=header,json=payload) as result:
                     data = await result.json()
                 if data["statusCode"] != 0:
-                    logger.error(f"上赛季爬取失败 {steamid} {data}")
-                    return (False, "上赛季爬取失败：" + data["errorMessage"])
+                    raise RuntimeError("上赛季爬取失败：" + data["errorMessage"])
                 await self.insert_detail_info(data["data"])
                 await asyncio.sleep(0.2)
         return (True, name, addMatches, addMatchesGP)

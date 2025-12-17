@@ -93,7 +93,7 @@ class DataManager:
         async with async_session_factory() as session:
             stmt = select(MajorHW).where(MajorHW.stage == stage)
             result = await session.execute(stmt)
-            return result.scalars().all()
+            return list(result.scalars().all())
 
 db = DataManager()
 
@@ -127,7 +127,7 @@ try:
     results, total_simulations = parse_simulation_results(file_path)
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 except:
-    results = []
+    results = {}
     logger.error("未能加载模拟结果")
 
 
@@ -180,7 +180,7 @@ async def calc_val(uid: str) -> tuple[float, float] | None:
             win_teams = [team1 for team1, _, _, _ in result[33:37]]
             loss_teams = [team2 for _, team2, _, _ in result[33:37]]
             if len(result) >= 37:
-                correct = sum(1 for team in teams if team in win_teams)
+                correct = float(sum(1 for team in teams if team in win_teams))
             else:
                 correct = float('nan')
             prob_ge2 = float("nan")
@@ -228,6 +228,7 @@ async def calc_val(uid: str) -> tuple[float, float] | None:
             correct_counts, prob_ge5, expected_value = evaluate_combination(combo, results)
             await db.set_uid_val(uid, major_stage_name, prob_ge5, expected_value)
             return prob_ge5, expected_value
+    return None
 
 @hwadd.handle()
 async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
@@ -255,7 +256,9 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
             await hwadd.finish("请输入十只不同队伍")
         await db.add_hw(uid, major_stage_name, json.dumps(teams))
         await hwadd.send("成功添加预测，开始计算概率")
-        prob_ge5, expected_value = await calc_val(uid)
+        calc_result = await calc_val(uid)
+        assert calc_result is not None
+        prob_ge5, expected_value = calc_result
         await hwadd.finish(f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}")
 
 @hwsee.handle()
@@ -296,7 +299,7 @@ async def getcard(bot: Bot, gid: str, uid: str):
 async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     gid = message.get_session_id().split('_')[1]
     res = await db.get_all_hw(major_stage_name)
-    res = sorted(res, key=lambda x: x[3], reverse=True)
+    res = sorted(res, key=lambda x: x.winrate, reverse=True)
     text = f"{major_stage_name} 作业排行"
     for member in res:
         try:
@@ -384,7 +387,7 @@ major_all_stages = [f"{config.major_name}-{x}" for x in ["stage1", "stage2", "st
 @allrank.handle()
 async def allrank_function(bot: Bot, message: GroupMessageEvent):
     gid = message.get_session_id().split('_')[1]
-    res = {}
+    res: dict[str, dict[str, float]] = {}
     for stage in major_all_stages:
         allres = await db.get_all_hw(stage)
         for member in allres:

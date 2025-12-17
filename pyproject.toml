@@ -18,6 +18,7 @@ dependencies = [
     "matplotlib>=3.9.4",
     "meme-generator>=0.2.2",
     "msgpack>=1.1.2",
+    "mypy>=1.19.1",
     "nb-cli>=1.4.2",
     "nonebot-adapter-onebot>=2.4.6",
     "nonebot-plugin-apscheduler>=0.5.0",
@@ -29,6 +30,7 @@ dependencies = [
     "psutil>=7.1.2",
     "pyppeteer>=2.0.0",
     "ts3>=2.0.0b2",
+    "types-tqdm>=4.67.0.20250809",
     "wordcloud>=1.9.4",
 ]
 

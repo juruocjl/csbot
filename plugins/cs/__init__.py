@@ -10,11 +10,8 @@ from nonebot import logger
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
-require("utils")
-from ..utils import output, get_today_start_timestamp
-
 require("cs_img")
-from ..cs_img import gen_rank_image1, gen_rank_image2, gen_matches_image, gen_stats_image
+from ..cs_img import gen_rank_image2, gen_matches_image, gen_stats_image
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
@@ -172,10 +169,7 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                 min_value, max_value = config.range_gen.getval(min_value, max_value)
                 print(min_value, max_value)
                 image = None
-                if config.template == 1:
-                    image = await gen_rank_image1(datas, min_value, max_value, f"{time_type} {config.title}", config.outputfmt)
-                elif config.template == 2:
-                    image = await gen_rank_image2(datas, min_value, max_value, f"{time_type} {config.title}", config.outputfmt)
+                image = await gen_rank_image2(datas, min_value, max_value, f"{time_type} {config.title}", config.outputfmt)
                 await rank.finish(MessageSegment.image(image))
             except ValueError as e:
                 await rank.finish(str(e))
@@ -215,10 +209,10 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
                 time_type = cmd[1]
     if steamid != None:
         print(steamid, time_type)
-        result = await db_val.get_matches(steamid, time_type)
-        if result:
-            baseinfo = await db_val.get_base_info(steamid)
-            image = await gen_matches_image(result, steamid, baseinfo.name)
+        matches_data = await db_val.get_matches(steamid, time_type)
+        baseinfo = await db_val.get_base_info(steamid)
+        if matches_data is not None and baseinfo is not None:
+            image = await gen_matches_image(matches_data, steamid, baseinfo.name)
             await matches.finish(MessageSegment.image(image))
         else:
             await matches.finish("未找到比赛")

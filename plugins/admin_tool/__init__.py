@@ -6,9 +6,11 @@ from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot import require
 
-scheduler = require("nonebot_plugin_apscheduler").scheduler
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
-get_cursor = require("utils").get_cursor
+require("utils")
+from ..utils import async_session_factory
 
 from .config import Config
 
@@ -67,15 +69,12 @@ sql = on_command("sql", priority=10, block=True, permission=SUPERUSER)
 async def pull_function():
     await pull.finish(git_pull())
 
-def query(sql):
-    cursor = get_cursor()
-    cursor.execute(sql)
-    
-    url_pattern = re.compile(
-        r'\'https?://\S+?\''
-    )
-    return url_pattern.sub('url deleted', str(cursor.fetchall()))
+async def query(sql):
+    async with async_session_factory() as session:
+        async with session.begin():
+            cursor = await session.execute(sql)
+            return cursor.fetchall()
 
 @sql.handle()
 async def sql_function(args: Message = CommandArg()):
-    await sql.finish(query(args.extract_plain_text()))
+    await sql.finish(await query(args.extract_plain_text()))

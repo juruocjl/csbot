@@ -271,9 +271,9 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
     myid = (await bot.get_login_info())['user_id']
-    attocnt = defaultdict(int)
-    atfromcnt = defaultdict(int)
-    atpaircnt = defaultdict(int)
+    attocnt: defaultdict[int, int] = defaultdict(int)
+    atfromcnt: defaultdict[int, int] = defaultdict(int)
+    atpaircnt: defaultdict[tuple[int, int], int] = defaultdict(int)
     msgdict = await db.get_all_msg(gid)
     # print(len(msgdict))
     for sid, _, msg in msgdict.values():
@@ -312,8 +312,8 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     
     await report.send(result)
 
-    lastattime = {}
-    waittime = {}
+    lastattime: dict[int, int] = {}
+    waittime: dict[int, list[int]] = {}
     for sid, tm, msg in msgdict.values():
         uid = int(sid.split('_')[2])
         if uid in lastattime:
@@ -340,14 +340,14 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
             waittime[uid] = [0, 0]
         waittime[uid][0] += min(600, int(time.time()) - lastattime[uid])
         waittime[uid][1] += 1
-    result = "平均at回复时间\n"
-    waittime = sorted(waittime.items(), key=lambda x: x[1][0] / x[1][1], reverse=True)
-    for data in waittime:
+    result = Message("平均at回复时间")
+    waittime_list = sorted(waittime.items(), key=lambda x: x[1][0] / x[1][1], reverse=True)
+    for data in waittime_list:
         if data[0] != myid:
+            result += "\n"
             result += await getcard(bot, gid, data[0])
             result += f" {data[1][0]}/{data[1][1]}={data[1][0]/data[1][1]:.0f}"
-            result += "\n"
-    await report.send(result.strip())
+    await report.send(result)
 
 def extra_plain_text(msg):
     result = ""
@@ -414,7 +414,7 @@ async def wordcloud_function(message: GroupMessageEvent, args: Message = Command
     await wordcloud.finish(MessageSegment.image(image))
 
 @mywordcloud.handle()
-async def wordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
+async def mywordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
@@ -464,7 +464,7 @@ async def fudupoint_function(message: GroupMessageEvent):
         if seg.type == "at":
             uid = seg.data["qq"]
     admin = False
-    if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}')):
+    if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}', "0")):
         admin = True
     point = await db.get_point(f"group_{gid}_{uid}")
     prob1 = sigmoid_step((point + 1), admin=admin)
@@ -480,13 +480,13 @@ async def fudupoint_function(message: GroupMessageEvent):
 async def addpoint(gid: str, uid: str, nowpoint: int) -> bool:
     bot = get_bot()
     sid = f"group_{gid}_{uid}"
-    if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}')):
+    if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}', "0")):
         await db.add_point(sid, nowpoint)
         prob = sigmoid_step(nowpoint * await db.get_point(sid), admin=True)
         if random.random() < prob:
             await local_storage.set(f'adminqqalive{gid}', '0')
             await bot.set_group_admin(group_id=gid, user_id=uid, enable=False)
-            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被下放"]))
+            await fuducheck.send("恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被下放")
             return True
     else:
         await db.add_point(sid, nowpoint)
@@ -495,11 +495,11 @@ async def addpoint(gid: str, uid: str, nowpoint: int) -> bool:
             await db.add_point(sid, 0)
             tm = await db.get_zero_point(sid)
             await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
-            await fuducheck.send(Message(["恭喜", MessageSegment.at(uid), f" 以概率{prob:.2f}被禁言{tm}分钟"]))
+            await fuducheck.send("恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被禁言{tm}分钟")
             return True
     return False
 
-lastmsg = {}
+lastmsg: dict[str, list[tuple[str, Message, str]]] = {}
 
 def checksb(message: Message):
     text = message.extract_plain_text().strip().lower()
@@ -576,8 +576,8 @@ async def roll_admin(groupid: str):
 
     adminuid = None
     if await local_storage.get(f'adminqq{groupid}'):
-        adminuid = int(await local_storage.get(f'adminqq{groupid}'))
-    if int(await local_storage.get(f'adminqqalive{groupid}')):
+        adminuid = int(await local_storage.get(f'adminqq{groupid}', "0"))
+    if int(await local_storage.get(f'adminqqalive{groupid}', "0")):
         await bot.set_group_admin(group_id=groupid, user_id=await local_storage.get(f'adminqq{groupid}'), enable=False)
     users = []
     weights = []
@@ -596,7 +596,7 @@ async def roll_admin(groupid: str):
         cnt_ban = await db.get_zero_point(sid, day = 1)
         userid = int(sid.split('_')[2])
         if userid != adminuid:
-            if steamid := await db_val.get_steamid(userid):
+            if steamid := await db_val.get_steamid(str(userid)):
                 try:
                     ttcount = (await ttconfig.func(steamid, time_type))[0]
                 except NoValueError:
@@ -611,7 +611,7 @@ async def roll_admin(groupid: str):
     print(users)
     newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
-    await bot.send_group_msg(group_id=groupid, message=Message(['恭喜', MessageSegment.at(newadmin), f" 以{point:.2f}/{totsum:.2f}选为管理员"]))
+    await bot.send_group_msg(group_id=groupid, message='恭喜' + MessageSegment.at(newadmin) + f" 以{point:.2f}/{totsum:.2f}选为管理员")
     text = "得分：\n"
     for uid, expr, point in users:
         text += f"{await getcard(bot, groupid, uid)}: {expr}={point:.2f}\n"

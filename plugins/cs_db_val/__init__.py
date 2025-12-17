@@ -10,7 +10,6 @@ require("utils")
 
 from ..utils import async_session_factory
 from ..utils import get_today_start_timestamp
-from ..utils import get_cursor
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -35,7 +34,7 @@ lastSeasonId = config.cs_last_season_id
 
 class RangeGen(ABC):
     @abstractmethod
-    def getval(self, a: int, b: int) -> tuple[int, int]:
+    def getval(self, a: float, b: float) -> tuple[float, float]:
         pass
 class MinAdd(RangeGen):
     def __init__(self, val):
@@ -68,13 +67,12 @@ class RankConfig:
     reversed: bool
     range_gen: RangeGen
     outputfmt: str
-    template: int
     func: AsyncFloatFunc
 
 valid_rank: list[str] = []
 
 
-def get_time_sql(time_type):
+def get_time_sql(time_type: str) -> str:
     if time_type == "今日":
         return f"(timeStamp >= {get_today_start_timestamp()})"
     elif time_type == "昨日":
@@ -94,19 +92,19 @@ def get_time_sql(time_type):
 
 
 class DataManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self._registry: dict[str, RankConfig] = {}
 
-    def register(self, name: str, title: str, default_time: str, allowed_time: list[str], reversed: bool, range_gen: RangeGen, outputfmt: str, template: int):
+    def register(self, name: str, title: str, default_time: str, allowed_time: list[str] | None, reversed: bool, range_gen: RangeGen, outputfmt: str) -> Callable[[AsyncFloatFunc], AsyncFloatFunc]:
         if allowed_time is None:
             allowed_time = [default_time]
         
         valid_rank.append(name)
 
-        def decorator(func: Callable):
+        def decorator(func: AsyncFloatFunc) -> AsyncFloatFunc:
             if name in self._registry:
                 raise ValueError(f"重复注册排名类型: {name}")
-            self._registry[name] = RankConfig(title, default_time, allowed_time, reversed, range_gen, outputfmt, template, func)
+            self._registry[name] = RankConfig(title, default_time, allowed_time, reversed, range_gen, outputfmt, func)
             return func
         return decorator
 
@@ -313,7 +311,7 @@ def get_custom_filter(steamid: str, time_type: str) -> list:
         MatchStatsPW.mode == "PVP自定义"
     ]
 
-@db.register("ELO", "天梯分数", "本赛季", ["本赛季", "上赛季"], True, MinAdd(-10), "d0", 1)
+@db.register("ELO", "天梯分数", "本赛季", ["本赛季", "上赛季"], True, MinAdd(-10), "d0")
 async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
 
@@ -337,10 +335,12 @@ async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
 
         count_res = await session.execute(stmt_count)
         total_count = count_res.scalar()
+        if total_count is None or total_count == 0:
+            raise NoValueError()
 
         return float(current_elo), total_count
 
-@db.register("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2")
 async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -356,7 +356,7 @@ async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
             
     raise NoValueError()
 
-@db.register("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2", 1)
+@db.register("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2")
 async def get_we(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -367,7 +367,7 @@ async def get_we(steamid: str, time_type: str) -> tuple[float, int]:
         if row[1] > 0: return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("ADR", "ADR", "本赛季", valid_time, True, MinAdd(-10), "d2", 1)
+@db.register("ADR", "ADR", "本赛季", valid_time, True, MinAdd(-10), "d2")
 async def get_adr(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -379,7 +379,7 @@ async def get_adr(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("场次", "场次", "本赛季", valid_time, True, Fix(0), "d0", 1)
+@db.register("场次", "场次", "本赛季", valid_time, True, Fix(0), "d0")
 async def get_matches_cnt(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -387,11 +387,11 @@ async def get_matches_cnt(steamid: str, time_type: str) -> tuple[float, int]:
             .where(*get_ladder_filter(steamid, time_type))
         )
         result = (await session.execute(stmt)).scalar()
-        if result > 0:
+        if result is not None and result > 0:
             return (float(result), result)
     raise NoValueError()
 
-@db.register("胜率", "胜率", "本赛季", valid_time, True, Fix(0), "p2", 1)
+@db.register("胜率", "胜率", "本赛季", valid_time, True, Fix(0), "p2")
 async def get_winrate(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
@@ -404,7 +404,7 @@ async def get_winrate(steamid: str, time_type: str) -> tuple[float, int]:
         if row[1] > 0: return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0", 1)
+@db.register("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0")
 async def get_ekrate(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -412,7 +412,7 @@ async def get_ekrate(steamid: str, time_type: str) -> tuple[float, int]:
         return result.firstRate, result.cnt
     raise NoValueError()
     
-@db.register("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0", 1)
+@db.register("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0")
 async def get_hsrate(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -429,7 +429,7 @@ async def get_hsrate(steamid: str, time_type: str) -> tuple[float, int]:
             return (row[0] / row[1], row[2])
     raise NoValueError()
 
-@db.register("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0", 1)
+@db.register("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0")
 async def get_1v1wr(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -437,7 +437,7 @@ async def get_1v1wr(steamid: str, time_type: str) -> tuple[float, int]:
         return result.v1WinPercentage, result.cnt
     raise NoValueError()
 
-@db.register("击杀", "场均击杀", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
+@db.register("击杀", "场均击杀", "本赛季", valid_time, True, MinAdd(-0.1), "d2")
 async def get_kills(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -449,7 +449,7 @@ async def get_kills(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("死亡", "场均死亡", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
+@db.register("死亡", "场均死亡", "本赛季", valid_time, True, MinAdd(-0.1), "d2")
 async def get_deaths(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -461,7 +461,7 @@ async def get_deaths(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("助攻", "场均助攻", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
+@db.register("助攻", "场均助攻", "本赛季", valid_time, True, MinAdd(-0.1), "d2")
 async def get_assists(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -473,7 +473,7 @@ async def get_assists(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("尽力", "未胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("尽力", "未胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2")
 async def get_tryhard(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -486,7 +486,7 @@ async def get_tryhard(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("带飞", "胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("带飞", "胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2")
 async def get_carry(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -499,7 +499,7 @@ async def get_carry(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("炸鱼", "小分平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("炸鱼", "小分平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2")
 async def get_fish(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -513,7 +513,7 @@ async def get_fish(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("演员", "组排平均rt", "两赛季", valid_time, False, MinAdd(-0.05), "d2", 1)
+@db.register("演员", "组排平均rt", "两赛季", valid_time, False, MinAdd(-0.05), "d2")
 async def get_duoqi(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -526,7 +526,7 @@ async def get_duoqi(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("鼓励", "单排场次", "两赛季", valid_time, True, Fix(0), "d0", 1)
+@db.register("鼓励", "单排场次", "两赛季", valid_time, True, Fix(0), "d0")
 async def get_solo_cnt(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -535,11 +535,11 @@ async def get_solo_cnt(steamid: str, time_type: str) -> tuple[float, int]:
             .where(MatchStatsPW.isgroup == 0)
         )
         result = (await session.execute(stmt)).scalar()
-        if result > 0:
+        if result is not None and result > 0:
             return (float(result), result)
     raise NoValueError()
 
-@db.register("悲情", ">1.2rt未胜利场次", "两赛季", valid_time, True, Fix(0), "d0", 1)
+@db.register("悲情", ">1.2rt未胜利场次", "两赛季", valid_time, True, Fix(0), "d0")
 async def get_sad_cnt(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -549,11 +549,11 @@ async def get_sad_cnt(steamid: str, time_type: str) -> tuple[float, int]:
             .where(MatchStatsPW.winTeam != MatchStatsPW.team)
         )
         result = (await session.execute(stmt)).scalar()
-        if result > 0:
+        if result is not None and result > 0:
             return (float(result), result)
     raise NoValueError()
 
-@db.register("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2")
 async def get_pvp_rt(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -565,7 +565,7 @@ async def get_pvp_rt(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("内战胜率", "pvp自定义胜率", "两赛季", valid_time, True, Fix(0), "p2", 1)
+@db.register("内战胜率", "pvp自定义胜率", "两赛季", valid_time, True, Fix(0), "p2")
 async def get_pvp_wr(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
@@ -578,7 +578,7 @@ async def get_pvp_wr(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("上分", "上分", "本周", valid_time, True, ZeroIn(-1), "d0", 2)
+@db.register("上分", "上分", "本周", valid_time, True, ZeroIn(-1), "d0")
 async def get_upscore(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -590,7 +590,7 @@ async def get_upscore(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) if row[0] else 0.0, row[1])
     raise NoValueError()
 
-@db.register("回均首杀", "平均每回合首杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
+@db.register("回均首杀", "平均每回合首杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2")
 async def get_rpek(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -606,7 +606,7 @@ async def get_rpek(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
-@db.register("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
+@db.register("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2")
 async def get_rpfd(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -622,7 +622,7 @@ async def get_rpfd(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
-@db.register("回均狙杀", "平均每回合狙杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
+@db.register("回均狙杀", "平均每回合狙杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2")
 async def get_rpsn(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -638,7 +638,7 @@ async def get_rpsn(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
-@db.register("多杀", "多杀回合占比", "本赛季", valid_time, True, MinAdd(-0.01), "p0", 1)
+@db.register("多杀", "多杀回合占比", "本赛季", valid_time, True, MinAdd(-0.01), "p0")
 async def get_rpmk(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -654,7 +654,7 @@ async def get_rpmk(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
-@db.register("内鬼", "场均闪白队友", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
+@db.register("内鬼", "场均闪白队友", "本赛季", valid_time, True, MinAdd(-0.5), "d1")
 async def get_rpft(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -666,7 +666,7 @@ async def get_rpft(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("投掷", "场均道具投掷数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
+@db.register("投掷", "场均道具投掷数", "本赛季", valid_time, True, MinAdd(-0.5), "d1")
 async def get_rptr(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -678,7 +678,7 @@ async def get_rptr(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("闪白", "场均闪白数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
+@db.register("闪白", "场均闪白数", "本赛季", valid_time, True, MinAdd(-0.5), "d1")
 async def get_rpfs(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -690,7 +690,7 @@ async def get_rpfs(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
     raise NoValueError()
 
-@db.register("白给", "平均每回合首杀-首死", "本赛季", valid_time, False, ZeroIn(-0.01), "d2", 2)
+@db.register("白给", "平均每回合首杀-首死", "本赛季", valid_time, False, ZeroIn(-0.01), "d2")
 async def get_rpbg(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (
@@ -707,7 +707,7 @@ async def get_rpbg(steamid: str, time_type: str) -> tuple[float, int]:
             return ((float(row[0]) - float(row[1])) / row[2], row[3])
     raise NoValueError()
 
-@db.register("方差rt", "rt方差", "两赛季", valid_time, True, Fix(0) , "d2", 1)
+@db.register("方差rt", "rt方差", "两赛季", valid_time, True, Fix(0) , "d2")
 async def get_var_rt(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         avg_stmt = select(func.avg(MatchStatsPW.pwRating)).where(*get_ladder_filter(steamid, time_type))
@@ -729,7 +729,7 @@ async def get_var_rt(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) / (row[1] - 1), row[1])
     raise NoValueError()
 
-@db.register("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0", 1)
+@db.register("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0")
 async def get_var_adr(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         avg_stmt = select(func.avg(MatchStatsPW.adpr)).where(*get_ladder_filter(steamid, time_type))
@@ -751,7 +751,7 @@ async def get_var_adr(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) / (row[1] - 1), row[1])
     raise NoValueError()
 
-@db.register("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0", 2)
+@db.register("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0")
 async def get_benefit(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
@@ -769,7 +769,7 @@ async def get_benefit(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]) if row[0] is not None else 0.0, row[1])
     raise NoValueError()
 
-@db.register("火力", "火力分", "本赛季", None, True, Fix(0), "d0", 1)
+@db.register("火力", "火力分", "本赛季", None, True, Fix(0), "d0")
 async def get_firepower(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -777,15 +777,15 @@ async def get_firepower(steamid: str, time_type: str) -> tuple[float, int]:
         return result.firePowerScore, result.cnt
     raise NoValueError()
 
-@db.register("枪法", "枪法分", "本赛季", None, True, Fix(0), "d0", 1)
-async def get_firepower(steamid: str, time_type: str) -> tuple[float, int]:
+@db.register("枪法", "枪法分", "本赛季", None, True, Fix(0), "d0")
+async def get_marksmanship(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
     if result and result.cnt != 0:
         return result.marksmanshipScore, result.cnt
     raise NoValueError()
 
-@db.register("补枪", "补枪分", "本赛季", None, True, Fix(0), "d0", 1)
+@db.register("补枪", "补枪分", "本赛季", None, True, Fix(0), "d0")
 async def get_follow_up_shot_score(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -793,7 +793,7 @@ async def get_follow_up_shot_score(steamid: str, time_type: str) -> tuple[float,
         return result.followUpShotScore, result.cnt
     raise NoValueError()
 
-@db.register("突破", "突破分", "本赛季", None, True, Fix(0), "d0", 1)
+@db.register("突破", "突破分", "本赛季", None, True, Fix(0), "d0")
 async def get_breakthrough_score(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -801,7 +801,7 @@ async def get_breakthrough_score(steamid: str, time_type: str) -> tuple[float, i
         return result.firstScore, result.cnt
     raise NoValueError()
 
-@db.register("残局", "残局分", "本赛季", None, True, Fix(0), "d0", 1)
+@db.register("残局", "残局分", "本赛季", None, True, Fix(0), "d0")
 async def get_endgame_score(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -809,7 +809,7 @@ async def get_endgame_score(steamid: str, time_type: str) -> tuple[float, int]:
         return result.oneVnScore, result.cnt
     raise NoValueError()
 
-@db.register("道具", "道具分", "本赛季", None, True, Fix(0), "d0", 1)
+@db.register("道具", "道具分", "本赛季", None, True, Fix(0), "d0")
 async def get_utility_score(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -817,7 +817,7 @@ async def get_utility_score(steamid: str, time_type: str) -> tuple[float, int]:
         return result.itemScore, result.cnt
     raise NoValueError()
 
-@db.register("狙击", "狙击分", "本赛季", None, True, Fix(0), "d0", 1)
+@db.register("狙击", "狙击分", "本赛季", None, True, Fix(0), "d0")
 async def get_sniper_score(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
@@ -825,7 +825,7 @@ async def get_sniper_score(steamid: str, time_type: str) -> tuple[float, int]:
         return result.sniperScore, result.cnt
     raise NoValueError()
 
-@db.register("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2)
+@db.register("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2")
 async def get_gprt(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -838,11 +838,11 @@ async def get_gprt(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         result = (await session.execute(stmt)).one()
-        if result[1] > 0:
-            return result
+        if result is not None and result[1] > 0:
+            return result[0], result[1]
     raise NoValueError()
 
-@db.register("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0", 1)
+@db.register("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0")
 async def get_gp_matches_cnt(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -853,11 +853,11 @@ async def get_gp_matches_cnt(steamid: str, time_type: str) -> tuple[float, int]:
         )
         result = (await session.execute(stmt)).scalar()
         
-        if result > 0:
+        if result is not None and result > 0:
             return result, result
     raise NoValueError()
 
-@db.register("gp回均首杀", "官匹平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
+@db.register("gp回均首杀", "官匹平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2")
 async def get_gp_rpek(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -880,7 +880,7 @@ async def get_gp_rpek(steamid: str, time_type: str) -> tuple[float, int]:
             return (tot_ek / tot_rounds, row[2])
     raise NoValueError()
 
-@db.register("gp回均首死", "官匹平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
+@db.register("gp回均首死", "官匹平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2")
 async def get_gp_rpfd(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -901,7 +901,7 @@ async def get_gp_rpfd(steamid: str, time_type: str) -> tuple[float, int]:
             return (tot_fd / tot_rounds, row[2])
     raise NoValueError()
 
-@db.register("gp回均狙杀", "官匹平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
+@db.register("gp回均狙杀", "官匹平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2")
 async def get_gp_rpsn(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -922,7 +922,7 @@ async def get_gp_rpsn(steamid: str, time_type: str) -> tuple[float, int]:
             return (tot_awp / tot_rounds, row[2])
     raise NoValueError()
 
-@db.register("gp白给", "官匹平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2", 2)
+@db.register("gp白给", "官匹平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2")
 async def get_gp_rpbg(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -943,7 +943,7 @@ async def get_gp_rpbg(steamid: str, time_type: str) -> tuple[float, int]:
             return (diff / tot_rounds, row[2])
     raise NoValueError()
 
-@db.register("gp击杀", "官匹场均击杀", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
+@db.register("gp击杀", "官匹场均击杀", "全部", gp_time, True, MinAdd(-0.1), "d2")
 async def get_gp_kills(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -953,11 +953,11 @@ async def get_gp_kills(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()
-        if row[1] > 0:
-            return row
+        if row is not None and row[1] > 0:
+            return row[0], row[1]
     raise NoValueError()
 
-@db.register("gp死亡", "官匹场均死亡", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
+@db.register("gp死亡", "官匹场均死亡", "全部", gp_time, True, MinAdd(-0.1), "d2")
 async def get_gp_deaths(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -967,10 +967,11 @@ async def get_gp_deaths(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()
-        if row[1] > 0: return row
+        if row is not None and row[1] > 0:
+            return row[0], row[1]
     raise NoValueError()
 
-@db.register("gp助攻", "官匹场均助攻", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
+@db.register("gp助攻", "官匹场均助攻", "全部", gp_time, True, MinAdd(-0.1), "d2")
 async def get_gp_assists(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -980,10 +981,11 @@ async def get_gp_assists(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()
-        if row[1] > 0: return row
+        if row is not None and row[1] > 0:
+            return row[0], row[1]
     raise NoValueError()
 
-@db.register("gp尽力", "官匹未胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("gp尽力", "官匹未胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2")
 async def get_gp_tryhard(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -994,10 +996,11 @@ async def get_gp_tryhard(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()
-        if row[1] > 0: return row
+        if row is not None and row[1] > 0:
+            return row[0], row[1]
     raise NoValueError()
 
-@db.register("gp带飞", "官匹胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("gp带飞", "官匹胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2")
 async def get_gp_carry(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -1008,10 +1011,11 @@ async def get_gp_carry(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()
-        if row[1] > 0: return row
+        if row is not None and row[1] > 0:
+            return row[0], row[1]
     raise NoValueError()
 
-@db.register("gp炸鱼", "官匹小分平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
+@db.register("gp炸鱼", "官匹小分平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2")
 async def get_gp_fish(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -1024,10 +1028,11 @@ async def get_gp_fish(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()
-        if row[1] > 0: return row
+        if row is not None and row[1] > 0:
+            return row[0], row[1]
     raise NoValueError()
 
-@db.register("皮蛋", "官匹场均下包数", "全部", gp_time, True, Fix(0), "d2", 1)
+@db.register("皮蛋", "官匹场均下包数", "全部", gp_time, True, Fix(0), "d2")
 async def get_gp_c4(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
     async with async_session_factory() as session:
@@ -1037,5 +1042,6 @@ async def get_gp_c4(steamid: str, time_type: str) -> tuple[float, int]:
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()
-        if row[1] > 0: return row
+        if row is not None and row[1] > 0:
+            return row[0], row[1]
     raise NoValueError()

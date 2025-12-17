@@ -142,8 +142,8 @@ async def get_baojia(title: str = "当前底价"):
     data = []
     for goods in allgoods:
         info = await db.getgoodsinfo(goods)
-        info1d = await db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
-        info7d = await db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
+        info1d = await db.getgoodsinfo_time(goods, int(time.time() - 24 * 3600))
+        info7d = await db.getgoodsinfo_time(goods, int(time.time() - 7 * 24 * 3600))
         
         if not info: continue
 
@@ -166,8 +166,8 @@ async def get_baojia_image(title: str = "当前底价"):
     html = market_content[0].replace("_TITLE_", title)
     for goods in allgoods:
         info = await db.getgoodsinfo(goods)
-        info1d = await db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
-        info7d = await db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
+        info1d = await db.getgoodsinfo_time(goods, int(time.time() - 24 * 3600))
+        info7d = await db.getgoodsinfo_time(goods, int(time.time() - 7 * 24 * 3600))
         
         if not info: continue
 
@@ -249,8 +249,8 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
     uid = message.get_user_id()
     res = ""
     try:
-        async with get_session().get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers=headers) as res:
-            data = await res.json()
+        async with get_session().get("https://api.csqaq.com/api/v1/info/good", params={"id": args.extract_plain_text()}, headers=headers) as resgood:
+            data = await resgood.json()
         await asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
         await async_download(data['data']['goods_info']['img'], Path("goodsimg") / f"{data['data']['goods_info']['id']}.jpg")

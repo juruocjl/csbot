@@ -16,6 +16,7 @@ from ..cs_db_val import valid_time,valid_rank
 from ..cs_db_val import NoValueError
 
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 import json
 from fuzzywuzzy import process
 from sqlalchemy import String, Text
@@ -92,7 +93,7 @@ async def ai_ask2(uid, sid, type, text) -> str:
         api_key=config.cs_ai_api_key,
         base_url=config.cs_ai_url,
     )
-    msgs = [{"role": "system", "content": 
+    msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": 
                 """你是一个具备工具调用能力counter strike2助手。你现在需要分析用户的提问，判断需要调用哪些工具\n你可以使用 <query>{"name":"用户名","time":"时间选项"}</query> 来查询此用户在此时间的所有数据，最多调用10次。你的输出需要用<query>和</query>包含json内容。\n你可以使用 <queryall>{"type":"数据选项","time":"时间选项","reverse":true/false}</queryall> 来查询本群此数据选项排名前 5 的对应数据，最多调用 10 次，reverse为 false 代表升序排序，true 代表降序排序。你的输出需要使用<queryall>和</queryall>包含json内容。\n如果用户没有指明详细的时间，优先时间为本赛季。\n你只需要输出需要使用的工具，而不输出额外的内容，不需要给出调用工具的原因，在不超过限制的情况下尽可能调用更多的数据进行更全面的分析。"""}]
     msgs.append({"role": "system", "content": 
             f"""可用数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")]
@@ -102,7 +103,7 @@ async def ai_ask2(uid, sid, type, text) -> str:
         if baseinfo := await db_val.get_base_info(mysteamid):
             msgs.append({"role": "system", "content": f"用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。请不要混淆用户的用户名称。"})
     usernames = []
-    need_times = {}
+    need_times: dict[str, set[str]] = {}
     steamid_username = {}
     for steamid in steamids:
         if baseinfo := await db_val.get_base_info(steamid):
@@ -121,6 +122,7 @@ async def ai_ask2(uid, sid, type, text) -> str:
     )
     first_result = response.choices[0].message.content
     logger.info(first_result)
+    assert first_result is not None
     msgs = [{"role": "system", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
     if type == "贴吧":
         msgs.append({"role": "system", "content": "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"})
@@ -189,62 +191,64 @@ async def ai_ask2(uid, sid, type, text) -> str:
         model=model_name,
         messages=msgs,
     )
-    return response.choices[0].message.content
+    output = response.choices[0].message.content
+    assert output is not None
+    return output
         
 
 @aiasktest.handle()
 async def aiasktest_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiasktest.finish(Message([
-        MessageSegment.at(uid), " ",
+    await aiasktest.finish(
+        MessageSegment.at(uid) + " " +
         await ai_ask2(uid, sid, None, await db_val.work_msg(args))
-    ]))
+    )
 
 @aiask.handle()
 async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiasktb.finish(Message([
-        MessageSegment.at(uid), " ",
+    await aiasktb.finish(
+        MessageSegment.at(uid)+  " " + 
         await ai_ask2(uid, sid, None, await db_val.work_msg(args))
-    ]))
+    )
 
 @aiasktb.handle()
 async def aiasktb_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiasktb.finish(Message([
-        MessageSegment.at(uid), " ",
+    await aiasktb.finish(
+        MessageSegment.at(uid) + " " +
         await ai_ask2(uid, sid, "贴吧", await db_val.work_msg(args))
-    ]))
+    )
 
 @aiaskxmm.handle()
 async def aiaskxmm_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiaskxmm.finish(Message([
-        MessageSegment.at(uid), " ",
+    await aiaskxmm.finish(
+        MessageSegment.at(uid) + " " +
         await ai_ask2(uid, sid, "xmm", await db_val.work_msg(args))
-    ]))
+    )
 
 @aiaskxhs.handle()
 async def aiaskxhs_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiaskxhs.finish(Message([
-        MessageSegment.at(uid), " ",
+    await aiaskxhs.finish(
+        MessageSegment.at(uid) + " " +
         await ai_ask2(uid, sid, "xhs", await db_val.work_msg(args))
-    ]))
+    )
 
 @aiasktmr.handle()
 async def aiasktmr_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiasktmr.finish(Message([
-        MessageSegment.at(uid), " ",
+    await aiasktmr.finish(
+        MessageSegment.at(uid) + " " +
         await ai_ask2(uid, sid, "tmr", await db_val.work_msg(args))
-    ]))
+    )
 
 @aimem.handle()
 async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
@@ -256,7 +260,7 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
             api_key=config.cs_ai_api_key,
             base_url=config.cs_ai_url,
         )
-        msgs = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
+        msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
         mem = await db.get_mem(sid)
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
         msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
@@ -267,15 +271,16 @@ async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
             messages=msgs,
         )
         result = response.choices[0].message.content
+        assert result is not None
         if len(result) > 1000:
             result = result[:1000] + "……"
         print(result)
         await db.set_mem(sid, result)
     except Exception as e:
         result = f"发生错误: {str(e)}"
-    await aimem.finish(Message([
-        MessageSegment.at(uid), " ",
+    await aimem.finish(
+        MessageSegment.at(uid) + " " +
         result
-    ]))
+    )
 
 
