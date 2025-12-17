@@ -44,6 +44,78 @@ class MemberSteamID(Base):
     uid: Mapped[str] = mapped_column(String, primary_key=True)
     steamid: Mapped[str] = mapped_column(String)
 
+class MatchStatsPW(Base):
+    __tablename__ = "matches"
+
+    # --- 复合主键 ---
+    mid: Mapped[str] = mapped_column(String, primary_key=True)
+    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+
+    # --- 赛季与地图 ---
+    seasonId: Mapped[str] = mapped_column(String)
+    mapName: Mapped[str] = mapped_column(String)
+    
+    # --- 队伍与比分 ---
+    team: Mapped[int] = mapped_column(Integer)
+    winTeam: Mapped[int] = mapped_column(Integer)
+    score1: Mapped[int] = mapped_column(Integer)
+    score2: Mapped[int] = mapped_column(Integer)
+    
+    # --- 评分数据 ---
+    pwRating: Mapped[float] = mapped_column(Float)
+    we: Mapped[float] = mapped_column(Float)
+    
+    # --- 基础数据 ---
+    timeStamp: Mapped[int] = mapped_column(Integer)
+    kill: Mapped[int] = mapped_column(Integer)
+    death: Mapped[int] = mapped_column(Integer)
+    assist: Mapped[int] = mapped_column(Integer)
+    duration: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String)
+    
+    # --- PVP/完美特有数据 ---
+    pvpScore: Mapped[int] = mapped_column(Integer)
+    pvpStars: Mapped[int] = mapped_column(Integer)
+    pvpScoreChange: Mapped[int] = mapped_column(Integer)
+    pvpMvp: Mapped[int] = mapped_column(Integer)
+    
+    # --- 组队信息 (0/1) ---
+    isgroup: Mapped[int] = mapped_column(Integer)
+    greenMatch: Mapped[int] = mapped_column(Integer)
+    
+    # --- 详细击杀数据 ---
+    entryKill: Mapped[int] = mapped_column(Integer)
+    headShot: Mapped[int] = mapped_column(Integer)
+    headShotRatio: Mapped[float] = mapped_column(Float)
+    
+    # --- 道具 ---
+    flashTeammate: Mapped[int] = mapped_column(Integer)
+    flashSuccess: Mapped[int] = mapped_column(Integer) # 修正了 mvpValue 类型
+    
+    # --- 多杀 ---
+    twoKill: Mapped[int] = mapped_column(Integer)
+    threeKill: Mapped[int] = mapped_column(Integer)
+    fourKill: Mapped[int] = mapped_column(Integer)
+    fiveKill: Mapped[int] = mapped_column(Integer)
+    
+    # --- 残局 ---
+    vs1: Mapped[int] = mapped_column(Integer)
+    vs2: Mapped[int] = mapped_column(Integer)
+    vs3: Mapped[int] = mapped_column(Integer)
+    vs4: Mapped[int] = mapped_column(Integer)
+    vs5: Mapped[int] = mapped_column(Integer)
+    
+    # --- 伤害与其他 ---
+    dmgArmor: Mapped[int] = mapped_column(Integer)
+    dmgHealth: Mapped[int] = mapped_column(Integer)
+    adpr: Mapped[float] = mapped_column(Float) 
+    rws: Mapped[float] = mapped_column(Float)
+    
+    teamId: Mapped[int] = mapped_column(Integer)
+    throwsCnt: Mapped[int] = mapped_column(Integer)
+    snipeNum: Mapped[int] = mapped_column(Integer)
+    firstDeath: Mapped[int] = mapped_column(Integer)
+
 class MatchStatsGP(Base):
     __tablename__ = "matches_gp"
 
@@ -135,56 +207,6 @@ class DataManager:
             lasttime INT,
             seasonId TEXT,
             PRIMARY KEY (steamid)
-        )
-        ''')
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS matches (
-            mid TEXT,
-            steamid TEXT,
-            seasonId TEXT,
-            mapName TEXT,
-            team INT,
-            winTeam INT,
-            score1 INT,
-            score2 INT,
-            pwRating FLOAT,
-            we FLOAT,
-            timeStamp INT,
-            kill INT,
-            death INT,
-            assist INT,
-            duration INT,
-            mode TEXT,
-            pvpScore INT,
-            pvpStars INT,
-            pvpScoreChange INT,
-            pvpMvp INT,
-            isgroup INT,
-            greenMatch INT,
-            entryKill INT,
-            headShot INT,
-            headShotRatio FLOAT,
-            flashTeammate INT,
-            flashSuccess mvpValue,
-            twoKill INT,
-            threeKill INT,
-            fourKill INT,
-            fiveKill INT,
-            vs1 INT,
-            vs2 INT,
-            vs3 INT,
-            vs4 INT,
-            vs5 INT,
-            dmgArmor INT,
-            dmgHealth INT,
-            adpr INT,
-            rws FLOAT,
-            teamId INT,
-            throwsCnt INT,
-            snipeNum INT,
-            firstDeath INT,
-            PRIMARY KEY (mid, steamid)
         )
         ''')
 
