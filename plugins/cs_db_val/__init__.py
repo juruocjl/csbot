@@ -202,7 +202,7 @@ class DataManager:
         
     async def get_propmt(self, steamid, times = ['本赛季']):
         base_info = await self.get_base_info(steamid)
-        detail_info = await self.get_detail_info(steamid, "本赛季")
+        detail_info = await self.get_detail_info(steamid)
         
         if not base_info or not detail_info:
             return None
