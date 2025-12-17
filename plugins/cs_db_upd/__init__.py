@@ -7,7 +7,6 @@ require("utils")
 
 from ..utils import Base, async_session_factory
 
-get_cursor = require("utils").get_cursor
 get_session = require("utils").get_session
 async_download = require("utils").async_download
 get_today_start_timestamp = require("utils").get_today_start_timestamp
@@ -180,35 +179,18 @@ class MatchStatsGP(Base):
     infernoDamage: Mapped[int] = mapped_column(Integer)
     mvp: Mapped[int] = mapped_column(Integer)
 
-class DataManager:
-    def __init__(self):
-        cursor = get_cursor()
-        
+class SteamBaseInfo(Base):
+    __tablename__ = "steamid_baseinfo"
 
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS steamid_detail (
-            steamid TEXT,
-            avatarlink TEXT,
-            name TEXT,
-            pvpScore INT,
-            cnt INT,
-            kd FLOAT,
-            winRate FLOAT,
-            pwRating FLOAT,
-            avgWe FLOAT,
-            kills INT,
-            deaths INT,
-            assists INT,
-            rws FLOAT,
-            adr FLOAT,
-            headShotRatio FLOAT,
-            entryKillRatio FLOAT,
-            vs1WinRate FLOAT,
-            lasttime INT,
-            seasonId TEXT,
-            PRIMARY KEY (steamid)
-        )
-        ''')
+    # 主键
+    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+    
+    # 基础信息 (允许为空，以防某些字段抓取失败)
+    avatarlink: Mapped[str] = mapped_column(String)
+    name: Mapped[str] = mapped_column(String)
+    lasttime: Mapped[int] = mapped_column(Integer)
+
+class DataManager:
 
 
     async def bind(self, uid: str, steamid: str):
@@ -234,15 +216,17 @@ class DataManager:
                 # 使用 delete 语句构造器
                 stmt = delete(MemberSteamID).where(MemberSteamID.uid == uid)
                 await session.execute(stmt)
-        
+
     async def update_match(self, mid, timeStamp, season):
-        cursor = get_cursor()
-        cursor.execute('''SELECT COUNT(*) as cnt FROM matches WHERE mid == ?
-        ''',(mid, ))
-        result = cursor.fetchone()
-        if result[0] > 0:
-            # logger.info(f"update_match {mid} in db")
-            return 0
+        async with async_session_factory() as session:
+            stmt = select(func.count()).select_from(MatchStatsPW).where(MatchStatsPW.mid == mid)
+            
+            result = await session.execute(stmt)
+            count = result.scalar()
+            if count > 0:
+                logger.info(f"update_matchpw {mid} in db")
+                return 0
+        logger.info(f"update_matchpw {mid} not in db, fetching...")
         url = "https://api.wmpvp.com/api/v1/csgo/match"
         payload = {
             "matchId": mid,
@@ -458,16 +442,14 @@ class DataManager:
         if data["statusCode"] != 0:
             logger.error(f"爬取失败 {steamid} {data}")
             return (False, "爬取失败：" + data["errorMessage"])
-        cursor = get_cursor()
-        cursor.execute('''
-        SELECT avatarlink, lasttime FROM steamid_detail WHERE steamid = ?
-        ''', (steamid,))
-        result = cursor.fetchone()
-        if not result or result[0] != data["data"]["avatar"]:
+        async with self.session_factory() as session:
+            async with session.begin():
+                result: SteamBaseInfo = await session.get(SteamBaseInfo, steamid)
+        if not result or result.avatarlink != data["data"]["avatar"]:
             await async_download(data["data"]["avatar"], Path(f"./avatar/{steamid}.png"))
         LastTime = 0
         if result:
-            LastTime = result[1]
+            LastTime = result.lasttime
         newLastTime = LastTime
         name = data["data"]["name"]
         addMatches = 0
@@ -535,31 +517,16 @@ class DataManager:
             await work_gp()
         except RuntimeError as e:
             return (False, "爬取失败：" + str(e))
-        cursor.execute('''
-        INSERT OR REPLACE INTO steamid_detail 
-            (steamid, avatarlink, name, pvpScore, cnt, kd, winRate, pwRating, 
-            avgWe, kills, deaths, assists, rws, adr, headShotRatio, entryKillRatio, vs1WinRate, lasttime, seasonId) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (steamid, 
-              data["data"]["avatar"],
-              data["data"]["name"],
-              data["data"]["pvpScore"],
-              data["data"]["cnt"],
-              data["data"]["kd"],
-              data["data"]["winRate"],
-              data["data"]["pwRating"],
-              data["data"]["avgWe"],
-              data["data"]["kills"],
-              data["data"]["deaths"],
-              data["data"]["assists"],
-              data["data"]["rws"],
-              data["data"]["adr"],
-              data["data"]["headShotRatio"],
-              data["data"]["entryKillRatio"],
-              data["data"]["vs1WinRate"],
-              newLastTime,
-              data["data"]["seasonId"],
-              ))
+        
+        async with self.session_factory() as session:
+            async with session.begin():
+                record = SteamBaseInfo(
+                    steamid=steamid,
+                    name=name,
+                    avatarlink=data["data"]["avatar"],
+                    lasttime=newLastTime
+                )
+                await session.merge(record)
         
         return (True, name, addMatches, addMatchesGP)
     

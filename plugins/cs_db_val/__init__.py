@@ -405,9 +405,6 @@ async def get_winrate(steamid: str, time_type: str) -> tuple[float, int]:
 
 @db.register("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0", 1)
 async def get_ekrate(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
     assert(time_type == "本赛季")
     result = db.get_stats(steamid)
     if result and result[18] == SeasonId and result[4] != 0:
@@ -433,9 +430,6 @@ async def get_hsrate(steamid: str, time_type: str) -> tuple[float, int]:
 
 @db.register("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0", 1)
 async def get_1v1wr(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
     assert(time_type == "本赛季")
     result = db.get_stats(steamid)
     if result and result[18] == SeasonId and result[4] != 0:
