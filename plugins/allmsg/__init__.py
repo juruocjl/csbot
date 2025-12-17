@@ -178,6 +178,8 @@ fuduhelp = on_command("复读帮助", priority=10, block=True)
 
 roll = on_command("roll", priority=10, block=True, permission=SUPERUSER)
 
+pointrank = on_command("点数排行", priority=10, block=True)
+
 allmsg = on_message(priority=0, block=False)
 
 fuducheck = on_message(priority=100, block=True)
@@ -570,21 +572,17 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
     else:
         await addpoint(gid, o_uid, 50)
 
-
-async def roll_admin(groupid: str):
-    bot = get_bot()
-
+async def calc_roll_point(groupid: str) -> list[tuple[int, str, float]]:
     adminuid = None
     if await local_storage.get(f'adminqq{groupid}'):
         adminuid = int(await local_storage.get(f'adminqq{groupid}', "0"))
-    if int(await local_storage.get(f'adminqqalive{groupid}', "0")):
-        await bot.set_group_admin(group_id=groupid, user_id=await local_storage.get(f'adminqq{groupid}'), enable=False)
     users = []
-    weights = []
+    
     sid_list = await db.get_active_user(groupid)
 
     ttconfig = db_val.get_value_config("场次")
     gpconfig = db_val.get_value_config("gp场次")
+    nzconfig = db_val.get_value_config("内战场次")
 
     if time.time() - get_today_start_timestamp() < 86100:
         time_type = "昨日"
@@ -605,20 +603,47 @@ async def roll_admin(groupid: str):
                     gpcount = (await gpconfig.func(steamid, time_type))[0]
                 except NoValueError:
                     gpcount = 0
-                point = (sum_point / (cnt_ban + 1) + 1) * (math.log(1 + ttcount + 0.5 * gpcount))
-                users.append((userid, f"({sum_point}/{cnt_ban+1}+1)*log({1 + ttcount + 0.5 * gpcount})", point))
-                weights.append(point)
-    print(users)
-    newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
-    totsum = sum(weights)
-    await bot.send_group_msg(group_id=groupid, message='恭喜' + MessageSegment.at(newadmin) + f" 以{point:.2f}/{totsum:.2f}选为管理员")
+                try:
+                    nzcount = (await nzconfig.func(steamid, time_type))[0]
+                except NoValueError:
+                    nzcount = 0
+                point = (sum_point / (cnt_ban + 1) + 1) * (math.log(1 + ttcount + 0.6 * gpcount + 0.3 * nzcount))
+                users.append((userid, f"({sum_point}/{cnt_ban+1}+1)*log({1 + ttcount + 0.6 * gpcount + 0.3 * nzcount})", point))
+    return users
+
+async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str, float]]) -> str:
     text = "得分：\n"
     for uid, expr, point in users:
         text += f"{await getcard(bot, groupid, uid)}: {expr}={point:.2f}\n"
-    await bot.send_group_msg(group_id=groupid, message=Message(text.strip()))
+    return text.strip()
+
+async def roll_admin(groupid: str):
+    bot = get_bot()
+
+    if int(await local_storage.get(f'adminqqalive{groupid}', "0")):
+        await bot.set_group_admin(group_id=groupid, user_id=await local_storage.get(f'adminqq{groupid}'), enable=False)
+    
+    users = await calc_roll_point(groupid)
+    weights = [point for _, _, point in users]
+    text = await get_roll_point_text(bot, groupid, users)
+
+    newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
+    totsum = sum(weights)
+    
+    await bot.send_group_msg(group_id=groupid, message='恭喜' + MessageSegment.at(newadmin) + f" 以{point:.2f}/{totsum:.2f}选为管理员")
+    await bot.send_group_msg(group_id=groupid, message=text)
     await local_storage.set(f'adminqq{groupid}', str(newadmin))
     await local_storage.set(f'adminqqalive{groupid}', '1')
     await bot.set_group_admin(group_id=groupid, user_id=newadmin, enable=True)
+
+@pointrank.handle()
+async def pointrank_function(bot: Bot, message: GroupMessageEvent):
+    sid = message.get_session_id()
+    assert(sid.startswith("group"))
+    gid = sid.split('_')[1]
+    users = await calc_roll_point(gid)
+    text = await get_roll_point_text(bot, gid, users)
+    await pointrank.finish(text.strip())
 
 @roll.handle()
 async def roll_function(message: GroupMessageEvent):

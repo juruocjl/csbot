@@ -550,7 +550,7 @@ async def get_sad_cnt(steamid: str, time_type: str) -> tuple[float, int]:
         )
         result = (await session.execute(stmt)).scalar()
         if result is not None and result > 0:
-            return (float(result), result)
+            return float(result), result
     raise NoValueError()
 
 @db.register("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2")
@@ -563,6 +563,18 @@ async def get_pvp_rt(steamid: str, time_type: str) -> tuple[float, int]:
         row = (await session.execute(stmt)).one()
         if row[1] > 0:
             return (float(row[0]), row[1])
+    raise NoValueError()
+
+@db.register("内战场次", "pvp自定义场次", "两赛季", valid_time, True, Fix(0), "d0")
+async def get_pvp_cnt(steamid: str, time_type: str) -> tuple[float, int]:
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.count(MatchStatsPW.mid))
+            .where(*get_custom_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).scalar()
+        if row is not None and row > 0:
+            return (float(row), row)
     raise NoValueError()
 
 @db.register("内战胜率", "pvp自定义胜率", "两赛季", valid_time, True, Fix(0), "p2")
