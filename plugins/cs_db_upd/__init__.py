@@ -716,7 +716,7 @@ class DataManager:
                 )
                 await session.merge(record)
         
-        self.insert_detail_info(data["data"])
+        await self.insert_detail_info(data["data"])
         async with async_session_factory() as session:
             result: SteamDetailInfo = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
             if result == None:
