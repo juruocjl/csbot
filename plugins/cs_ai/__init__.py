@@ -149,8 +149,8 @@ async def ai_ask2(uid, sid, type, text) -> str:
     for steamid in steamids:
         if (steamid in steamid_username) and len(need_times[steamid_username[steamid]]) > 0:
             print(steamid_username[steamid], need_times[steamid_username[steamid]])
-            msgs.append({"role": "system",
-                        "content":await db_val.get_propmt(steamid, times=need_times[steamid_username[steamid]])})
+            if prompt := await db_val.get_propmt(steamid, times=need_times[steamid_username[steamid]]):
+                msgs.append({"role": "system", "content": prompt})
             
     msgs.append({"role": "system",
                 "content":'数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")'})
