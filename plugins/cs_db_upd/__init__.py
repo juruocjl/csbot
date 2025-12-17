@@ -534,7 +534,7 @@ class DataManager:
                 # --- 3. 显式实例化 SteamDetailInfo ---
                 detail_info = SteamDetailInfo(
                     # 主键
-                    steamId=data['steamId'],
+                    steamid=data['steamId'],
                     seasonId=data['seasonId'],
 
                     # 基础综合
