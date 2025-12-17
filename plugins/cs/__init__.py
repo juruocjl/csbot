@@ -93,8 +93,8 @@ async def update_function(message: MessageEvent):
         result = await db_upd.update_stats(steamid)
         if result[0]:
             await update.send(f"{result[1]} 成功更新 {result[2]} 场完美数据, {result[3]} 场官匹数据")
-            baseinfo = db_val.get_base_info(steamid)
-            detailinfo = db_val.get_detail_info(steamid)
+            baseinfo = await db_val.get_base_info(steamid)
+            detailinfo = await db_val.get_detail_info(steamid)
             if baseinfo is None or detailinfo is None:
                 await update.finish("数据获取失败，请稍后再试")
             image = await gen_stats_image(baseinfo, detailinfo)
@@ -121,8 +121,8 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
             await show.finish(f"未找到用户")
     if steamid != None:
         print(f"查询{steamid}战绩")
-        baseinfo = db_val.get_base_info(steamid)
-        detailinfo = db_val.get_detail_info(steamid)
+        baseinfo = await db_val.get_base_info(steamid)
+        detailinfo = await db_val.get_detail_info(steamid)
         if baseinfo is not None and detailinfo is not None:
             image = await gen_stats_image(baseinfo, detailinfo)
             await show.finish(MessageSegment.image(image))
