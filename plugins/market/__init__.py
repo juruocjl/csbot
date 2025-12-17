@@ -19,11 +19,13 @@ from .config import Config
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
-get_cursor = require("utils").get_cursor
-get_session = require("utils").get_session
-async_download = require("utils").async_download
-path_to_file_url = require("utils").path_to_file_url
-screenshot_html_to_png = require("utils").screenshot_html_to_png
+require("utils")
+
+from ..utils import async_session_factory, Base
+from ..utils import get_session, async_download, path_to_file_url, screenshot_html_to_png
+
+from sqlalchemy import String, Integer, select, desc, asc
+from sqlalchemy.orm import Mapped, mapped_column
 
 __plugin_meta__ = PluginMetadata(
     name="market",
@@ -50,75 +52,76 @@ try:
 except:
     logger.error("Bind csqaq api fail")
 
+class MemberGoods(Base):
+    __tablename__ = "member_goods"
+    uid: Mapped[str] = mapped_column(String, primary_key=True)
+    marketHashName: Mapped[str] = mapped_column(String, primary_key=True)
+
+class GoodsInfo(Base):
+    __tablename__ = "goods_info"
+    marketHashName: Mapped[str] = mapped_column(String, primary_key=True)
+    timeStamp: Mapped[int] = mapped_column(Integer, primary_key=True)
+    goodId: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String)
+    buffSellPrice: Mapped[int] = mapped_column(Integer)
+    buffSellNum: Mapped[int] = mapped_column(Integer)
+    yyypSellPrice: Mapped[int] = mapped_column(Integer)
+    yyypSellNum: Mapped[int] = mapped_column(Integer)
+    steamSellPrice: Mapped[int] = mapped_column(Integer)
+    steamSellNum: Mapped[int] = mapped_column(Integer)
+
 class DataManager:
     def __init__(self):
-        cursor = get_cursor()
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS member_goods (
-            uid TEXT,
-            marketHashName TEXT,
-            PRIMARY KEY (uid, marketHashName)
-        )
-        ''')
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS goods_info (
-            marketHashName TEXT,
-            timeStamp INT,
-            goodId INT,
-            name TEXT,
-            buffSellPrice INT,
-            buffSellNum INT,
-            yyypSellPrice INT,
-            yyypSellNum INT,
-            steamSellPrice INT,
-            steamSellNum INT,
-            PRIMARY KEY (marketHashName, timeStamp)
-        )
-        ''')
+        pass
     
-    def addgoods(self, uid: str, name: str):
-        cursor = get_cursor()
-        cursor.execute(
-            'INSERT OR IGNORE INTO  member_goods (uid, marketHashName) VALUES (?, ?)',
-            (uid, name)
-        )
+    async def addgoods(self, uid: str, name: str):
+        async with async_session_factory() as session:
+            async with session.begin():
+                await session.merge(MemberGoods(uid=uid, marketHashName=name))
         
     async def update_goods(self, goods_list: list[str]):
-        cursor = get_cursor()
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
             goods_list = goods_list[50:]
             async with get_session().post("https://api.csqaq.com/api/v1/goods/getPriceByMarketHashName", data=json.dumps({"marketHashNameList": now_goods}),headers=headers) as res:
                 data = await res.json()
             if data['code'] == 200:
-                for marketHashName, good_info in data['data']['success'].items():
-                    cursor.execute(
-                        'INSERT INTO goods_info (marketHashName,timeStamp,goodId,name,buffSellPrice,buffSellNum,yyypSellPrice,yyypSellNum,steamSellPrice,steamSellNum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (marketHashName, time.time(), good_info['goodId'], good_info['name'],
-                        round(good_info['buffSellPrice'] * 100), good_info['buffSellNum'],
-                        round(good_info['yyypSellPrice'] * 100), good_info['yyypSellNum'],
-                        round(good_info['steamSellPrice'] * 100), good_info['steamSellNum']
-                        )
-                    )
+                async with async_session_factory() as session:
+                    async with session.begin():
+                        for marketHashName, good_info in data['data']['success'].items():
+                            new_info = GoodsInfo(
+                                marketHashName=marketHashName,
+                                timeStamp=int(time.time()),
+                                goodId=good_info['goodId'],
+                                name=good_info['name'],
+                                buffSellPrice=round(good_info['buffSellPrice'] * 100),
+                                buffSellNum=good_info['buffSellNum'],
+                                yyypSellPrice=round(good_info['yyypSellPrice'] * 100),
+                                yyypSellNum=good_info['yyypSellNum'],
+                                steamSellPrice=round(good_info['steamSellPrice'] * 100),
+                                steamSellNum=good_info['steamSellNum']
+                            )
+                            session.add(new_info)
             else:
                 logger.error("update_goods "+data['msg'])
 
-    def getallgoods(self) -> list[str]:
-        cursor = get_cursor()
-        cursor.execute('SELECT DISTINCT marketHashName FROM member_goods')
-        res = cursor.fetchall()
-        return [a[0] for a in res]
+    async def getallgoods(self) -> list[str]:
+        async with async_session_factory() as session:
+            stmt = select(MemberGoods.marketHashName).distinct()
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
     
-    def getgoodsinfo(self, marketHashName: str):
-        cursor = get_cursor()
-        cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? ORDER BY timeStamp DESC LIMIT 1', (marketHashName, ))
-        return cursor.fetchone()
+    async def getgoodsinfo(self, marketHashName: str) -> GoodsInfo | None:
+        async with async_session_factory() as session:
+            stmt = select(GoodsInfo).where(GoodsInfo.marketHashName == marketHashName).order_by(GoodsInfo.timeStamp.desc()).limit(1)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
 
-    def getgoodsinfo_time(self, marketHashName: str, TimeStamp: int):
-        cursor = get_cursor()
-        cursor.execute('SELECT * FROM goods_info WHERE marketHashName == ? and timeStamp >= ? ORDER BY timeStamp ASC LIMIT 1', (marketHashName, TimeStamp))
-        return cursor.fetchone()
+    async def getgoodsinfo_time(self, marketHashName: str, TimeStamp: int) -> GoodsInfo | None:
+        async with async_session_factory() as session:
+            stmt = select(GoodsInfo).where(GoodsInfo.marketHashName == marketHashName).where(GoodsInfo.timeStamp >= TimeStamp).order_by(GoodsInfo.timeStamp.asc()).limit(1)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
 
 db = DataManager()
 
@@ -133,34 +136,50 @@ updallgoods = on_command("更新饰品", priority=10, block=True, permission=SUP
 with open(Path("assets") / "market.html", 'r', encoding='utf-8') as file:
     market_content = file.read().split("<!--SPLIT--->")
 
-def get_baojia(title: str = "当前底价"):
-    allgoods = db.getallgoods()
+async def get_baojia(title: str = "当前底价"):
+    allgoods = await db.getallgoods()
     logger.info(allgoods)
     data = []
     for goods in allgoods:
-        info = db.getgoodsinfo(goods)
-        info1d = db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
-        info7d = db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
-        delta1d = str((info[6] - info1d[6]) / 100) if info[1] - info1d[1] >= 20 * 3600 else "无数据"
-        delta7d = str((info[6] - info7d[6]) / 100) if info[1] - info7d[1] >= 6 * 24 * 3600 else "无数据"
+        info = await db.getgoodsinfo(goods)
+        info1d = await db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
+        info7d = await db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
         
-        data.append((info[3], info[6], delta1d, delta7d))
+        if not info: continue
+
+        delta1d = "无数据"
+        if info1d and info.timeStamp - info1d.timeStamp >= 20 * 3600:
+             delta1d = str((info.yyypSellPrice - info1d.yyypSellPrice) / 100)
+        
+        delta7d = "无数据"
+        if info7d and info.timeStamp - info7d.timeStamp >= 6 * 24 * 3600:
+             delta7d = str((info.yyypSellPrice - info7d.yyypSellPrice) / 100)
+        
+        data.append((info.name, info.yyypSellPrice, delta1d, delta7d))
     data = sorted(data, key = lambda x: x[1])
     return (title + "\n" + "\n".join([a[0] + "\n> " + str(a[1]/100) + "   Δ1d=" + a[2] + "   Δ7d=" + a[3] for a in data])).strip()
 
 async def get_baojia_image(title: str = "当前底价"):
-    allgoods = db.getallgoods()
+    allgoods = await db.getallgoods()
     logger.info(allgoods)
     data = []
     html = market_content[0].replace("_TITLE_", title)
     for goods in allgoods:
-        info = db.getgoodsinfo(goods)
-        info1d = db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
-        info7d = db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
-        price1d = info1d[6] if info[1] - info1d[1] >= 20 * 3600 else None
-        price7d = info7d[6] if info[1] - info7d[1] >= 6 * 24 * 3600 else None
+        info = await db.getgoodsinfo(goods)
+        info1d = await db.getgoodsinfo_time(goods, time.time() - 24 * 3600)
+        info7d = await db.getgoodsinfo_time(goods, time.time() - 7 * 24 * 3600)
         
-        data.append((info[2], info[3], info[6], price1d, price7d))
+        if not info: continue
+
+        price1d = None
+        if info1d and info.timeStamp - info1d.timeStamp >= 20 * 3600:
+            price1d = info1d.yyypSellPrice
+        
+        price7d = None
+        if info7d and info.timeStamp - info7d.timeStamp >= 6 * 24 * 3600:
+            price7d = info7d.yyypSellPrice
+        
+        data.append((info.goodId, info.name, info.yyypSellPrice, price1d, price7d))
     data = sorted(data, key = lambda x: x[2])
     for item in data:
         temp_html = market_content[1]
@@ -235,7 +254,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
         await asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
         await async_download(data['data']['goods_info']['img'], Path("goodsimg") / f"{data['data']['goods_info']['id']}.jpg")
-        db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
+        await db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
         res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
     except Exception as e:
         res = f"加仓失败 {e}"
@@ -243,11 +262,11 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
 
 @scheduler.scheduled_job("cron", hour="0-9,11-23", id="hourupdate")
 async def hour_update_baojia():
-    await db.update_goods(db.getallgoods())
+    await db.update_goods(await db.getallgoods())
 
 @scheduler.scheduled_job("cron", hour="10", id="baojia")
 async def send_baojia():
-    await db.update_goods(db.getallgoods())
+    await db.update_goods(await db.getallgoods())
     bot = get_bot()
     for groupid in config.cs_group_list:
         await bot.send_msg(
@@ -258,7 +277,7 @@ async def send_baojia():
 
 @updallgoods.handle()
 async def updallgoods_function():
-    goods = db.getallgoods()
+    goods = await db.getallgoods()
     msg = "成功更新 {} 件饰品".format(len(goods))
     try:
         await db.update_goods(goods)
