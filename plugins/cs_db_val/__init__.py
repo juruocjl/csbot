@@ -810,189 +810,197 @@ async def get_gprt(steamid: str, time_type: str) -> Tuple[float, int]:
 @db.register("gp场次", "官匹场次", "全部", gp_time, True, Fix(0), "d0", 1)
 async def get_gp_matches_cnt(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[0] > 0:
-        return result[0], result[0]
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        result = (await session.execute(stmt)).scalar()
+        
+        if result > 0:
+            return result, result
     raise NoValueError()
 
 @db.register("gp回均首杀", "官匹平均每回合首杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
 async def get_gp_rpek(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
-                    WHERE 
-                    {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsGP.entryKill),
+                func.sum(MatchStatsGP.score1 + MatchStatsGP.score2), # 总回合数
+                func.count(MatchStatsGP.mid)
+            )
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        
+        # row: (totEK, totR, cnt)
+        if row[2] > 0 and row[1] > 0: # 确保场次>0 且 总回合数>0
+            # SQL SUM 可能返回 None，转为 0.0 安全处理
+            tot_ek = row[0] if row[0] else 0
+            tot_rounds = row[1]
+            return (tot_ek / tot_rounds, row[2])
     raise NoValueError()
 
 @db.register("gp回均首死", "官匹平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
 async def get_gp_rpfd(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(firstDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
-                    WHERE 
-                    {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsGP.entryDeath), # 对应旧SQL的 firstDeath
+                func.sum(MatchStatsGP.score1 + MatchStatsGP.score2),
+                func.count(MatchStatsGP.mid)
+            )
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        
+        if row[2] > 0 and row[1] > 0:
+            tot_fd = row[0] if row[0] else 0
+            tot_rounds = row[1]
+            return (tot_fd / tot_rounds, row[2])
     raise NoValueError()
 
 @db.register("gp回均狙杀", "官匹平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2", 1)
 async def get_gp_rpsn(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(snipeNum) as totSK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches_gp'
-                    WHERE 
-                    {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsGP.awpKill),
+                func.sum(MatchStatsGP.score1 + MatchStatsGP.score2),
+                func.count(MatchStatsGP.mid)
+            )
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        
+        if row[2] > 0 and row[1] > 0:
+            tot_awp = row[0] if row[0] else 0
+            tot_rounds = row[1]
+            return (tot_awp / tot_rounds, row[2])
     raise NoValueError()
 
 @db.register("gp白给", "官匹平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2", 2)
 async def get_gp_rpbg(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(entryKill - entryDeath) as totEKD, SUM(score1 + score2) as totR, COUNT(mid) as cnt  FROM 'matches_gp'
-                    WHERE 
-                    {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsGP.entryKill - MatchStatsGP.entryDeath),
+                func.sum(MatchStatsGP.score1 + MatchStatsGP.score2),
+                func.count(MatchStatsGP.mid)
+            )
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        
+        if row[2] > 0 and row[1] > 0:
+            diff = row[0] if row[0] else 0
+            tot_rounds = row[1]
+            return (diff / tot_rounds, row[2])
     raise NoValueError()
 
 @db.register("gp击杀", "官匹场均击杀", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
 async def get_gp_kills(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsGP.kill), func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return row
     raise NoValueError()
 
 @db.register("gp死亡", "官匹场均死亡", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
 async def get_gp_deaths(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsGP.death), func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return row
     raise NoValueError()
 
 @db.register("gp助攻", "官匹场均助攻", "全部", gp_time, True, MinAdd(-0.1), "d2", 1)
 async def get_gp_assists(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsGP.assist), func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return row
     raise NoValueError()
 
 @db.register("gp尽力", "官匹未胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
 async def get_gp_tryhard(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        winTeam != team  
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsGP.rating), func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(MatchStatsGP.winTeam != MatchStatsGP.team)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return row
     raise NoValueError()
 
 @db.register("gp带飞", "官匹胜利平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
 async def get_gp_carry(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        winTeam == team  
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsGP.rating), func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(MatchStatsGP.winTeam == MatchStatsGP.team)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return row
     raise NoValueError()
 
 @db.register("gp炸鱼", "官匹小分平均rt", "全部", gp_time, True, MinAdd(-0.05), "d2", 1)
 async def get_gp_fish(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(rating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        winTeam == team  
-                        and min(score1, score2) <= 6
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsGP.rating), func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(MatchStatsGP.winTeam == MatchStatsGP.team)
+            # 小分 <= 6
+            .where(func.min(MatchStatsGP.score1, MatchStatsGP.score2) <= 6)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return row
     raise NoValueError()
 
 @db.register("皮蛋", "官匹场均下包数", "全部", gp_time, True, Fix(0), "d2", 1)
 async def get_gp_c4(steamid: str, time_type: str) -> Tuple[float, int]:
     time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(bombPlanted) as avgC4, COUNT(mid) as cnt
-                        FROM 'matches_gp'
-                        WHERE 
-                        {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsGP.bombPlanted), func.count(MatchStatsGP.mid))
+            .where(MatchStatsGP.steamid == steamid)
+            .where(text(time_sql))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return row
     raise NoValueError()
-
-
-
-
-
-
-
-
-
-
