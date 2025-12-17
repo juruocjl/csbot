@@ -613,6 +613,7 @@ async def calc_roll_point(groupid: str) -> list[tuple[int, str, float]]:
 
 async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str, float]]) -> str:
     text = "得分：\n"
+    users.sort(key=lambda x: x[2], reverse=True)
     for uid, expr, point in users:
         text += f"{await getcard(bot, groupid, uid)}: {expr}={point:.2f}\n"
     return text.strip()
