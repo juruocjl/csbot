@@ -6,7 +6,7 @@ require("utils")
 from ..utils import output, path_to_file_url, screenshot_html_to_png
 
 require("cs_db_upd")
-from ..cs_db_upd import MatchStatsPW
+from ..cs_db_upd import MatchStatsPW, SteamBaseInfo, SteamDetailInfo
 
 import os
 from pathlib import Path
@@ -222,28 +222,47 @@ async def gen_matches_image(datas: list[MatchStatsPW], steamid: str, name: str):
         os.remove(temp_file.name)
     return BytesIO(img)
 
-async def gen_stats_image(result):
-    (steamid, _, name, pvpScore, cnt, kd, winRate, pwRating, avgWe, kills, deaths, assists, rws, adr, headShotRatio, entryKillRatio, vs1WinRate, lasttime, _) = result
+async def gen_stats_image(baseinfo: SteamBaseInfo, detailinfo: SteamDetailInfo):
     html = data_content
-    html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
-    html = html.replace("_name_", normalize('NFKC', name))
-    html = html.replace("_WE_", f"{avgWe: .1f}")
-    html = html.replace("_Rating_",f"{pwRating: .2f}")
-    html = html.replace("_ELO_", f"{pvpScore}")
-    html = html.replace("_cnt_", f"{cnt}")
-    html = html.replace("_winRate_", f"{winRate * 100 : .0f}%")
-    html = html.replace("_RWS_", f"{rws: .2f}")
-    html = html.replace("_ADR_", f"{adr: .2f}")
-    html = html.replace("_KD_", f"{kd: .2f}")
-    html = html.replace("_headShotRatio_", f"{headShotRatio * 100 : .0f}%")
-    html = html.replace("_entryKillRatio_", f"{entryKillRatio * 100 : .0f}%")
-    html = html.replace("_vs1WinRate_", f"{vs1WinRate * 100 : .0f}%")
-    html = html.replace("_avgK_", "nan" if cnt == 0 else f"{kills / cnt : .2f}")
-    html = html.replace("_avgD_", "nan" if cnt == 0 else f"{deaths / cnt : .2f}")
-    html = html.replace("_avgA_", "nan" if cnt == 0 else f"{assists / cnt : .2f}")
-    html = html.replace("_LastTime_", datetime.datetime.fromtimestamp(lasttime).strftime("%y-%m-%d %H:%M"))
+    html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{baseinfo.steamid}.png")))
+    html = html.replace("_name_", normalize('NFKC', baseinfo.name))
+    html = html.replace("_WE_", f"{detailinfo.we: .1f}")
+    html = html.replace("_Rating_",f"{detailinfo.pwRating: .2f}")
+    html = html.replace("_ELO_", f"{detailinfo.pvpScore}")
+    html = html.replace("_cnt_", f"{detailinfo.cnt}")
+    html = html.replace("_winRate_", f"{detailinfo.winRate * 100 : .0f}%")
+    html = html.replace("_RWS_", f"{detailinfo.rws: .2f}")
+    html = html.replace("_ADR_", f"{detailinfo.damagePerRound: .2f}")
+    html = html.replace("_KAST_", f"{detailinfo.kastPerRound * 100: .0f}%")
+    html = html.replace("_headShotRatio_", f"{detailinfo.headshotRate * 100 : .0f}%")
+    html = html.replace("_entryKillRatio_", f"{detailinfo.firstRate * 100 : .0f}%")
+    html = html.replace("_vs1WinRate_", f"{detailinfo.v1WinPercentage * 100 : .0f}%")
 
-    pool, color, arc = get_elo_info(pvpScore)
+    html = html.replace("_FP_", f"{detailinfo.firePowerScore}")
+    html = html.replace("_FPL_", f"{round((detailinfo.firePowerScore / 100) * 320)}")
+    html = html.replace("_FPC_", red_to_green_color(detailinfo.firePowerScore / 100))
+
+    html = html.replace("_MS_", f"{detailinfo.marksmanshipScore}")
+    html = html.replace("_MSC_", red_to_green_color(detailinfo.marksmanshipScore / 100))
+
+    html = html.replace("_FR_", f"{detailinfo.firstScore}")
+    html = html.replace("_FRC_", red_to_green_color(detailinfo.firstScore / 100))
+
+    html = html.replace("_FU_", f"{detailinfo.followUpShotScore}")
+    html = html.replace("_FUC_", red_to_green_color(detailinfo.followUpShotScore / 100))
+
+    html = html.replace("_vN_", f"{detailinfo.oneVnScore}")
+    html = html.replace("_vNC_", red_to_green_color(detailinfo.oneVnScore / 100))
+
+    html = html.replace("_IT_", f"{detailinfo.itemScore}")
+    html = html.replace("_ITC_", red_to_green_color(detailinfo.itemScore / 100))
+
+    html = html.replace("_SN_", f"{detailinfo.sniperScore}")
+    html = html.replace("_SNC_", red_to_green_color(detailinfo.sniperScore / 100))
+    
+    html = html.replace("_LastTime_", datetime.datetime.fromtimestamp(baseinfo.lasttime).strftime("%y-%m-%d %H:%M"))
+
+    pool, color, arc = get_elo_info(detailinfo.pvpScore)
     
     html = html.replace("_COLOR_", color)
     html = html.replace("_ARC_", f"{226.2 * (1 - arc)}")
@@ -251,7 +270,7 @@ async def gen_stats_image(result):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
         temp_file.write(html)
         temp_file.close()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 560)
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 700)
         os.remove(temp_file.name)
     return BytesIO(img)
 

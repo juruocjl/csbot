@@ -4,7 +4,7 @@ from nonebot import require
 from nonebot import logger
 
 require("cs_db_upd")
-from ..cs_db_upd import GroupMember, MemberSteamID, MatchStatsGP, MatchStatsPW
+from ..cs_db_upd import GroupMember, MemberSteamID, MatchStatsGP, MatchStatsPW, SteamBaseInfo, SteamDetailInfo
 
 require("utils")
 
@@ -114,20 +114,22 @@ class DataManager:
             
             return record.steamid if record else None
 
-    def get_stats(self, steamid):
-        cursor = get_cursor()
-        cursor.execute('''
-        SELECT * FROM steamid_detail WHERE steamid = ?
-        ''', (steamid,))
-        return cursor.fetchone()
+    async def get_base_info(self, steamid) -> SteamBaseInfo | None:
+        async with async_session_factory() as session:
+            return await session.get(SteamBaseInfo, steamid)
 
-    def search_user(self, name, id = 1):
-        cursor = get_cursor()
-        cursor.execute('''SELECT steamid, name FROM steamid_detail 
-            WHERE name LIKE ? 
-            ORDER BY steamid
-            LIMIT 1 OFFSET ?''', (name, id - 1))
-        return cursor.fetchone()
+    async def get_detail_info(self, steamid, seasonid = SeasonId) -> SteamDetailInfo | None:
+        async with async_session_factory() as session:
+            return await session.get(SteamDetailInfo, (steamid, seasonid))
+
+    async def search_user(self, name, id = 1) -> SteamBaseInfo | None:
+        async with async_session_factory() as session:
+            stmt = select(SteamBaseInfo).where(SteamBaseInfo.name.like(f"%{name}%")).limit(id)
+            result = await session.execute(stmt)
+            records = result.scalars().all()
+            if len(records) >= id:
+                return records[id - 1]
+            return None
 
     async def get_all_steamid(self) -> list[str]:
         """
@@ -199,12 +201,14 @@ class DataManager:
             return (await session.execute(stmt)).one()
         
     async def get_propmt(self, steamid, times = ['本赛季']):
-        result = self.get_stats(steamid)
-        if not result:
+        base_info = await self.get_base_info(steamid)
+        detail_info = await self.get_detail_info(steamid, "本赛季")
+        
+        if not base_info or not detail_info:
             return None
-        (steamid, _, name, pvpScore, cnt, kd, winRate, pwRating, avgWe, kills, deaths, assists, rws, adr, headShotRatio, entryKillRatio, vs1WinRate, lasttime, _) = result
-        score = "未定段" if pvpScore == 0 else f"{pvpScore}"
-        prompt = f"用户名 {name}，当前天梯分数 {score}，本赛季1v1胜率 {vs1WinRate: .2f}，本赛季首杀率 {entryKillRatio: .2f}，"
+        
+        score = "未定段" if detail_info.pvpScore == 0 else f"{detail_info.pvpScore}"
+        prompt = f"用户名 {base_info.name}，当前天梯分数 {score}，本赛季1v1胜率 {detail_info.v1WinPercentage: .2f}，本赛季首杀率 {detail_info.firstRate: .2f}，"
         for time_type in times:
             (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = await self.get_all_value(steamid, time_type)
             prompt += f"{time_type}进行了{cnt}把比赛"
@@ -256,8 +260,8 @@ class DataManager:
          
     async def get_username(self, uid):
         if steamid := await self.get_steamid(uid):
-            if result := self.get_stats(steamid):
-                return result[2]
+            if baseinfo := await self.get_base_info(steamid):
+                return baseinfo.name
         return None
 
     async def work_msg(self, msg):
@@ -346,9 +350,7 @@ async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
             )
             .where(*get_ladder_filter(steamid, time_type))
         )
-        
         row = (await session.execute(stmt)).one()
-        
         if row[1] > 0:
             return (float(row[0]), row[1])
             
@@ -406,9 +408,9 @@ async def get_winrate(steamid: str, time_type: str) -> tuple[float, int]:
 @db.register("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0", 1)
 async def get_ekrate(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
-    result = db.get_stats(steamid)
-    if result and result[18] == SeasonId and result[4] != 0:
-        return result[15], result[4]
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.firstRate, result.cnt
     raise NoValueError()
     
 @db.register("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0", 1)
@@ -431,9 +433,9 @@ async def get_hsrate(steamid: str, time_type: str) -> tuple[float, int]:
 @db.register("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0", 1)
 async def get_1v1wr(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
-    result = db.get_stats(steamid)
-    if result and result[18] == SeasonId and result[4] != 0:
-        return result[16], result[4]
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.v1WinPercentage, result.cnt
     raise NoValueError()
 
 @db.register("击杀", "场均击杀", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)

@@ -190,6 +190,85 @@ class SteamBaseInfo(Base):
     name: Mapped[str] = mapped_column(String)
     lasttime: Mapped[int] = mapped_column(Integer)
 
+class SteamDetailInfo(Base):
+    __tablename__ = "steam_detail_info"
+
+    # --- 复合主键 ---
+    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+    seasonId: Mapped[str] = mapped_column(String, primary_key=True)
+
+    # --- 基础综合数据 ---
+    pvpScore: Mapped[int] = mapped_column(Integer)
+    cnt: Mapped[int] = mapped_column(Integer)
+    winRate: Mapped[float] = mapped_column(Float)
+    pwRating: Mapped[float] = mapped_column(Float)
+
+    # --- KDA 与 基础评分 ---
+    kills: Mapped[int] = mapped_column(Integer)
+    rws: Mapped[float] = mapped_column(Float)
+    pwRatingTAvg: Mapped[float] = mapped_column(Float)
+    pwRatingCtAvg: Mapped[float] = mapped_column(Float)
+    kastPerRound: Mapped[float] = mapped_column(Float)
+
+    # --- 火力 (FirePower) ---
+    firePowerScore: Mapped[int] = mapped_column(Integer)
+    killsPerRound: Mapped[float] = mapped_column(Float)
+    killsPerWinRound: Mapped[float] = mapped_column(Float)
+    damagePerRound: Mapped[float] = mapped_column(Float)
+    damagePerRoundWin: Mapped[float] = mapped_column(Float)
+    roundsWithAKill: Mapped[float] = mapped_column(Float)
+    multiKillRoundsPercentage: Mapped[float] = mapped_column(Float)
+    we: Mapped[float] = mapped_column(Float)
+    pistolRoundRating: Mapped[float] = mapped_column(Float)
+
+    # --- 枪法 (Marksmanship) ---
+    marksmanshipScore: Mapped[int] = mapped_column(Integer)
+    headshotRate: Mapped[float] = mapped_column(Float)
+    killTime: Mapped[int] = mapped_column(Integer)
+    smHitRate: Mapped[float] = mapped_column(Float)
+    reactionTime: Mapped[float] = mapped_column(Float)
+    rapidStopRate: Mapped[float] = mapped_column(Float)
+
+    # --- 补枪与辅助 (FollowUp) ---
+    followUpShotScore: Mapped[int] = mapped_column(Integer)
+    savedTeammatePerRound: Mapped[float] = mapped_column(Float)
+    tradeKillsPerRound: Mapped[float] = mapped_column(Float)
+    tradeKillsPercentage: Mapped[float] = mapped_column(Float)
+    assistKillsPercentage: Mapped[float] = mapped_column(Float)
+    damagePerKill: Mapped[float] = mapped_column(Float)
+
+    # --- 首杀 (First Blood) ---
+    firstScore: Mapped[int] = mapped_column(Integer)
+    firstHurt: Mapped[float] = mapped_column(Float)
+    winAfterOpeningKill: Mapped[float] = mapped_column(Float)
+    firstSuccessRate: Mapped[float] = mapped_column(Float)
+    firstKill: Mapped[float] = mapped_column(Float)
+    firstRate: Mapped[float] = mapped_column(Float)
+
+    # --- 道具 (Item/Utility) ---
+    itemScore: Mapped[int] = mapped_column(Integer)
+    itemRate: Mapped[float] = mapped_column(Float)
+    utilityDamagePerRounds: Mapped[float] = mapped_column(Float)
+    flashAssistPerRound: Mapped[float] = mapped_column(Float)
+    flashbangFlashRate: Mapped[float] = mapped_column(Float)
+    timeOpponentFlashedPerRound: Mapped[float] = mapped_column(Float)
+
+    # --- 残局 (Clutch / 1vN) ---
+    oneVnScore: Mapped[int] = mapped_column(Integer)
+    v1WinPercentage: Mapped[float] = mapped_column(Float)
+    clutchPointsPerRound: Mapped[float] = mapped_column(Float)
+    lastAlivePercentage: Mapped[float] = mapped_column(Float)
+    timeAlivePerRound: Mapped[float] = mapped_column(Float)
+    savesPerRoundLoss: Mapped[float] = mapped_column(Float)
+
+    # --- 狙击 (Sniper) ---
+    sniperScore: Mapped[int] = mapped_column(Integer)
+    sniperFirstKillPercentage: Mapped[float] = mapped_column(Float)
+    sniperKillsPercentage: Mapped[float] = mapped_column(Float)
+    sniperKillPerRound: Mapped[float] = mapped_column(Float)
+    roundsWithSniperKillsPercentage: Mapped[float] = mapped_column(Float)
+    sniperMultipleKillRoundPercentage: Mapped[float] = mapped_column(Float)
+
 class DataManager:
 
 
@@ -427,11 +506,120 @@ class DataManager:
         logger.info(f"update_matchgp {mid} success")
         return 1
 
+    async def insert_detail_info(self, data: dict):
+        logger.info(f"Inserting detail info: {data['steamId']}, {data['seasonId']}")
+        async with self.session_factory() as session:
+            async with session.begin():
+
+                # --- 准备引用变量 (简化后续写法) ---
+                # 直接通过 key 访问，KeyError 由 Python 原生抛出
+                radar = data['radar']
+                fp = radar['firePower']
+                fp_d = fp['detail']
+                mk = radar['marksmanship']
+                mk_d = mk['detail']
+                fu = radar['followUpShot']
+                fu_d = fu['detail']
+                ft = radar['first']
+                ft_d = ft['detail']
+                it = radar['item']
+                it_d = it['detail']
+                ov = radar['oneVN']
+                ov_d = ov['detail']
+                sn = radar['sniper']
+                sn_d = sn['detail']
+                app = radar['app'] # 注意：app 可能没有 score，但一定有 detail
+                app_d = app['detail']
+
+                # --- 3. 显式实例化 SteamDetailInfo ---
+                detail_info = SteamDetailInfo(
+                    # 主键
+                    steamId=data['steamId'],
+                    seasonId=data['seasonId'],
+
+                    # 基础综合
+                    pvpScore=int(data['pvpScore']),
+                    cnt=int(data['cnt']),
+                    winRate=float(data['winRate']),
+                    pwRating=float(data['pwRating']),
+
+                    # KDA 与 基础评分
+                    kills=int(data['kills']),
+                    rws=float(data['rws']),
+                    
+                    # APP / 综合评分细节
+                    pwRatingTAvg=float(app_d['pw_rating_t_avg_raw']),
+                    pwRatingCtAvg=float(app_d['pw_rating_ct_avg_raw']),
+                    kastPerRound=float(app_d['kast_per_round_raw']),
+
+                    # 火力 (FirePower)
+                    firePowerScore=fp['score'],
+                    killsPerRound=float(fp_d['kills_per_round_raw']),
+                    killsPerWinRound=float(fp_d['kills_per_win_round_raw']),
+                    damagePerRound=float(fp_d['damage_per_round_raw']),
+                    damagePerRoundWin=float(fp_d['damage_per_round_win_raw']),
+                    roundsWithAKill=float(fp_d['rounds_with_a_kill_raw']),
+                    multiKillRoundsPercentage=float(fp_d['multi_kill_rounds_percentage_raw']),
+                    we=float(fp_d['we_raw']),
+                    pistolRoundRating=float(fp_d['pistol_round_rating_raw']),
+
+                    # 枪法 (Marksmanship)
+                    marksmanshipScore=mk['score'],
+                    headshotRate=float(mk_d['headshot_rate_raw']),
+                    killTime=int(mk_d['kill_time_raw']), # 假设是整数字符串 '544'
+                    smHitRate=float(mk_d['sm_hit_rate_raw']),
+                    reactionTime=float(mk_d['reaction_time_raw']),
+                    rapidStopRate=float(mk_d['rapid_stop_rate_raw']),
+
+                    # 补枪与辅助 (FollowUp)
+                    followUpShotScore=fu['score'],
+                    savedTeammatePerRound=float(fu_d['saved_teammate_per_round_raw']),
+                    tradeKillsPerRound=float(fu_d['trade_kills_per_round_raw']),
+                    tradeKillsPercentage=float(fu_d['trade_kills_percentage_raw']),
+                    assistKillsPercentage=float(fu_d['assist_kills_percentage_raw']),
+                    damagePerKill=float(fu_d['damage_per_kill_raw']),
+
+                    # 首杀 (First Blood)
+                    firstScore=ft['score'],
+                    firstHurt=float(ft_d['first_hurt_raw']),
+                    winAfterOpeningKill=float(ft_d['win_after_opening_kill_raw']),
+                    firstSuccessRate=float(ft_d['first_success_rate_raw']),
+                    firstKill=float(ft_d['first_kill_raw']),
+                    firstRate=float(ft_d['first_rate_raw']),
+
+                    # 道具 (Item)
+                    itemScore=it['score'],
+                    itemRate=float(it_d['item_rate_raw']),
+                    utilityDamagePerRounds=float(it_d['utility_damage_per_rounds_raw']),
+                    flashAssistPerRound=float(it_d['flash_assist_per_round_raw']),
+                    flashbangFlashRate=float(it_d['flashbang_flash_rate_raw']),
+                    timeOpponentFlashedPerRound=float(it_d['time_opponent_flashed_per_round_raw']),
+
+                    # 残局 (OneVN)
+                    oneVnScore=ov['score'],
+                    v1WinPercentage=float(ov_d['v1_win_percentage_raw']),
+                    clutchPointsPerRound=float(ov_d['clutch_points_per_round_raw']),
+                    lastAlivePercentage=float(ov_d['last_alive_percentage_raw']),
+                    timeAlivePerRound=float(ov_d['time_alive_per_round_raw']),
+                    savesPerRoundLoss=float(ov_d['saves_per_round_loss_raw']),
+
+                    # 狙击 (Sniper)
+                    sniperScore=sn['score'],
+                    sniperFirstKillPercentage=float(sn_d['sniper_first_kill_percentage_raw']),
+                    sniperKillsPercentage=float(sn_d['sniper_kills_percentage_raw']),
+                    sniperKillPerRound=float(sn_d['sniper_kill_per_round_raw']),
+                    roundsWithSniperKillsPercentage=float(sn_d['rounds_with_sniper_kills_percentage_raw']),
+                    sniperMultipleKillRoundPercentage=float(sn_d['sniper_multiple_kill_round_percentage_raw'])
+                )
+
+                await session.merge(detail_info)
+
     async def update_stats(self, steamid):
-        url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats"
+        url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats/v2"
         payload = {
             "mySteamId": config.cs_mysteam_id,
-            "toSteamId": steamid
+            "toSteamId": steamid,
+            "csgoSeasonId": SeasonId,
         }
         header = {
             "appversion": "3.5.4.172",
@@ -516,7 +704,7 @@ class DataManager:
             await work()
             await work_gp()
         except RuntimeError as e:
-            return (False, "爬取失败：" + str(e))
+            return (False, "比赛爬取失败：" + str(e))
         
         async with self.session_factory() as session:
             async with session.begin():
@@ -528,6 +716,21 @@ class DataManager:
                 )
                 await session.merge(record)
         
+        self.insert_detail_info(data["data"])
+        async with self.session_factory() as session:
+            result: SteamDetailInfo = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
+            if result == None:
+                payload = {
+                    "mySteamId": config.cs_mysteam_id,
+                    "toSteamId": steamid,
+                    "csgoSeasonId": lastSeasonId,
+                }
+                async with get_session().post(url,headers=header,json=payload) as result:
+                    data = await result.json()
+                if data["statusCode"] != 0:
+                    logger.error(f"上赛季爬取失败 {steamid} {data}")
+                    return (False, "上赛季爬取失败：" + data["errorMessage"])
+                await self.insert_detail_info(data["data"])
         return (True, name, addMatches, addMatchesGP)
     
     async def add_member(self, gid, uid):

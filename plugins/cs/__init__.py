@@ -7,7 +7,8 @@ from nonebot.permission import SUPERUSER
 from nonebot import require
 from nonebot import logger
 
-scheduler = require("nonebot_plugin_apscheduler").scheduler
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
 from ..utils import output, get_today_start_timestamp
@@ -92,8 +93,11 @@ async def update_function(message: MessageEvent):
         result = await db_upd.update_stats(steamid)
         if result[0]:
             await update.send(f"{result[1]} 成功更新 {result[2]} 场完美数据, {result[3]} 场官匹数据")
-            result = db_val.get_stats(steamid)
-            image = await gen_stats_image(result)
+            baseinfo = db_val.get_base_info(steamid)
+            detailinfo = db_val.get_detail_info(steamid)
+            if baseinfo is None or detailinfo is None:
+                await update.finish("数据获取失败，请稍后再试")
+            image = await gen_stats_image(baseinfo, detailinfo)
             await update.finish(MessageSegment.image(image))
         else:
             await update.finish(result[1])
@@ -110,16 +114,17 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
     steamid = await db_val.get_steamid(uid)
     if user := await db_val.work_msg(args):
         print(user)
-        if result := db_val.search_user(user):
-            await show.send(f"找到用户 {result[1]}")
-            steamid = result[0]
+        if result := await db_val.search_user(user):
+            await show.send(f"找到用户 {result.name}")
+            steamid = result.steamid
         else:
             await show.finish(f"未找到用户")
     if steamid != None:
         print(f"查询{steamid}战绩")
-        result = db_val.get_stats(steamid)
-        if result:
-            image = await gen_stats_image(result)
+        baseinfo = db_val.get_base_info(steamid)
+        detailinfo = db_val.get_detail_info(steamid)
+        if baseinfo is not None and detailinfo is not None:
+            image = await gen_stats_image(baseinfo, detailinfo)
             await show.finish(MessageSegment.image(image))
         else:
             await show.finish("请先使用 /更新数据 更新战绩")
@@ -191,17 +196,17 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
         cmd = text.split()
         if len(cmd) == 1:
             if cmd[0] not in valid_time:
-                if result := db_val.search_user(cmd[0]):
-                    await matches.send(f"找到用户 {result[1]}")
-                    steamid = result[0]
+                if result := await db_val.search_user(cmd[0]):
+                    await matches.send(f"找到用户 {result.name}")
+                    steamid = result.steamid
                 else:
                     await matches.finish(f"未找到用户")
             else:
                 time_type = cmd[0]
         elif len(cmd) > 1:
-            if result := db_val.search_user(cmd[0]):
-                await matches.send(f"找到用户 {result[1]}")
-                steamid = result[0]
+            if result := await db_val.search_user(cmd[0]):
+                await matches.send(f"找到用户 {result.name}")
+                steamid = result.steamid
             else:
                 await matches.finish(f"未找到用户")
             if cmd[1] not in valid_time:
@@ -212,7 +217,8 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
         print(steamid, time_type)
         result = await db_val.get_matches(steamid, time_type)
         if result:
-            image = await gen_matches_image(result, steamid, db_val.get_stats(steamid)[2])
+            baseinfo = await db_val.get_base_info(steamid)
+            image = await gen_matches_image(result, steamid, baseinfo.name)
             await matches.finish(MessageSegment.image(image))
         else:
             await matches.finish("未找到比赛")

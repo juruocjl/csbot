@@ -99,17 +99,17 @@ async def ai_ask2(uid, sid, type, text) -> str:
             可用时间选项：{valid_time}
             注意："type" 为 "ELO" 时，"time" 只能为 "本赛季"。"""})
     if mysteamid != None:
-        if result := db_val.get_stats(mysteamid):
-            msgs.append({"role": "system", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+        if baseinfo := await db_val.get_base_info(mysteamid):
+            msgs.append({"role": "system", "content": f"用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。请不要混淆用户的用户名称。"})
     usernames = []
     need_times = {}
     steamid_username = {}
     for steamid in steamids:
-        if result := db_val.get_stats(steamid):
-            usernames.append(result[2])
-            need_times[result[2]] = set()
-            steamid_username[steamid] = result[2]
-    if result:
+        if baseinfo := await db_val.get_base_info(steamid):
+            usernames.append(baseinfo.name)
+            need_times[baseinfo.name] = set()
+            steamid_username[steamid] = baseinfo.name
+    if usernames:
         msgs.append({"role": "system", "content": f"这是可以选择的用户名：{usernames}。你需要保证调用工具时 name 用户名在此列表内。"})
     mem = await db.get_mem(sid)
     msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
@@ -131,8 +131,8 @@ async def ai_ask2(uid, sid, type, text) -> str:
     elif type == "tmr":
         msgs.append({"role": "system", "content": "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"})
     if mysteamid != None:
-        if result := db_val.get_stats(mysteamid):
-            msgs.append({"role": "system", "content": f"用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。用户的用户名是 {result[2]}。请不要混淆用户的用户名称。"})
+        if baseinfo := await db_val.get_base_info(mysteamid):
+            msgs.append({"role": "system", "content": f"用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。请不要混淆用户的用户名称。"})
 
     querypattern = r'<query>(.*?)</query>'
     all_matches = re.findall(querypattern, first_result, re.DOTALL)[:10]
