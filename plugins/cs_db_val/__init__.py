@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Awaitable
 import time
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, or_, case
 
 from .config import Config
 
@@ -168,37 +168,35 @@ class DataManager:
         return self._registry[query_type]
 
 
-    def get_all_value(self, steamid, time_type):
-        time_sql = get_time_sql(time_type)
-        steamid_sql = f"steamid == '{steamid}'"
-        cursor = get_cursor()
-        cursor.execute(f'''SELECT 
-                            AVG(pwRating) as avgRating,
-                            MAX(pwRating) as maxRating,
-                            MIN(pwRating) as minRating,
-                            AVG(we) as avgwe,
-                            AVG(adpr) as avgADR,
-                            AVG(winTeam == team) as wr,
-                            AVG(kill) as avgkill,
-                            AVG(death) as avgdeath,
-                            AVG(assist) as avgassist,
-                            SUM(pvpScoreChange) as ScoreDelta,
-                            SUM(entryKill) as totEK,
-                            SUM(firstDeath) as totFD,
-                            AVG(headShot) as avgHS,
-                            SUM(snipeNum) as totSK,
-                            SUM(twoKill + threeKill + fourKill + fiveKill) as totMK,
-                            AVG(throwsCnt) as avgTR,
-                            AVG(flashTeammate) as avgFT,
-                            AVG(flashSuccess) as avgFS,
-                            SUM(score1 + score2) as totR,
-                            COUNT(mid) as cnt
-                            FROM 'matches'
-                            WHERE 
-                            (mode =="天梯组排对局" or mode == "天梯单排对局" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                        ''')
-        return cursor.fetchone()
+    async def get_all_value(self, steamid, time_type):
+        async with async_session_factory() as session:
+            is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
+            stmt = (
+                select(
+                    func.avg(MatchStatsPW.pwRating),
+                    func.max(MatchStatsPW.pwRating),
+                    func.min(MatchStatsPW.pwRating),
+                    func.avg(MatchStatsPW.we),
+                    func.avg(MatchStatsPW.adpr),
+                    func.avg(is_win),
+                    func.avg(MatchStatsPW.kill),
+                    func.avg(MatchStatsPW.death),
+                    func.avg(MatchStatsPW.assist),
+                    func.sum(MatchStatsPW.pvpScoreChange),
+                    func.sum(MatchStatsPW.entryKill),
+                    func.sum(MatchStatsPW.firstDeath),
+                    func.avg(MatchStatsPW.headShot),
+                    func.sum(MatchStatsPW.snipeNum),
+                    func.sum(MatchStatsPW.twoKill + MatchStatsPW.threeKill + MatchStatsPW.fourKill + MatchStatsPW.fiveKill),
+                    func.avg(MatchStatsPW.throwsCnt),
+                    func.avg(MatchStatsPW.flashTeammate),
+                    func.avg(MatchStatsPW.flashSuccess),
+                    func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                    func.count(MatchStatsPW.mid)
+                )
+                .where(*get_ladder_filter(steamid, time_type))
+            )
+            return (await session.execute(stmt)).one()
         
     async def get_propmt(self, steamid, times = ['本赛季']):
         result = self.get_stats(steamid)
@@ -208,7 +206,7 @@ class DataManager:
         score = "未定段" if pvpScore == 0 else f"{pvpScore}"
         prompt = f"用户名 {name}，当前天梯分数 {score}，本赛季1v1胜率 {vs1WinRate: .2f}，本赛季首杀率 {entryKillRatio: .2f}，"
         for time_type in times:
-            (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = self.get_all_value(steamid, time_type)
+            (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = await self.get_all_value(steamid, time_type)
             prompt += f"{time_type}进行了{cnt}把比赛"
             if cnt == 0:
                 continue
@@ -285,27 +283,45 @@ gp_time = ["今日", "昨日", "本周", "全部"]
 class NoValueError(Exception):
     pass
 
+def get_ladder_filter(steamid: str, time_type: str) -> list:
+    # 获取时间 SQL 片段
+    time_sql_str = get_time_sql(time_type)
+    
+    return [
+        MatchStatsPW.steamid == steamid,
+        text(time_sql_str),
+        # 使用 or_ 处理两种模式
+        or_(
+            MatchStatsPW.mode.like("天梯%"),
+            MatchStatsPW.mode == "PVP周末联赛"
+        )
+    ]
+
+def get_custom_filter(steamid: str, time_type: str) -> list:
+    # 获取时间 SQL 片段
+    time_sql_str = get_time_sql(time_type)
+    
+    return [
+        MatchStatsPW.steamid == steamid,
+        text(time_sql_str),
+        MatchStatsPW.mode == "PVP自定义"
+    ]
+
+
 @db.register("ELO", "天梯分数", "本赛季", ["本赛季", "上赛季"], True, MinAdd(-10), "d0", 1)
 async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-
     async with async_session_factory() as session:
-        filters = [
-            MatchStatsPW.steamid == steamid,
-            text(time_sql),
-            (MatchStatsPW.mode.like("天梯%")) | (MatchStatsPW.mode == "PVP周末联赛")
-        ]
 
         stmt_latest = (
             select(MatchStatsPW.pvpScore)
-            .where(*filters)
+            .where(*get_ladder_filter(steamid, time_type))
             .order_by(MatchStatsPW.timeStamp.desc())
             .limit(1)
         )
         
         stmt_count = (
             select(func.count(MatchStatsPW.mid))
-            .where(*filters)
+            .where(*get_ladder_filter(steamid, time_type))
         )
 
         latest_score_res = await session.execute(stmt_latest)
@@ -322,20 +338,13 @@ async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
 
 @db.register("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
 async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    
     async with async_session_factory() as session:
         stmt = (
             select(
                 func.avg(MatchStatsPW.pwRating),
                 func.count(MatchStatsPW.mid)
             )
-            .where(MatchStatsPW.steamid == steamid)
-            .where(text(time_sql))
-            # 关键点：处理 (mode LIKE "天梯%" OR mode == "PVP周末联赛")
-            .where(
-                (MatchStatsPW.mode.like("天梯%")) | (MatchStatsPW.mode == "PVP周末联赛")
-            )
+            .where(*get_ladder_filter(steamid, time_type))
         )
         
         row = (await session.execute(stmt)).one()
@@ -345,68 +354,53 @@ async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
             
     raise NoValueError()
 
-@db.register("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2", 1, )
+@db.register("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2", 1)
 async def get_we(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(we) as avgwe, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.we), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return (float(row[0]), row[1])
     raise NoValueError()
+
 
 @db.register("ADR", "ADR", "本赛季", valid_time, True, MinAdd(-10), "d2", 1)
 async def get_adr(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(adpr) as avgADR, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.adpr), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("场次", "场次", "本赛季", valid_time, True, Fix(0), "d0", 1)
 async def get_matches_cnt(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[0] > 0:
-        return result[0], result[0]
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        result = (await session.execute(stmt)).scalar()
+        if result > 0:
+            return (float(result), result)
     raise NoValueError()
 
 @db.register("胜率", "胜率", "本赛季", valid_time, True, Fix(0), "p2", 1)
 async def get_winrate(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
+        
+        stmt = (
+            select(func.avg(is_win), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0: return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("首杀", "首杀率", "本赛季", None, True, Fix(0), "p0", 1)
@@ -422,18 +416,19 @@ async def get_ekrate(steamid: str, time_type: str) -> tuple[float, int]:
     
 @db.register("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0", 1)
 async def get_hsrate(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(headShot) as totHS, SUM(kill) as totK, COUNT(mid) as cnt
-                    FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0 and result[1] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsPW.headShot),
+                func.sum(MatchStatsPW.kill),
+                func.count(MatchStatsPW.mid)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        # row: (总爆头, 总击杀, 场次)
+        if row[2] > 0 and row[1] and row[1] > 0:
+            return (row[0] / row[1], row[2])
     raise NoValueError()
 
 @db.register("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0", 1)
@@ -449,385 +444,334 @@ async def get_1v1wr(steamid: str, time_type: str) -> tuple[float, int]:
 
 @db.register("击杀", "场均击杀", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
 async def get_kills(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(kill) as avgkill, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.kill), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("死亡", "场均死亡", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
 async def get_deaths(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(death) as avgdeath, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.death), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("助攻", "场均助攻", "本赛季", valid_time, True, MinAdd(-0.1), "d2", 1)
 async def get_assists(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(assist) as avgassist, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.assist), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("尽力", "未胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
 async def get_tryhard(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and winTeam != team  
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.pwRating), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+            .where(MatchStatsPW.winTeam != MatchStatsPW.team)
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("带飞", "胜利平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
 async def get_carry(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and winTeam == team  
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.pwRating), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+            .where(MatchStatsPW.winTeam == MatchStatsPW.team)
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("炸鱼", "小分平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
 async def get_fish(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and winTeam == team  
-                        and min(score1, score2) <= 6
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.pwRating), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+            .where(MatchStatsPW.winTeam == MatchStatsPW.team)
+            .where(func.min(MatchStatsPW.score1, MatchStatsPW.score2) <= 6)
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("演员", "组排平均rt", "两赛季", valid_time, False, MinAdd(-0.05), "d2", 1)
 async def get_duoqi(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and isgroup == 1  
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.pwRating), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+            .where(MatchStatsPW.isgroup == 1)
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("鼓励", "单排场次", "两赛季", valid_time, True, Fix(0), "d0", 1)
 async def get_solo_cnt(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT COUNT(mid) AS total_count
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and isgroup == 0
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[0] > 0:
-        return result[0], result[0]
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+            .where(MatchStatsPW.isgroup == 0)
+        )
+        result = (await session.execute(stmt)).scalar()
+        if result > 0:
+            return (float(result), result)
     raise NoValueError()
 
 @db.register("悲情", ">1.2rt未胜利场次", "两赛季", valid_time, True, Fix(0), "d0", 1)
 async def get_sad_cnt(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT COUNT(mid) AS total_count
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and pwRating > 1.2
-                        and winTeam != team
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[0] > 0:
-        return result[0], result[0]
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+            .where(MatchStatsPW.pwRating > 1.2)
+            .where(MatchStatsPW.winTeam != MatchStatsPW.team)
+        )
+        result = (await session.execute(stmt)).scalar()
+        if result > 0:
+            return (float(result), result)
     raise NoValueError()
 
 @db.register("内战", "pvp自定义平均rt", "两赛季", valid_time, True, MinAdd(-0.05), "d2", 1)
 async def get_pvp_rt(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(pwRating) as avgRating, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        mode == "PVP自定义"
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.pwRating), func.count(MatchStatsPW.mid))
+            .where(*get_custom_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("内战胜率", "pvp自定义胜率", "两赛季", valid_time, True, Fix(0), "p2", 1)
 async def get_pvp_wr(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(winTeam == team) as wr, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        mode == "PVP自定义"
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
+        stmt = (
+            select(func.avg(is_win), func.count(MatchStatsPW.mid))
+            .where(*get_custom_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("上分", "上分", "本周", valid_time, True, ZeroIn(-1), "d0", 2)
 async def get_upscore(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(pvpScoreChange) as ScoreDelta, COUNT(mid) as cnt
-                        FROM 'matches'
-                        WHERE 
-                        (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                        and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.sum(MatchStatsPW.pvpScoreChange), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]) if row[0] else 0.0, row[1])
     raise NoValueError()
 
 @db.register("回均首杀", "平均每回合首杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
 async def get_rpek(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(entryKill) as totEK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsPW.entryKill),
+                func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                func.count(MatchStatsPW.mid)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[2] > 0 and row[1] > 0:
+            return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
 @db.register("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
 async def get_rpfd(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(firstDeath) as totFD, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsPW.firstDeath),
+                func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                func.count(MatchStatsPW.mid)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[2] > 0 and row[1] > 0:
+            return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
 @db.register("回均狙杀", "平均每回合狙杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2", 1)
 async def get_rpsn(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(snipeNum) as totSK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsPW.snipeNum),
+                func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                func.count(MatchStatsPW.mid)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[2] > 0 and row[1] > 0:
+            return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
 @db.register("多杀", "多杀回合占比", "本赛季", valid_time, True, MinAdd(-0.01), "p0", 1)
 async def get_rpmk(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT SUM(twoKill + threeKill + fourKill + fiveKill) as totMK, SUM(score1 + score2) as totR, COUNT(mid) as cnt FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[2] > 0:
-        return (result[0] / result[1], result[2])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsPW.twoKill + MatchStatsPW.threeKill + MatchStatsPW.fourKill + MatchStatsPW.fiveKill),
+                func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                func.count(MatchStatsPW.mid)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[2] > 0 and row[1] > 0:
+            return (float(row[0]) / row[1], row[2])
     raise NoValueError()
 
 @db.register("内鬼", "场均闪白队友", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
 async def get_rpft(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(flashTeammate) as avgFT, COUNT(mid) as cnt FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.flashTeammate), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("投掷", "场均道具投掷数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
 async def get_rptr(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(throwsCnt) as avgTR, COUNT(mid) as cnt FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.throwsCnt), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("闪白", "场均闪白数", "本赛季", valid_time, True, MinAdd(-0.5), "d1", 1)
 async def get_rpfs(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(flashSuccess) as avgFS, COUNT(mid) as cnt FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.avg(MatchStatsPW.flashSuccess), func.count(MatchStatsPW.mid))
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]), row[1])
     raise NoValueError()
 
 @db.register("白给", "平均每回合首杀-首死", "本赛季", valid_time, False, ZeroIn(-0.01), "d2", 2)
 async def get_rpbg(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT 
-                        SUM(entryKill) as totEK, 
-                        SUM(firstDeath) as totFD, 
-                        SUM(score1 + score2) as totR, 
-                        COUNT(mid) as cnt 
-                    FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[3] > 0:
-        return ((result[0] - result[1]) / result[2], result[3])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsPW.entryKill),
+                func.sum(MatchStatsPW.firstDeath),
+                func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                func.count(MatchStatsPW.mid)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[3] > 0 and row[2] > 0:
+            return ((float(row[0]) - float(row[1])) / row[2], row[3])
     raise NoValueError()
 
 @db.register("方差rt", "rt方差", "两赛季", valid_time, True, Fix(0) , "d2", 1)
 async def get_var_rt(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f"""
-                        WITH filtered_matches AS (
-                            SELECT pwRating FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                        )
-                        SELECT SUM((pwRating - avg_val) * (pwRating - avg_val)) AS SUM2, COUNT(pwRating) AS CNT
-                        FROM filtered_matches, 
-                            (SELECT AVG(pwRating) AS avg_val FROM filtered_matches) AS sub
-                    """)
-    result = cursor.fetchone()
-    if result[1] > 1:
-        return (result[0] / (result[1] - 1), result[1])
+    async with async_session_factory() as session:
+        avg_stmt = select(func.avg(MatchStatsPW.pwRating)).where(*get_ladder_filter(steamid, time_type))
+        avg_val = (await session.execute(avg_stmt)).scalar()
+        
+        if avg_val is None:
+            raise NoValueError()
+            
+        stmt = (
+            select(
+                func.sum((MatchStatsPW.pwRating - avg_val) * (MatchStatsPW.pwRating - avg_val)),
+                func.count(MatchStatsPW.pwRating)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        
+        if row[1] > 1:
+            return (float(row[0]) / (row[1] - 1), row[1])
     raise NoValueError()
 
 @db.register("方差ADR", "ADR方差", "两赛季", valid_time, True, Fix(0) , "d0", 1)
 async def get_var_adr(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f"""
-                        WITH filtered_matches AS (
-                            SELECT adpr FROM 'matches'
-                            WHERE 
-                            (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                            and {time_sql} and {steamid_sql}
-                        )
-                        SELECT SUM((adpr - avg_val) * (adpr - avg_val)) AS SUM2, COUNT(adpr) AS CNT
-                        FROM filtered_matches, 
-                            (SELECT AVG(adpr) AS avg_val FROM filtered_matches) AS sub
-                    """)
-    result = cursor.fetchone()
-    if result[1] > 1:
-        return (result[0] / (result[1] - 1), result[1])
+    async with async_session_factory() as session:
+        avg_stmt = select(func.avg(MatchStatsPW.adpr)).where(*get_ladder_filter(steamid, time_type))
+        avg_val = (await session.execute(avg_stmt)).scalar()
+        
+        if avg_val is None:
+            raise NoValueError()
+
+        stmt = (
+            select(
+                func.sum((MatchStatsPW.adpr - avg_val) * (MatchStatsPW.adpr - avg_val)),
+                func.count(MatchStatsPW.adpr)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        
+        if row[1] > 1:
+            return (float(row[0]) / (row[1] - 1), row[1])
     raise NoValueError()
 
 @db.register("受益", "胜率-期望胜率", "两赛季", valid_time, True, ZeroIn(-0.01), "p0", 2)
 async def get_benefit(steamid: str, time_type: str) -> tuple[float, int]:
-    time_sql = get_time_sql(time_type)
-    steamid_sql = f"steamid == '{steamid}'"
-    cursor = get_cursor()
-    cursor.execute(f'''SELECT AVG(winTeam==Team)-AVG(MAX(0, (we-2.29)/(16-2.29))), COUNT(mid) as cnt
-                    FROM 'matches'
-                    WHERE 
-                    (mode LIKE "天梯%" or mode == "PVP周末联赛")
-                    and {time_sql} and {steamid_sql}
-                    ''')
-    result = cursor.fetchone()
-    if result[1] > 0:
-        return result
+    async with async_session_factory() as session:
+        is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
+        expected_win = func.max(0, (MatchStatsPW.we - 2.29) / (16 - 2.29))
+        
+        stmt = (
+            select(
+                func.avg(is_win) - func.avg(expected_win),
+                func.count(MatchStatsPW.mid)
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+        if row[1] > 0:
+            return (float(row[0]) if row[0] is not None else 0.0, row[1])
     raise NoValueError()
 
 @db.register("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2", 2)
