@@ -572,7 +572,7 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
     else:
         await addpoint(gid, o_uid, 50)
 
-async def calc_roll_point(groupid: str) -> list[tuple[int, str, float]]:
+async def calc_roll_point(groupid: str, time_type: str, day:int = 1) -> list[tuple[int, str, float]]:
     adminuid = None
     if await local_storage.get(f'adminqq{groupid}'):
         adminuid = int(await local_storage.get(f'adminqq{groupid}', "0"))
@@ -584,14 +584,10 @@ async def calc_roll_point(groupid: str) -> list[tuple[int, str, float]]:
     gpconfig = db_val.get_value_config("gp场次")
     nzconfig = db_val.get_value_config("内战场次")
 
-    if time.time() - get_today_start_timestamp() < 86100:
-        time_type = "昨日"
-    else:
-        time_type = "今日"
 
     for sid in sid_list:
-        sum_point = await db.get_point(sid, day = 1)
-        cnt_ban = await db.get_zero_point(sid, day = 1)
+        sum_point = await db.get_point(sid, day = day)
+        cnt_ban = await db.get_zero_point(sid, day = day)
         userid = int(sid.split('_')[2])
         if userid != adminuid:
             if steamid := await db_val.get_steamid(str(userid)):
@@ -620,11 +616,16 @@ async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str
 
 async def roll_admin(groupid: str):
     bot = get_bot()
-
+    
+    if time.time() - get_today_start_timestamp() < 86100:
+        time_type = "昨日"
+    else:
+        time_type = "今日"
+    
     if int(await local_storage.get(f'adminqqalive{groupid}', "0")):
         await bot.set_group_admin(group_id=groupid, user_id=await local_storage.get(f'adminqq{groupid}'), enable=False)
     
-    users = await calc_roll_point(groupid)
+    users = await calc_roll_point(groupid, time_type, 1)
     weights = [point for _, _, point in users]
     text = await get_roll_point_text(bot, groupid, users)
 
@@ -642,7 +643,7 @@ async def pointrank_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
-    users = await calc_roll_point(gid)
+    users = await calc_roll_point(gid, "今日", 0)
     text = await get_roll_point_text(bot, gid, users)
     await pointrank.finish(text.strip())
 
