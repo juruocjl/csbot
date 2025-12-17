@@ -124,12 +124,16 @@ async def gen_rank_image2(datas: list[tuple[int, tuple[float, int]]], min_value:
         temp_html = rank_content[1]
         temp_html = temp_html.replace('_AVATAR_', path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
         temp_html = temp_html.replace('_COLOR_', red_to_green_color(score))
-        if value[0] >= 0:
-            temp_html = temp_html.replace('_LEN_', f"{round(500 * (score - zeroscore))}")
-            temp_html = temp_html.replace('_LEFTPX_', f"{round(500 * zeroscore) + 10}")
+        if min_value <= 0 <= max_value:
+            if value[0] >= 0:
+                temp_html = temp_html.replace('_LEN_', f"{round(500 * (score - zeroscore))}")
+                temp_html = temp_html.replace('_LEFTPX_', f"{round(500 * zeroscore) + 10}")
+            else:
+                temp_html = temp_html.replace('_LEN_', f"{round(500 * (zeroscore - score))}")
+                temp_html = temp_html.replace('_LEFTPX_', f"{round(500 * score) + 10}")
         else:
-            temp_html = temp_html.replace('_LEN_', f"{round(500 * (zeroscore - score))}")
-            temp_html = temp_html.replace('_LEFTPX_', f"{round(500 * score) + 10}")
+            temp_html = temp_html.replace('_LEN_', f"{round(500 * score)}")
+            temp_html = temp_html.replace('_LEFTPX_', "10")
 
         if len(value) == 1:
             temp_html = temp_html.replace('_VALUE_', output(value[0], format))
