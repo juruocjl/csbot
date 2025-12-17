@@ -9,13 +9,11 @@ from nonebot import logger
 
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
-output = require("utils").output
-get_today_start_timestamp = require("utils").get_today_start_timestamp
+require("utils")
+from ..utils import output, get_today_start_timestamp
 
-gen_rank_image1 = require("cs_img").gen_rank_image1
-gen_rank_image2 = require("cs_img").gen_rank_image2
-gen_matches_image = require("cs_img").gen_matches_image
-gen_stats_image = require("cs_img").gen_stats_image
+require("cs_img")
+from ..cs_img import gen_rank_image1, gen_rank_image2, gen_matches_image, gen_stats_image
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
@@ -212,7 +210,7 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
                 time_type = cmd[1]
     if steamid != None:
         print(steamid, time_type)
-        result = db_val.get_matches(steamid, time_type)
+        result = await db_val.get_matches(steamid, time_type)
         if result:
             image = await gen_matches_image(result, steamid, db_val.get_stats(steamid)[2])
             await matches.finish(MessageSegment.image(image))

@@ -37,7 +37,6 @@ import emoji
 import json
 from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text
 from sqlalchemy.orm import Mapped, mapped_column
-from typing import Dict, List
 
 __plugin_meta__ = PluginMetadata(
     name="allmsg",
@@ -125,7 +124,7 @@ class DataManager:
             row_id = result.scalar()
             return row_id if row_id is not None else -1
 
-    async def get_all_msg(self, groupid, userid="%", tmrange=(0, 1e10)) -> Dict:
+    async def get_all_msg(self, groupid, userid="%", tmrange=(0, 1e10)) -> dict:
         async with async_session_factory() as session:
             # 构造 LIKE 字符串: group_{groupid}_{userid}
             like_str = f"group_{groupid}_{userid}"
@@ -145,7 +144,7 @@ class DataManager:
                 msgdict[msg.id] = (msg.sid, msg.timestamp, msgpack.loads(msg.data))
             return msgdict
 
-    async def get_active_user(self, groupid) -> List[str]:
+    async def get_active_user(self, groupid) -> list[str]:
         async with async_session_factory() as session:
             like_str = f"group_{groupid}_%"
             today_start = get_today_start_timestamp()

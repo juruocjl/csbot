@@ -7,7 +7,6 @@ from nonebot import on_command
 from nonebot import get_bot
 from nonebot import require
 from nonebot import logger
-from typing import List
 
 import json
 import time
@@ -85,7 +84,7 @@ class DataManager:
             (uid, name)
         )
         
-    async def update_goods(self, goods_list: List[str]):
+    async def update_goods(self, goods_list: list[str]):
         cursor = get_cursor()
         while len(goods_list) > 0:
             now_goods = goods_list[:50]
@@ -105,7 +104,7 @@ class DataManager:
             else:
                 logger.error("update_goods "+data['msg'])
 
-    def getallgoods(self) -> List[str]:
+    def getallgoods(self) -> list[str]:
         cursor = get_cursor()
         cursor.execute('SELECT DISTINCT marketHashName FROM member_goods')
         res = cursor.fetchall()

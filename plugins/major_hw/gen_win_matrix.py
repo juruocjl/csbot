@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Tuple, List, Dict
 import json
 import sys
 import csv
@@ -8,8 +7,6 @@ from pathlib import Path
 from nonebot import logger
 from fuzzywuzzy import process
 
-if TYPE_CHECKING:
-    from pathlib import Path
 
 # 评分系统权重配置
 VRS_WEIGHT = 0.3  # Valve评分系统权重
@@ -31,8 +28,8 @@ class Team:
     id: int
     name: str
     seed: int
-    alias: List[str]
-    rating: Tuple[int, ...]
+    alias: list[str]
+    rating: tuple[int, ...]
 
 
     def __str__(self) -> str:
@@ -46,7 +43,7 @@ class Team:
 def win_probability(
     a: Team,
     b: Team,
-    sigma: Tuple[int, ...] = (SIGMA, SIGMA),
+    sigma: tuple[int, ...] = (SIGMA, SIGMA),
     hltv_exp: float = HLTV_EXP,
 ) -> float:
     """
@@ -77,10 +74,10 @@ def win_probability(
 
 
 def calculate_win_matrix(
-    teams: List[Team],
-    sigma: Tuple[int, ...] = (SIGMA, SIGMA),
+    teams: list[Team],
+    sigma: tuple[int, ...] = (SIGMA, SIGMA),
     hltv_exp: float = HLTV_EXP,
-) -> Dict[str, Dict[str, float]]:
+) -> dict[str, dict[str, float]]:
     """
     计算所有队伍之间的胜率矩阵
     """
@@ -97,7 +94,7 @@ def calculate_win_matrix(
     return win_matrix
 
 
-def print_win_matrix(win_matrix: Dict[str, Dict[str, float]], teams: List[Team]) -> None:
+def print_win_matrix(win_matrix: dict[str, dict[str, float]], teams: list[Team]) -> None:
     """
     打印胜率矩阵
     """
@@ -136,7 +133,7 @@ def print_win_matrix(win_matrix: Dict[str, Dict[str, float]], teams: List[Team])
         print(row)
 
 
-def load_teams(file_path: str | Path) -> List[Team]:
+def load_teams(file_path: str | Path) -> list[Team]:
     """从JSON文件加载队伍数据"""
     with open(file_path) as file:
         data = json.load(file)
@@ -160,7 +157,7 @@ def load_teams(file_path: str | Path) -> List[Team]:
     return teams
 
 
-def save_win_matrix_to_csv(win_matrix: Dict[str, Dict[str, float]], teams: List[Team], file_path: str) -> None:
+def save_win_matrix_to_csv(win_matrix: dict[str, dict[str, float]], teams: list[Team], file_path: str) -> None:
     """
     将胜率矩阵输出为 CSV 文件，方便在 Excel 打开
     """
@@ -182,7 +179,7 @@ def save_win_matrix_to_csv(win_matrix: Dict[str, Dict[str, float]], teams: List[
             writer.writerow(row)
 
 
-def gen_win_matrix(file_path : Path | str, finish_match : List[Tuple[str, str, str, str]]):
+def gen_win_matrix(file_path : Path | str, finish_match : list[tuple[str, str, str, str]]):
 
     teams = load_teams(file_path)
 

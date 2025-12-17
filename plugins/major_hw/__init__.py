@@ -22,7 +22,6 @@ from unicodedata import normalize
 import json
 import asyncio
 from pathlib import Path
-from typing import List, Tuple
 from sqlalchemy import String, Float, update, select
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -90,7 +89,7 @@ class DataManager:
                 )
                 await session.execute(stmt)
 
-    async def get_all_hw(self, stage: str) -> List[MajorHW]:
+    async def get_all_hw(self, stage: str) -> list[MajorHW]:
         async with async_session_factory() as session:
             stmt = select(MajorHW).where(MajorHW.stage == stage)
             result = await session.execute(stmt)
@@ -172,9 +171,9 @@ async def hwhelp_funtion():
 /赛事作业结果
 查看赛事整体结果""")
 
-async def calc_val(uid: str) -> Tuple[float, float] | None:
+async def calc_val(uid: str) -> tuple[float, float] | None:
     if config.major_stage == "playoffs":
-        result: List[Tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
+        result: list[tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
         result.reverse()
         if res := await db.get_uid_hw(uid, major_stage_name + "-quad"):
             teams = json.loads(res.teams)

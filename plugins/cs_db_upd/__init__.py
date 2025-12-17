@@ -263,27 +263,84 @@ class DataManager:
             if player['teamId'] not in count:
                 count[player['teamId']] = 0
             count[player['teamId']] += 1
-        for player in data['data']['players']:
-            cursor.execute('''INSERT OR REPLACE INTO matches
-                (mid, steamid, seasonId, mapName, team, winTeam, score1, score2,
-                pwRating, we, timeStamp, kill, death, assist, duration, mode, pvpScore, pvpStars, pvpScoreChange, pvpMvp,
-                isgroup, greenMatch, entryKill, headShot, headShotRatio,
-                flashTeammate, flashSuccess,
-                twoKill, threeKill, fourKill, fiveKill, vs1, vs2, vs3, vs4, vs5,
-                dmgArmor, dmgHealth, adpr, rws, teamId, throwsCnt, snipeNum, firstDeath
-                ) VALUES
-                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)  
-            ''', 
-                (mid, player['playerId'], season, base['map'], player['team'],
-                base['winTeam'], base['score1'], base['score2'], player['pwRating'], player['we'],
-                timeStamp, player['kill'], player['death'], player['assist'], base['duration'],
-                base['mode'], player['pvpScore'], player['pvpStars'], player['pvpScoreChange'], int(player['mvp']),
-                bool(count[player['teamId']] > 1), base['greenMatch'], player['entryKill'], player['headShot'], player['headShotRatio'],
-                player['flashTeammate'], player['flashSuccess'], player['twoKill'], player['threeKill'], player['fourKill'],
-                player['fiveKill'], player['vs1'], player['vs2'], player['vs3'], player['vs4'],
-                player['vs5'], player['dmgArmor'], player['dmgHealth'], player['adpr'], player['rws'],
-                player['teamId'], player['throwsCnt'], player['snipeNum'], player['firstDeath'])
-            )
+            
+        async with async_session_factory() as session:
+            async with session.begin():
+                for player in data['data']['players']:
+                    match_entry = MatchStatsPW(
+                        # --- 核心主键 ---
+                        mid=mid,
+                        steamid=player['playerId'],
+
+                        # --- 基础环境信息 ---
+                        seasonId=season,
+                        mapName=base['map'],
+                        timeStamp=timeStamp,
+                        duration=base['duration'],
+                        mode=base['mode'],
+                        greenMatch=base['greenMatch'],
+
+                        # --- 队伍与比分 ---
+                        team=player['team'],
+                        winTeam=base['winTeam'],
+                        score1=base['score1'],
+                        score2=base['score2'],
+                        teamId=player['teamId'],
+                        
+                        # --- 组排逻辑 (isgroup) ---
+                        # 这里的逻辑是：如果该队伍 ID 在本局出现的次数 > 1，则视为组排
+                        # SQLAlchemy 会自动处理 bool -> int (1/0) 的转换
+                        isgroup=bool(count[player['teamId']] > 1),
+
+                        # --- 评分数据 ---
+                        pwRating=player['pwRating'],
+                        we=player['we'],
+                        
+                        # --- PVP 特有数据 ---
+                        pvpScore=player['pvpScore'],
+                        pvpStars=player['pvpStars'],
+                        pvpScoreChange=player['pvpScoreChange'],
+                        pvpMvp=int(player['mvp']),  # 注意这里对应 SQL 中的 pvpMvp
+
+                        # --- 基础 KDA ---
+                        kill=player['kill'],
+                        death=player['death'],
+                        assist=player['assist'],
+
+                        # --- 详细战斗数据 ---
+                        entryKill=player['entryKill'],
+                        firstDeath=player['firstDeath'],
+                        headShot=player['headShot'],
+                        headShotRatio=player['headShotRatio'],
+                        dmgArmor=player['dmgArmor'],
+                        dmgHealth=player['dmgHealth'],
+                        snipeNum=player['snipeNum'],
+
+                        # --- 道具与投掷 ---
+                        flashTeammate=player['flashTeammate'],
+                        flashSuccess=player['flashSuccess'],
+                        throwsCnt=player['throwsCnt'],
+
+                        # --- 多杀统计 ---
+                        twoKill=player['twoKill'],
+                        threeKill=player['threeKill'],
+                        fourKill=player['fourKill'],
+                        fiveKill=player['fiveKill'],
+
+                        # --- 残局统计 ---
+                        vs1=player['vs1'],
+                        vs2=player['vs2'],
+                        vs3=player['vs3'],
+                        vs4=player['vs4'],
+                        vs5=player['vs5'],
+
+                        # --- 进阶数据 ---
+                        adpr=player['adpr'],
+                        rws=player['rws']
+                    )
+
+                    # 执行 Upsert 操作
+                    await session.merge(match_entry)
         logger.info(f"update_match {mid} success")
         return 1
 

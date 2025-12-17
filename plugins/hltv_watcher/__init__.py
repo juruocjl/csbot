@@ -16,7 +16,6 @@ event_update = require("major_hw").event_update
 
 from .get5e import get_matches
 
-from typing import List, Tuple
 import json
 import asyncio
 
@@ -40,7 +39,7 @@ async def update_events():
     for event in config.hltv_event_id_list:
         logger.info(f"start get {event}")
         title, newres = await get_matches(event)
-        res: List[Tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{event}", default="[]"))
+        res: list[tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{event}", default="[]"))
         res.reverse()
         newres.reverse()
         ids = set([match[3] for match in res])

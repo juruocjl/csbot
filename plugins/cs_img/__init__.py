@@ -2,10 +2,11 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot import require
 
-output = require("utils").output
-path_to_file_url = require("utils").path_to_file_url
-screenshot_html_to_png = require("utils").screenshot_html_to_png
+require("utils")
+from ..utils import output, path_to_file_url, screenshot_html_to_png
 
+require("cs_db_upd")
+from ..cs_db_upd import MatchStatsPW
 
 import os
 from pathlib import Path
@@ -113,7 +114,7 @@ def get_elo_info(pvpScore, seasonId = "S21"):
         
         return pool, color, arc
 
-async def gen_rank_image1(datas, min_value, max_value, title, format):
+async def gen_rank_image1(datas: list[tuple[float, int]], min_value: float, max_value: float, title: str, format: str):
     html = rank_content[0]
     sum = 0
     for (steamid, value) in datas:
@@ -143,7 +144,7 @@ async def gen_rank_image1(datas, min_value, max_value, title, format):
         os.remove(temp_file.name)
     return BytesIO(img)
 
-async def gen_rank_image2(datas, min_value, max_value, title, format):
+async def gen_rank_image2(datas: list[tuple[float, int]], min_value: float, max_value: float, title: str, format: str):
     html = rank_content[0]
     sum = 0
     zeroscore = - min_value / (max_value - min_value)
@@ -179,7 +180,7 @@ async def gen_rank_image2(datas, min_value, max_value, title, format):
         os.remove(temp_file.name)
     return BytesIO(img)
 
-async def gen_matches_image(datas, steamid, name):
+async def gen_matches_image(datas: list[MatchStatsPW], steamid: str, name: str):
     green = "#4CAF50"
     red = "#F44336"
     gray = "#9E9E9E"
@@ -187,32 +188,30 @@ async def gen_matches_image(datas, steamid, name):
     html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
     html = html.replace("_name_", normalize('NFKC', name))
     for match in datas:
-        (mid,steamid,seasonId,mapName,team,winTeam,score1,score2,pwRating,we,timeStamp,kill,death,assist,duration,mode,pvpScore,pvpStars,pvpScoreChange,pvpMvp,isgroup,greenMatch,entryKill,headShot,headShotRatio,flashTeammate,flashSuccess,twoKill,threeKill,fourKill,fiveKill,vs1,vs2,vs3,vs4,vs5,dmgArmor,dmgHealth,adpr,rws,teamId,throwsCnt,snipeNum,firstDeath) = match
         temp_html = matches_content[1]
-        myScore = score1 if team == 1 else score2
-        opScore = score2 if team == 1 else score1
-        Result = 2 if team == winTeam else (1 if (winTeam != 1 and winTeam != 2) else 0)
+        myScore = match.score1 if match.team == 1 else match.score2
+        opScore = match.score2 if match.team == 1 else match.score1
+        Result = 2 if match.team == match.winTeam else (1 if (match.winTeam != 1 and match.winTeam != 2) else 0)
         temp_html = temp_html.replace("_SCORERESULT_", ["负", "平", "胜"][Result])
-        temp_html = temp_html.replace("_TIME_", datetime.datetime.fromtimestamp(timeStamp).strftime("%m-%d %H:%M"))
+        temp_html = temp_html.replace("_TIME_", datetime.datetime.fromtimestamp(match.timeStamp).strftime("%m-%d %H:%M"))
         temp_html = temp_html.replace("_SCORE1_", f"{myScore}")
         temp_html = temp_html.replace("_SCORE2_", f"{opScore}")
         temp_html = temp_html.replace("_SCORECOLOR_", [red, gray, green][Result])
-        temp_html = temp_html.replace("_MAP_", mapName)
-        temp_html = temp_html.replace("_TYPE_", mode)
-        temp_html = temp_html.replace("_RT_",f"{pwRating: .2f}")
-        temp_html = temp_html.replace("_RTCOLOR_", green if pwRating > 1 else red)
-        temp_html = temp_html.replace("_K_", f"{kill}")
-        temp_html = temp_html.replace("_D_", f"{death}")
-        temp_html = temp_html.replace("_A_", f"{assist}")
-        temp_html = temp_html.replace("_WE_", f"{we: .1f}")
-        temp_html = temp_html.replace("_WECOLOR_", green if we > 8 else red)
-        temp_html = temp_html.replace("_GROUPDISPLAY_", "inline" if isgroup else "none")
-        pool, color, arc = get_elo_info(pvpScore, seasonId)
+        temp_html = temp_html.replace("_MAP_", match.mapName)
+        temp_html = temp_html.replace("_TYPE_", match.mode)
+        temp_html = temp_html.replace("_RT_",f"{match.pwRating: .2f}")
+        temp_html = temp_html.replace("_RTCOLOR_", green if match.pwRating > 1 else red)
+        temp_html = temp_html.replace("_K_", f"{match.kill}")
+        temp_html = temp_html.replace("_D_", f"{match.death}")
+        temp_html = temp_html.replace("_A_", f"{match.assist}")
+        temp_html = temp_html.replace("_WE_", f"{match.we: .1f}")
+        temp_html = temp_html.replace("_WECOLOR_", green if match.we > 8 else red)
+        temp_html = temp_html.replace("_GROUPDISPLAY_", "inline" if match.isgroup else "none")
+        pool, color, arc = get_elo_info(match.pvpScore, match.seasonId)
         temp_html = temp_html.replace("_POOLCOLOR_", color)
         temp_html = temp_html.replace("_ARC_", f"{113.1 * (1 - arc)}")
         temp_html = temp_html.replace("_POOL_", pool)
-        temp_html = temp_html.replace("_DELTA_", f"{pvpScoreChange:+}")
-
+        temp_html = temp_html.replace("_DELTA_", f"{match.pvpScoreChange:+}")
         html += temp_html
     html += matches_content[2]
 

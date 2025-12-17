@@ -1,8 +1,7 @@
 from pydantic import BaseModel
-from typing import List
 
 
 class Config(BaseModel):
     """Plugin Config Here"""
-    cs_group_list: List[int]
+    cs_group_list: list[int]
     csqaq_api: str
