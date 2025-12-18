@@ -89,12 +89,6 @@ model_name = config.cs_ai_model
 
 async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message) -> str:
     text = await db_val.work_msg(msg)
-    for segment in msg:
-        print(segment)
-        if segment.type == "reply":
-            mid = segment.data.get("id")
-            newmsg = await bot.get_msg(message_id=mid)
-            print(newmsg)
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
     client = OpenAI(
@@ -208,6 +202,13 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message) 
 async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
+    msg = message.get_message()
+    for seg in msg:
+        print(seg)
+        if seg.type == "reply":
+            mid = seg.data.get("id")
+            newmsg = await bot.get_msg(message_id=mid)
+            print(newmsg)
     await aiasktest.finish(
         MessageSegment.at(uid) + " " +
         await ai_ask2(bot, uid, sid, None, args)
