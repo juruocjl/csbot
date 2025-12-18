@@ -2,8 +2,9 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
 from nonebot.adapters import Bot
-from nonebot import on_command
+from nonebot import on_command, on_message
 from nonebot import require
+from nonebot import logger
 
 require("allmsg")
 from ..allmsg import get_msg_status
@@ -35,6 +36,8 @@ getstatus = on_command("状态", priority=10, block=True)
 caigou = on_command("采购", priority=10, block=True)
 
 langeng = on_command("烂梗", priority=10, block=True)
+
+autodelete = on_message(priority=0, block=False)
 
 @help.handle()
 async def help_function():
@@ -118,3 +121,11 @@ async def langeng_function():
     async with get_session().get("https://hguofichp.cn:10086/machine/getRandOne") as res:
         data = await res.json()
         await langeng.finish(data['data']['barrage'])
+
+@autodelete.handle()
+async def autodelete_function(bot: Bot, message: MessageEvent):
+    if message.get_user_id() not in config.auto_delete_uid:
+        return
+    logger.info(f"message {message.message_id} will deleted.")
+    await asyncio.sleep(config.auto_delete_delay)
+    await bot.call_api("delete_msg", message_id=message.message_id)
