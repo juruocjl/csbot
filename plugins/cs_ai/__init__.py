@@ -87,8 +87,27 @@ aimem = on_command("ai记忆", priority=10, block=True)
 
 model_name = config.cs_ai_model
 
-async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message) -> str:
+async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message, orimsg: Message) -> Message:
     text = await db_val.work_msg(msg)
+    msg2id: int | None = None
+    try:
+        if orimsg[0].type == "reply":
+            msg2id = int(orimsg[0].data["id"])
+            msg2 = await bot.get_msg(message_id=msg2id)
+            text = ""
+            for segment in msg2["message"]:
+                if segment["type"] == "text":
+                    text += segment['data']['text']
+                elif segment["type"] == "at":
+                    if name := await db_val.get_username(segment['data']['qq']):
+                        text += name
+                    else:
+                        text += "<未找到用户>"
+            uid = str(msg2["user_id"])
+    except:
+        logger.warning("获取回复消息失败")
+        return Message("获取回复消息失败。")
+    logger.info(f"UID: {uid}, Text: {text}")
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
     client = OpenAI(
@@ -195,23 +214,18 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message) 
     )
     output = response.choices[0].message.content
     assert output is not None
-    return output
+    if msg2id is not None:
+        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + output
+    else:
+        return MessageSegment.at(uid) + " " + output
         
 
 @aiasktest.handle()
 async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    msg = message.original_message
-    for seg in msg:
-        print(seg.type, seg.data)
-        if seg.type == "reply":
-            mid = seg.data.get("id")
-            newmsg = await bot.get_msg(message_id=mid)
-            print(newmsg)
     await aiasktest.finish(
-        MessageSegment.at(uid) + " " +
-        await ai_ask2(bot, uid, sid, None, args)
+        await ai_ask2(bot, uid, sid, None, args, message.original_message)
     )
 
 @aiask.handle()
@@ -219,8 +233,7 @@ async def aiask_function(bot: Bot, message: MessageEvent, args: Message = Comman
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiasktb.finish(
-        MessageSegment.at(uid)+  " " + 
-        await ai_ask2(bot, uid, sid, None, args)
+        await ai_ask2(bot, uid, sid, None, args, message.original_message)
     )
 
 @aiasktb.handle()
@@ -228,8 +241,7 @@ async def aiasktb_function(bot: Bot, message: MessageEvent, args: Message = Comm
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiasktb.finish(
-        MessageSegment.at(uid) + " " +
-        await ai_ask2(bot, uid, sid, "贴吧", args)
+        await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message)
     )
 
 @aiaskxmm.handle()
@@ -237,8 +249,7 @@ async def aiaskxmm_function(bot: Bot, message: MessageEvent, args: Message = Com
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiaskxmm.finish(
-        MessageSegment.at(uid) + " " +
-        await ai_ask2(bot, uid, sid, "xmm", args)
+        await ai_ask2(bot, uid, sid, "xmm", args, message.original_message)
     )
 
 @aiaskxhs.handle()
@@ -246,8 +257,7 @@ async def aiaskxhs_function(bot: Bot, message: MessageEvent, args: Message = Com
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiaskxhs.finish(
-        MessageSegment.at(uid) + " " +
-        await ai_ask2(bot, uid, sid, "xhs", args)
+        await ai_ask2(bot, uid, sid, "xhs", args, message.original_message)
     )
 
 @aiasktmr.handle()
@@ -255,8 +265,7 @@ async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = Com
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiasktmr.finish(
-        MessageSegment.at(uid) + " " +
-        await ai_ask2(bot, uid, sid, "tmr", args)
+        await ai_ask2(bot, uid, sid, "tmr", args, message.original_message)
     )
 
 @aimem.handle()
