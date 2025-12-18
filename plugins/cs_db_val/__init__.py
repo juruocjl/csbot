@@ -837,7 +837,7 @@ async def get_sniper_score(steamid: str, time_type: str) -> tuple[float, int]:
         return result.sniperScore, result.cnt
     raise NoValueError()
 
-@db.register("好人", "CTrt-Trt", "本赛季", None, True, ZeroIn(-0.01), "d0")
+@db.register("好人", "CTrt-Trt", "本赛季", None, True, ZeroIn(-0.01), "d2")
 async def get_good_person(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "本赛季")
     result = await db.get_detail_info(steamid)
