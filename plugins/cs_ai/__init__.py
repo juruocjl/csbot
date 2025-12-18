@@ -202,9 +202,9 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message) 
 async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    msg = message.get_message()
+    msg = message.original_message
     for seg in msg:
-        print(seg)
+        print(seg.type, seg.data)
         if seg.type == "reply":
             mid = seg.data.get("id")
             newmsg = await bot.get_msg(message_id=mid)
