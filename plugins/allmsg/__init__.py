@@ -239,7 +239,7 @@ async def encode_msg(segments):
     for seg in segments:
         if seg["type"] == "text":
             msglist.append(("text", seg["data"]["text"]))
-        if seg["type"] == "reply":
+        elif seg["type"] == "reply":
             msglist.append(("reply", await db.get_id_by_mid(seg["data"]["id"])))
         elif seg["type"] == "at":
             msglist.append(("at", seg["data"]["qq"]))
