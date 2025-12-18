@@ -837,6 +837,14 @@ async def get_sniper_score(steamid: str, time_type: str) -> tuple[float, int]:
         return result.sniperScore, result.cnt
     raise NoValueError()
 
+@db.register("好人", "CTrt-Trt", "本赛季", None, True, ZeroIn(-0.01), "d0")
+async def get_good_person(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "本赛季")
+    result = await db.get_detail_info(steamid)
+    if result and result.cnt != 0:
+        return result.pwRatingCtAvg - result.pwRatingTAvg, result.cnt
+    raise NoValueError()
+
 @db.register("gprt", "官匹rating", "全部", gp_time, True, ZeroIn(-0.01), "d2")
 async def get_gprt(steamid: str, time_type: str) -> tuple[float, int]:
     time_sql = get_time_sql(time_type)
