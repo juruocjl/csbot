@@ -1,6 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.adapters import Bot
 from nonebot import require
 from nonebot import on_command
 from nonebot.permission import SUPERUSER
@@ -86,7 +87,14 @@ aimem = on_command("ai记忆", priority=10, block=True)
 
 model_name = config.cs_ai_model
 
-async def ai_ask2(uid, sid, type, text) -> str:
+async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message) -> str:
+    text = await db_val.work_msg(msg)
+    for segment in msg:
+        print(segment)
+        if segment.type == "reply":
+            mid = segment.data.get("id")
+            newmsg = await bot.get_msg(message_id=mid)
+            print(newmsg)
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
     client = OpenAI(
@@ -197,61 +205,61 @@ async def ai_ask2(uid, sid, type, text) -> str:
         
 
 @aiasktest.handle()
-async def aiasktest_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiasktest.finish(
         MessageSegment.at(uid) + " " +
-        await ai_ask2(uid, sid, None, await db_val.work_msg(args))
+        await ai_ask2(bot, uid, sid, None, args)
     )
 
 @aiask.handle()
-async def aiask_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiask_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiasktb.finish(
         MessageSegment.at(uid)+  " " + 
-        await ai_ask2(uid, sid, None, await db_val.work_msg(args))
+        await ai_ask2(bot, uid, sid, None, args)
     )
 
 @aiasktb.handle()
-async def aiasktb_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiasktb_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiasktb.finish(
         MessageSegment.at(uid) + " " +
-        await ai_ask2(uid, sid, "贴吧", await db_val.work_msg(args))
+        await ai_ask2(bot, uid, sid, "贴吧", args)
     )
 
 @aiaskxmm.handle()
-async def aiaskxmm_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiaskxmm_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiaskxmm.finish(
         MessageSegment.at(uid) + " " +
-        await ai_ask2(uid, sid, "xmm", await db_val.work_msg(args))
+        await ai_ask2(bot, uid, sid, "xmm", args)
     )
 
 @aiaskxhs.handle()
-async def aiaskxhs_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiaskxhs_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiaskxhs.finish(
         MessageSegment.at(uid) + " " +
-        await ai_ask2(uid, sid, "xhs", await db_val.work_msg(args))
+        await ai_ask2(bot, uid, sid, "xhs", args)
     )
 
 @aiasktmr.handle()
-async def aiasktmr_function(message: MessageEvent, args: Message = CommandArg()):
+async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     await aiasktmr.finish(
         MessageSegment.at(uid) + " " +
-        await ai_ask2(uid, sid, "tmr", await db_val.work_msg(args))
+        await ai_ask2(bot, uid, sid, "tmr", args)
     )
 
 @aimem.handle()
-async def aimem_function(message: MessageEvent, args: Message = CommandArg()):
+async def aimem_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     try:

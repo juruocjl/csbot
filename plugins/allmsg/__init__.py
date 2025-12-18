@@ -229,6 +229,9 @@ async def process_message_segments(segments):
                 data = get_bytes_hash(await response.read())
                 hash_source += f"image:{data}".encode("utf-8") + b"|"
 
+        else:
+            hash_source += f"{seg.type}:".encode("utf-8") + random.randbytes(16) + b"|"
+
     return get_bytes_hash(hash_source)
 
 async def encode_msg(segments):
@@ -242,8 +245,8 @@ async def encode_msg(segments):
             msglist.append(("at", seg["data"]["qq"]))
         elif seg["type"] == "face":
             msglist.append(("face", seg["data"]["id"]))
-        elif seg["type"] == "image":
-            msglist.append(("image", ))
+        else:
+            msglist.append((seg["type"], ))
     return msgpack.dumps(msglist)
 
 async def insert_msg(message):
