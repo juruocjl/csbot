@@ -214,7 +214,7 @@ async def gen_stats_image(baseinfo: SteamBaseInfo, detailinfo: SteamDetailInfo):
     html = html.replace("_vs1WinRate_", f"{detailinfo.v1WinPercentage * 100 : .0f}%")
 
     html = html.replace("_FP_", f"{detailinfo.firePowerScore}")
-    html = html.replace("_FPL_", f"{round((detailinfo.firePowerScore / 100) * 320)}")
+    html = html.replace("_FPL_", f"{round((detailinfo.firePowerScore / 100) * 300)}")
     html = html.replace("_FPC_", red_to_green_color(detailinfo.firePowerScore / 100))
 
     html = html.replace("_MS_", f"{detailinfo.marksmanshipScore}")
