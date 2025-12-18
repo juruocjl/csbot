@@ -128,4 +128,4 @@ async def autodelete_function(bot: Bot, message: MessageEvent):
         return
     logger.info(f"message {message.message_id} will deleted.")
     await asyncio.sleep(config.auto_delete_delay)
-    await bot.call_api("delete_msg", message_id=message.message_id)
+    await bot.delete_msg(message_id = message.message_id)
