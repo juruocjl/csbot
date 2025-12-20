@@ -5,3 +5,4 @@ class Config(BaseModel):
     """Plugin Config Here"""
     cs_group_list: list[int]
     csqaq_api: str
+    csqwq_bind: bool

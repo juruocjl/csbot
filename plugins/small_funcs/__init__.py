@@ -91,28 +91,16 @@ async def getstatus_function(message: GroupMessageEvent):
     available_mem = memory.available / (1024 **3)
     mem_usage = memory.percent
     
-    # 组织结果
-    status = {
-        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'cpu_usage_percent': cpu_usage,
-        'memory': {
-            'total_gb': round(total_mem, 2),
-            'used_gb': round(used_mem, 2),
-            'available_gb': round(available_mem, 2),
-            'usage_percent': mem_usage
-        }
-    }
-
     tuku = get_pic_status()
 
     msgcount = await get_msg_status(message.group_id)
 
     await getstatus.finish(
         MessageSegment.at(message.get_user_id()) +
-        f"""\nCPU 总使用率: {status['cpu_usage_percent']}%
-内存总容量: {status['memory']['total_gb']}GB
-已使用内存: {status['memory']['used_gb']}GB ({status['memory']['usage_percent']}%)
-可用内存: {status['memory']['available_gb']}GB
+        f"""\nCPU 总使用率: {cpu_usage}%
+内存总容量: {total_mem: .2f}GB
+已使用内存: {used_mem: .2f}GB ({mem_usage}%)
+可用内存: {available_mem: .2f}GB
 当前图库: {tuku}
 {msgcount}""")
 

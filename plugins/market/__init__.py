@@ -43,14 +43,18 @@ if not os.path.exists("goodsimg"):
 
 headers = {'ApiToken': config.csqaq_api, 'Content-Type': 'application/json'}
 
-import requests
+if config.csqwq_bind:
+    import requests
 
-try:
-    res = requests.post("https://api.csqaq.com/api/v1/sys/bind_local_ip", headers=headers, timeout=5)
-    assert(res.json()['code'] == 200)
-    logger.info("Bind csqaq api success: " + res.text)
-except:
-    logger.error("Bind csqaq api fail")
+    try:
+        res = requests.post("https://api.csqaq.com/api/v1/sys/bind_local_ip", headers=headers, timeout=5)
+        assert(res.json()['code'] == 200)
+        logger.info("Bind csqaq api success: " + res.text)
+    except:
+        logger.error("Bind csqaq api fail")
+
+else:
+    logger.info("CSQWQ_BIND is False, skip binding csqaq api")
 
 class MemberGoods(Base):
     __tablename__ = "member_goods"

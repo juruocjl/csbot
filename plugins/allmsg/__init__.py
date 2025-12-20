@@ -18,6 +18,7 @@ from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
 from ..utils import local_storage
+from ..utils import getcard
 
 get_today_start_timestamp = require("utils").get_today_start_timestamp
 
@@ -264,12 +265,6 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent):
     # logger.info(await bot.get_msg(message_id=message.message_id))
     await insert_msg(await bot.get_msg(message_id=message.message_id))
 
-async def getcard(bot, gid, uid):
-    info = await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False)
-    if info["card"]:
-        return info["card"]
-    return info["nickname"]
-
 @report.handle()
 async def report_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
@@ -300,19 +295,19 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
 
     maxatfrom = sorted(atfromcnt.items(), key=lambda x: x[1])[-1]
     result += "最多 at 次数：" 
-    result += await getcard(bot, gid, maxatfrom[0])
+    result += await getcard(bot, gid, str(maxatfrom[0]))
     result += f" {maxatfrom[1]}次\n"
 
     maxatto = sorted(attocnt.items(), key=lambda x: x[1])[-1]
     result += "最多被 at 次数：" 
-    result += await getcard(bot, gid, maxatto[0])
+    result += await getcard(bot, gid, str(maxatto[0]))
     result += f" {maxatto[1]}次\n"
 
     maxatpair = sorted(atpaircnt.items(), key=lambda x: x[1])[-1]
     result += "最多 at 对次数：" 
-    result += await getcard(bot, gid, maxatpair[0][0])
+    result += await getcard(bot, gid, str(maxatpair[0][0]))
     result += " -> "
-    result += await getcard(bot, gid, maxatpair[0][1])
+    result += await getcard(bot, gid, str(maxatpair[0][1]))
     result += f" {maxatpair[1]}次\n"
     
     await report.send(result)
@@ -350,7 +345,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent):
     for data in waittime_list:
         if data[0] != myid:
             result += "\n"
-            result += await getcard(bot, gid, data[0])
+            result += await getcard(bot, gid, str(data[0]))
             result += f" {data[1][0]}/{data[1][1]}={data[1][0]/data[1][1]:.0f}"
     await report.send(result)
 
@@ -614,7 +609,7 @@ async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str
     text = "得分：\n"
     users.sort(key=lambda x: x[2], reverse=True)
     for uid, expr, point in users:
-        text += f"{await getcard(bot, groupid, uid)}: {expr}={point:.2f}\n"
+        text += f"{await getcard(bot, groupid, str(uid))}: {expr}={point:.2f}\n"
     return text.strip()
 
 async def roll_admin(groupid: str):

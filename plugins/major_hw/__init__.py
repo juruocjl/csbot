@@ -16,6 +16,7 @@ require("utils")
 
 from ..utils import async_session_factory, Base
 from ..utils import local_storage
+from ..utils import getcard
 
 from fuzzywuzzy import process
 from unicodedata import normalize
@@ -286,15 +287,6 @@ async def hwsee_function(message: MessageEvent):
             await hwsee.finish(text)
     await hwsee.finish("该用户未提交作业")
 
-async def getcard(bot: Bot, gid: str, uid: str):
-    try:
-        info = await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False)
-        if info["card"]:
-            return info["card"]
-        return info["nickname"]
-    except:
-        info = await bot.get_stranger_info(user_id=uid, no_cache=False)
-        return info["nickname"]
 @hwrank.handle()
 async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     gid = message.get_session_id().split('_')[1]

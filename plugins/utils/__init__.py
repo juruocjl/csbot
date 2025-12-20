@@ -1,7 +1,8 @@
 from nonebot import get_plugin_config
 from nonebot import get_driver
-from nonebot import require
+from nonebot.adapters import Bot
 from nonebot import logger
+
 from typing import overload
 
 from sqlalchemy import String, Text
@@ -130,3 +131,16 @@ async def screenshot_html_to_png(url: str, width: int, height: int):
     image = await page.screenshot()
     await browser.close()
     return image
+
+async def getcard(bot: Bot, gid: str, uid: str):
+    try:
+        info = await bot.get_group_member_info(group_id=gid, user_id=uid, no_cache=False)
+        if info["card"]:
+            return info["card"]
+        return info["nickname"]
+    except:
+        try:
+            info = await bot.get_stranger_info(user_id=uid, no_cache=False)
+            return info["nickname"]
+        except:
+            return uid

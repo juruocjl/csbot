@@ -1,0 +1,1 @@
+uv run mypy plugins --ignore-missing-imports
