@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Callable, Awaitable
 import time
 from sqlalchemy import select, func, text, or_, case
+from collections import defaultdict
 
 from .config import Config
 
@@ -89,6 +90,30 @@ def get_time_sql(time_type: str) -> str:
         return f"( 1 == 1 )"
     else:
         raise ValueError("err time")
+
+def get_ladder_filter(steamid: str, time_type: str) -> list:
+    # 获取时间 SQL 片段
+    time_sql_str = get_time_sql(time_type)
+    
+    return [
+        MatchStatsPW.steamid == steamid,
+        text(time_sql_str),
+        # 使用 or_ 处理两种模式
+        or_(
+            MatchStatsPW.mode.like("天梯%"),
+            MatchStatsPW.mode == "PVP周末联赛"
+        )
+    ]
+
+def get_custom_filter(steamid: str, time_type: str) -> list:
+    # 获取时间 SQL 片段
+    time_sql_str = get_time_sql(time_type)
+    
+    return [
+        MatchStatsPW.steamid == steamid,
+        text(time_sql_str),
+        MatchStatsPW.mode == "PVP自定义"
+    ]
 
 
 class DataManager:
@@ -170,17 +195,34 @@ class DataManager:
         return self._registry[query_type]
 
 
-    async def get_matches(self, steamid: str, time_type: str, limit = 20) -> list[MatchStatsPW] | None:
-        raw_time_sql = get_time_sql(time_type)
+    async def get_matches(self, steamid: str, time_type: str, 
+                          only_ladder: bool = False, only_custom: bool = False,
+                          limit = 20) -> list[MatchStatsPW] | None:
 
         async with async_session_factory() as session:
-            stmt = (
-                select(MatchStatsPW)
-                .where(MatchStatsPW.steamid == steamid)
-                .where(text(raw_time_sql))               # 兼容旧的时间字符串
-                .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
-                .limit(limit)
-            )
+            assert not (only_ladder and only_custom), "only_ladder 和 only_custom 不能同时为 True"
+            if only_ladder:
+                stmt = (
+                    select(MatchStatsPW)
+                    .where(*get_ladder_filter(steamid, time_type))
+                    .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
+                    .limit(limit)
+                )
+            elif only_custom:
+                stmt = (
+                    select(MatchStatsPW)
+                    .where(*get_custom_filter(steamid, time_type))
+                    .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
+                    .limit(limit)
+                )
+            else:
+                stmt = (
+                    select(MatchStatsPW)
+                    .where(MatchStatsPW.steamid == steamid)
+                    .where(text(get_time_sql(time_type)))
+                    .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
+                    .limit(limit)
+                )
 
             result = await session.execute(stmt)
             matches = result.scalars().all()
@@ -188,7 +230,123 @@ class DataManager:
             match_list = list(matches)
 
             return match_list if match_list else None
-         
+    
+    async def get_match_detail(self, mid: str) -> list[MatchStatsPW] | None:
+        async with async_session_factory() as session:
+            stmt = select(MatchStatsPW).where(MatchStatsPW.mid == mid)
+
+            result = await session.execute(stmt)
+            matches = list(result.scalars().all())
+
+            return matches if matches else None
+
+    async def get_match_teammate(self, steamid: str, time_type: str, querys: list[str]) -> list[tuple[str, float, int] | None]:
+        """
+        获取队友信息
+        参数:
+            steamid: 查询的 SteamID
+            time_type: 时间类型
+            querys: 需要查询的内容列表
+                场次：一起打的场次
+                上分：一起打自己上分
+                上分2：一起打对方上分
+                WE：一起打时自己 WE
+                WE2：一起打时对方 WE
+                rt：一起打时自己 rt
+                rt2：一起打时对方 rt
+                用 _ 开头表示选择最小值，否则选择最大值
+        返回:
+            包含元组 (steamid, value, count) 的列表，value 根据 querys 决定
+        """
+        matches = await self.get_matches(steamid, time_type, only_ladder=True, limit=1000000000)
+        assert matches is not None, "无比赛数据"
+        match_info: dict[str, list[MatchStatsPW]] = {}
+        for match in matches:
+            teammates = await self.get_match_detail(match.mid)
+            assert teammates is not None, "无比赛详情数据"
+            match_info[match.mid] = [match]
+            for mate in teammates:
+                if mate.steamid != steamid and await self.steamid_in_db(mate.steamid) and mate.team == match.team:
+                    match_info[match.mid].append(mate)
+        result: list[tuple[str, float, int] | None] = []
+        
+        teammate_count: dict[str, int] = defaultdict(int)
+        teammate_upscore: dict[str, int] = defaultdict(int)
+        teammate_upscore2: dict[str, int] = defaultdict(int)
+        teammate_we: dict[str, float] = defaultdict(float)
+        teammate_we2: dict[str, float] = defaultdict(float)
+        teammate_rt: dict[str, float] = defaultdict(float)
+        teammate_rt2: dict[str, float] = defaultdict(float)
+        for mates in match_info.values():
+            base_match = mates[0]
+            for mate in mates[1:]:
+                teammate_count[mate.steamid] += 1
+                teammate_upscore[mate.steamid] += base_match.pvpScoreChange
+                teammate_upscore2[mate.steamid] += mate.pvpScoreChange
+                teammate_we[mate.steamid] += base_match.we
+                teammate_we2[mate.steamid] += mate.we
+                teammate_rt[mate.steamid] += base_match.pwRating
+                teammate_rt2[mate.steamid] += mate.pwRating
+
+        
+        for querytype in querys:
+            is_min = querytype.startswith("_")
+            func = min if is_min else max
+            querytype = querytype.lstrip("_")
+            
+            if querytype == "场次":
+                if teammate_count:
+                    best_steamid = func(teammate_count, key=lambda x: teammate_count[x])
+                    result.append((best_steamid, teammate_count[best_steamid], teammate_count[best_steamid]))
+                else:
+                    result.append(None)
+            elif querytype == "上分":
+                if teammate_upscore:
+                    best_steamid = func(teammate_upscore, key=lambda x: teammate_upscore[x])
+                    result.append((best_steamid, teammate_upscore[best_steamid], teammate_count[best_steamid]))
+                else:
+                    result.append(None)
+            elif querytype == "上分2":
+                if teammate_upscore2:
+                    best_steamid = func(teammate_upscore2, key=lambda x: teammate_upscore2[x])
+                    result.append((best_steamid, teammate_upscore2[best_steamid], teammate_count[best_steamid]))
+                else:
+                    result.append(None)
+            elif querytype == "WE":
+                if teammate_we:
+                    best_steamid = func(teammate_we, key=lambda x: teammate_we[x] / teammate_count[x])
+                    result.append((best_steamid, teammate_we[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
+                else:
+                    result.append(None)
+            elif querytype == "WE2":
+                if teammate_we2:
+                    best_steamid = func(teammate_we2, key=lambda x: teammate_we2[x] / teammate_count[x])
+                    result.append((best_steamid, teammate_we2[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
+                else:
+                    result.append(None)
+            elif querytype == "rt":
+                if teammate_rt:
+                    best_steamid = func(teammate_rt, key=lambda x: teammate_rt[x] / teammate_count[x])
+                    result.append((best_steamid, teammate_rt[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
+                else:
+                    result.append(None)
+            elif querytype == "rt2":
+                if teammate_rt2:
+                    best_steamid = func(teammate_rt2, key=lambda x: teammate_rt2[x] / teammate_count[x])
+                    result.append((best_steamid, teammate_rt2[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
+                else:
+                    result.append(None)
+            else:
+                assert False, "未知的查询类型"
+        return result
+
+    async def steamid_in_db(self, steamid: str) -> bool:
+        async with async_session_factory() as session:
+            stmt = select(MemberSteamID).where(MemberSteamID.steamid == steamid)
+            result = await session.execute(stmt)
+            record = result.scalar()
+            return record is not None
+
     async def get_username(self, uid):
         if steamid := await self.get_steamid(uid):
             if baseinfo := await self.get_base_info(steamid):
@@ -217,30 +375,6 @@ gp_time = ["今日", "昨日", "本周", "全部"]
 
 class NoValueError(Exception):
     pass
-
-def get_ladder_filter(steamid: str, time_type: str) -> list:
-    # 获取时间 SQL 片段
-    time_sql_str = get_time_sql(time_type)
-    
-    return [
-        MatchStatsPW.steamid == steamid,
-        text(time_sql_str),
-        # 使用 or_ 处理两种模式
-        or_(
-            MatchStatsPW.mode.like("天梯%"),
-            MatchStatsPW.mode == "PVP周末联赛"
-        )
-    ]
-
-def get_custom_filter(steamid: str, time_type: str) -> list:
-    # 获取时间 SQL 片段
-    time_sql_str = get_time_sql(time_type)
-    
-    return [
-        MatchStatsPW.steamid == steamid,
-        text(time_sql_str),
-        MatchStatsPW.mode == "PVP自定义"
-    ]
 
 @db.register("ELO", "天梯分数", "本赛季", ["本赛季", "上赛季"], True, MinAdd(-10), "d0")
 async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:

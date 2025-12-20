@@ -36,6 +36,8 @@ with open(Path("assets") / "rank.html", 'r', encoding='utf-8') as file:
 with open(Path("assets") / "matches.html", 'r', encoding='utf-8') as file:
     matches_content = file.read().split("<!--SPLIT--->")
 
+with open(Path("assets") / "teammate.html", 'r', encoding='utf-8') as file:
+    teammate_content = file.read().split("<!--SPLIT--->")
 
 
 
@@ -246,6 +248,32 @@ async def gen_stats_image(baseinfo: SteamBaseInfo, detailinfo: SteamDetailInfo):
         temp_file.write(html)
         temp_file.close()
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 700)
+        os.remove(temp_file.name)
+    return BytesIO(img)
+
+async def gen_teammate_image(steamid: str, timetype: str, data: list[tuple[str, str, str, str]]):
+    """
+    data: list of (title, steamid, name, content)
+    """
+    html = teammate_content[0]
+    html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+    html = html.replace("_time_", timetype)
+
+    for titie, steamid, name, content in data:
+        temp_html = teammate_content[1]
+        temp_html = temp_html.replace("_title_", titie)
+        temp_html = temp_html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+        temp_html = temp_html.replace("_name_", normalize('NFKC', name))
+        temp_html = temp_html.replace("_content_", content)
+        html += temp_html
+    
+    html += teammate_content[2]
+
+
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+        temp_file.write(html)
+        temp_file.close()
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 60 + 105 * len(data))
         os.remove(temp_file.name)
     return BytesIO(img)
 

@@ -11,7 +11,7 @@ require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
 require("cs_img")
-from ..cs_img import gen_rank_image2, gen_matches_image, gen_stats_image
+from ..cs_img import gen_rank_image2, gen_matches_image, gen_stats_image, gen_teammate_image
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
@@ -55,7 +55,7 @@ updateall = on_command("全部更新", priority=10, block=True, permission=SUPER
 
 matches = on_command("记录", priority=10, block=True)
 
-
+matchteammate = on_command("缘分", priority=10, block=True)
 
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
@@ -230,3 +230,41 @@ async def updateall_function():
         cntgp += result[3]
     await updateall.finish(f"更新完成 {cntwm} 场完美数据 {cntgp} 场官匹数据")
 
+@matchteammate.handle()
+async def matchteammate_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    for seg in message.get_message():
+        if seg.type == "at":
+            uid = seg.data["qq"]
+    steamid = await db_val.get_steamid(uid)
+    if not steamid:
+        await matchteammate.finish("该用户未绑定")
+    time_type = args.extract_plain_text().strip()
+    if not time_type:
+        time_type = "本赛季"
+    if time_type not in valid_time:
+        await matchteammate.finish(f"非法的时间范围，可用时间范围：{valid_time}")
+    results = await db_val.get_match_teammate(steamid, time_type, ["场次", "上分", "_上分", "上分2", "_上分2", "WE2", "rt2", "_WE2", "_rt2"])
+    # print(results)
+    data: list[tuple[str, str, str, str]] = []
+    info = [("最爱队友", "一起打了{count}场", lambda x: True),
+            ("最佳上分队友", "你上分 {value}（{count}场）", lambda x: x > 0),
+            ("最佳掉分队友", "你掉分 {value}（{count}场）", lambda x: x < 0),
+            ("最带飞队友", "与你组排上分 {value}（{count}场）", lambda x: x > 0),
+            ("最坑飞队友", "与你组排掉分 {value}（{count}场）", lambda x: x < 0),
+            ("最强队友(WE)", "一起时WE {value:.2f}（{count}场）", lambda x: x > 8),
+            ("最强队友(rt)", "一起时rt {value:.2f}（{count}场）", lambda x: x > 1),
+            ("最菜队友(WE)", "一起时WE {value:.2f}（{count}场）", lambda x: x <= 8),
+            ("最菜队友(rt)", "一起时rt {value:.2f}（{count}场）", lambda x: x <= 1),
+            ]
+    for i, (title, fmt, cond) in enumerate(info):
+        result = results[i]
+        if result is not None and cond(result[1]):
+            baseinfo = await db_val.get_base_info(result[0])
+            assert baseinfo is not None
+            data.append((title, result[0], baseinfo.name, fmt.format(value=result[1], count=result[2])))
+        else:
+            data.append((title, "", "虚位以待", fmt.format(value=float("nan"), count=float("nan"))))
+    image = await gen_teammate_image(steamid, time_type, data)
+    await matchteammate.finish(MessageSegment.image(image))
+    

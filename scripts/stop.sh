@@ -28,8 +28,3 @@ if pgrep -f "$PROCESS_NAME" > /dev/null; then
     ps -ef | grep "$PROCESS_NAME" | grep -v grep
     exit 1
 fi
-
-echo "正在启动新的 bot..."
-# 使用 nohup 后台运行 (可选，如果你希望关掉终端 bot 还在跑)
-# 或者直接运行：
-uv run bot.py
