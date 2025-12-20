@@ -337,7 +337,7 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
             "type": "function",
             "function": {
                 "name": "fetch_group_rankings",
-                "description": "获取某数据项的均值与前五名",
+                "description": "获取某数据项的均值与前五名。gp开头的数据说明是官匹数据，此时不支持查询赛季数据。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -479,7 +479,7 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
                         vals = sorted(vals, key=lambda x: x[1][0], reverse=reverse)
                         avg_val = sum([v[1][0] for v in vals]) / len(vals)
                         top5 = vals[:5]
-                        res_text = f"{time_type} {rank_type} 平均 {avg_val:.2f}，前五："
+                        res_text = f"{time_type} {rankconfig.title} 平均 {avg_val:.2f}，前五："
                         res_text += "，".join([f"{steamid_username.get(s, s)} {v:.2f}" for s, (v, _cnt) in top5])
                         add_event("tool", res_text, tool_call_id=tool_call.id)
                 except Exception as e:
