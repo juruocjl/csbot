@@ -429,9 +429,9 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
                     continue
                 try:
                     # 使用 rt 作为强度指标，同时返回最强与最弱各前五
-                    results = await db_val.get_match_teammate(sid_target, time_type, ["rt", "_rt"], top_k=5)
-                    strongest = results[0] if results and len(results) > 0 else []
-                    weakest = results[1] if results and len(results) > 1 else []
+                    results = await db_val.get_match_teammate(sid_target, time_type, ["rt2", "_rt2"], top_k=5)
+                    strongest = results[0]
+                    weakest = results[1]
                     strongest_text = "最强队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt{v:.2f} 场次{cnt}" for s, v, cnt in strongest]) if strongest else "最强队友暂无数据"
                     weakest_text = "最弱队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt{v:.2f} 场次{cnt}" for s, v, cnt in weakest]) if weakest else "最弱队友暂无数据"
                     content = f"{name} {time_type} 队友统计：{strongest_text}；{weakest_text}"
