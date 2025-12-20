@@ -8,7 +8,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.append(f"{os.getcwd()}/plugins/major_hw")
+sys.path.append(f"{os.getcwd()}/../plugins/major_hw")
 from gen_win_matrix import gen_win_matrix
 from simulate import simulate
 from verify import parse_simulation_results, evaluate_combination

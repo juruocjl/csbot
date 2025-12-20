@@ -38,7 +38,7 @@ def check_targets(targets):
 def compress():
     """压缩指定目标到tar.gz文件"""
     # 定义需要处理的目标
-    targets = ["pic", "mgz", ".env.prod", "groups.db"]
+    targets = ["pic", "mgz", ".env.prod", "main.db"]
     existing_targets = check_targets(targets)
     
     if not existing_targets:
