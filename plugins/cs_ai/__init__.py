@@ -28,6 +28,7 @@ from sqlalchemy import select, func, text, or_, case
 from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 import re
+import time
 
 from .config import Config
 
@@ -273,6 +274,7 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
 
     log_file_handle = open(log_file, "w", encoding="utf-8")
 
+    start_time = time.time()
 
     def _pick_name(name: str) -> str | None:
         if not usernames:
@@ -526,11 +528,14 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
         log_file_handle.close()
     except Exception:
         pass
+    
+    end_time = time.time()
+    duration = int(end_time - start_time)
 
     if msg2id is not None:
-        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + output
+        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + f" （已深度思考 {duration}s）\n" + output
     else:
-        return MessageSegment.at(uid) + " " + output
+        return MessageSegment.at(uid) + f" （已深度思考 {duration}s）\n" + output
 
 @aiasktest.handle()
 async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
