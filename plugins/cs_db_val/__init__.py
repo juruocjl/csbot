@@ -240,7 +240,7 @@ class DataManager:
 
             return matches if matches else None
 
-    async def get_match_teammate(self, steamid: str, time_type: str, querys: list[str]) -> list[tuple[str, float, int] | None]:
+    async def get_match_teammate(self, steamid: str, time_type: str, querys: list[str], top_k: int = 1) -> list[list[tuple[str, float, int]]]:
         """
         获取队友信息
         参数:
@@ -268,7 +268,7 @@ class DataManager:
             for mate in teammates:
                 if mate.steamid != steamid and await self.steamid_in_db(mate.steamid) and mate.team == match.team:
                     match_info[match.mid].append(mate)
-        result: list[tuple[str, float, int] | None] = []
+        result: list[list[tuple[str, float, int]]] = []
         
         teammate_count: dict[str, int] = defaultdict(int)
         teammate_upscore: dict[str, int] = defaultdict(int)
@@ -290,52 +290,30 @@ class DataManager:
 
         
         for querytype in querys:
-            is_min = querytype.startswith("_")
-            func = min if is_min else max
+            reversed = not querytype.startswith("_")
             querytype = querytype.lstrip("_")
             
             if querytype == "场次":
-                if teammate_count:
-                    best_steamid = func(teammate_count, key=lambda x: teammate_count[x])
-                    result.append((best_steamid, teammate_count[best_steamid], teammate_count[best_steamid]))
-                else:
-                    result.append(None)
+                best_steamids = sorted(teammate_count, key=lambda x: teammate_count[x], reverse=reversed)[:top_k]
+                result.append([(id, teammate_count[id], teammate_count[id]) for id in best_steamids])
             elif querytype == "上分":
-                if teammate_upscore:
-                    best_steamid = func(teammate_upscore, key=lambda x: teammate_upscore[x])
-                    result.append((best_steamid, teammate_upscore[best_steamid], teammate_count[best_steamid]))
-                else:
-                    result.append(None)
+                best_steamids = sorted(teammate_upscore, key=lambda x: teammate_upscore[x], reverse=reversed)[:top_k]
+                result.append([(id, teammate_upscore[id], teammate_count[id]) for id in best_steamids])
             elif querytype == "上分2":
-                if teammate_upscore2:
-                    best_steamid = func(teammate_upscore2, key=lambda x: teammate_upscore2[x])
-                    result.append((best_steamid, teammate_upscore2[best_steamid], teammate_count[best_steamid]))
-                else:
-                    result.append(None)
+                best_steamids = sorted(teammate_upscore2, key=lambda x: teammate_upscore2[x], reverse=reversed)[:top_k]
+                result.append([(id, teammate_upscore2[id], teammate_count[id]) for id in best_steamids])
             elif querytype == "WE":
-                if teammate_we:
-                    best_steamid = func(teammate_we, key=lambda x: teammate_we[x] / teammate_count[x])
-                    result.append((best_steamid, teammate_we[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
-                else:
-                    result.append(None)
+                best_steamids = sorted(teammate_we, key=lambda x: teammate_we[x] / teammate_count[x], reverse=reversed)[:top_k]
+                result.append([(id, teammate_we[id] / teammate_count[id], teammate_count[id]) for id in best_steamids])
             elif querytype == "WE2":
-                if teammate_we2:
-                    best_steamid = func(teammate_we2, key=lambda x: teammate_we2[x] / teammate_count[x])
-                    result.append((best_steamid, teammate_we2[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
-                else:
-                    result.append(None)
+                best_steamids = sorted(teammate_we2, key=lambda x: teammate_we2[x] / teammate_count[x], reverse=reversed)[:top_k]
+                result.append([(id, teammate_we2[id] / teammate_count[id], teammate_count[id]) for id in best_steamids])
             elif querytype == "rt":
-                if teammate_rt:
-                    best_steamid = func(teammate_rt, key=lambda x: teammate_rt[x] / teammate_count[x])
-                    result.append((best_steamid, teammate_rt[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
-                else:
-                    result.append(None)
+                best_steamids = sorted(teammate_rt, key=lambda x: teammate_rt[x] / teammate_count[x], reverse=reversed)[:top_k]
+                result.append([(id, teammate_rt[id] / teammate_count[id], teammate_count[id]) for id in best_steamids])
             elif querytype == "rt2":
-                if teammate_rt2:
-                    best_steamid = func(teammate_rt2, key=lambda x: teammate_rt2[x] / teammate_count[x])
-                    result.append((best_steamid, teammate_rt2[best_steamid] / teammate_count[best_steamid], teammate_count[best_steamid]))
-                else:
-                    result.append(None)
+                best_steamids = sorted(teammate_rt2, key=lambda x: teammate_rt2[x] / teammate_count[x], reverse=reversed)[:top_k]
+                result.append([(id, teammate_rt2[id] / teammate_count[id], teammate_count[id]) for id in best_steamids])
             else:
                 assert False, "未知的查询类型"
         return result

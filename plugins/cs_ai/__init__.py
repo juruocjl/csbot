@@ -18,9 +18,12 @@ from ..cs_db_val import NoValueError
 from ..cs_db_val import MatchStatsPW, get_ladder_filter
 
 from openai import OpenAI
-from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageFunctionToolCall
+from typing import Any, cast
 import json
 from fuzzywuzzy import process
+import os
+from datetime import datetime
 from sqlalchemy import select, func, text, or_, case
 from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -71,7 +74,7 @@ class DataManager:
                 await session.merge(new_memory)
     
     
-    async def get_all_value(self, steamid, time_type):
+    async def get_all_value(self, steamid: str, time_type: str):
         async with async_session_factory() as session:
             is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
             stmt = (
@@ -101,44 +104,110 @@ class DataManager:
             )
             return (await session.execute(stmt)).one()
 
-
-    async def get_propmt(self, steamid, times = ['本赛季']):
+    async def get_all_value_with(self, steamid: str, steamid_with: str, time_type: str):
+        async with async_session_factory() as session:
+            is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
+            subquery = select(MatchStatsPW.mid).where(MatchStatsPW.steamid == steamid_with)
+            stmt = (
+                select(
+                    func.avg(MatchStatsPW.pwRating),
+                    func.max(MatchStatsPW.pwRating),
+                    func.min(MatchStatsPW.pwRating),
+                    func.avg(MatchStatsPW.we),
+                    func.avg(MatchStatsPW.adpr),
+                    func.avg(is_win),
+                    func.avg(MatchStatsPW.kill),
+                    func.avg(MatchStatsPW.death),
+                    func.avg(MatchStatsPW.assist),
+                    func.sum(MatchStatsPW.pvpScoreChange),
+                    func.sum(MatchStatsPW.entryKill),
+                    func.sum(MatchStatsPW.firstDeath),
+                    func.avg(MatchStatsPW.headShot),
+                    func.sum(MatchStatsPW.snipeNum),
+                    func.sum(MatchStatsPW.twoKill + MatchStatsPW.threeKill + MatchStatsPW.fourKill + MatchStatsPW.fiveKill),
+                    func.avg(MatchStatsPW.throwsCnt),
+                    func.avg(MatchStatsPW.flashTeammate),
+                    func.avg(MatchStatsPW.flashSuccess),
+                    func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                    func.count(MatchStatsPW.mid)
+                )
+                .where(*get_ladder_filter(steamid, time_type))
+                .where(MatchStatsPW.mid.in_(subquery))
+            )
+            return (await session.execute(stmt)).one()
+    
+    async def get_prompt(self, steamid: str, time_type: str = "本赛季"):
         base_info = await db_val.get_base_info(steamid)
         detail_info = await db_val.get_detail_info(steamid)
         
-        if not base_info or not detail_info:
-            return None
+        assert base_info is not None and detail_info is not None
         
         score = "未定段" if detail_info.pvpScore == 0 else f"{detail_info.pvpScore}"
-        prompt = f"用户名 {base_info.name}，当前天梯分数 {score}，本赛季1v1胜率 {detail_info.v1WinPercentage: .2f}，本赛季首杀率 {detail_info.firstRate: .2f}，"
-        for time_type in times:
-            (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = await self.get_all_value(steamid, time_type)
-            prompt += f"{time_type}进行了{cnt}把比赛"
-            if cnt == 0:
-                continue
-            prompt += f"{time_type}平均rating {avgRating :.2f}，"
-            prompt += f"{time_type}最高rating {maxRating :.2f}，"
-            prompt += f"{time_type}最低rating {minRating :.2f}，"
-            prompt += f"{time_type}平均WE {avgwe :.1f}，"
-            prompt += f"{time_type}平均ADR {avgADR :.0f}，"
-            prompt += f"{time_type}胜率 {wr :.2f}，"
-            prompt += f"{time_type}场均击杀 {avgkill :.1f}，"
-            prompt += f"{time_type}场均死亡 {avgdeath :.1f}，"
-            prompt += f"{time_type}场均助攻 {avgassist :.1f}，"
-            prompt += f"{time_type}分数变化 {ScoreDelta :+.0f}，"
-            prompt += f"{time_type}回均首杀 {totEK / totR :+.2f}，"
-            prompt += f"{time_type}回均首死 {totFD / totR :+.2f}，"
-            prompt += f"{time_type}回均狙杀 {totSK / totR :+.2f}，"
-            prompt += f"{time_type}爆头率 {avgHS / avgkill :+.2f}，"
-            prompt += f"{time_type}多杀回合占比 {totMK / totR :+.2f}，"
-            prompt += f"{time_type}场均道具投掷 {avgTR :+.2f}，"
-            prompt += f"{time_type}场均闪白对手 {avgFS :+.2f}，"
-            prompt += f"{time_type}场均闪白队友 {avgFT :+.2f}，"
-            try:
-                var, _ = await (self.get_value_config("方差rt").func(steamid, time_type))
-                prompt += f"{time_type}rating方差 {var :+.2f}，"
-            except NoValueError as e:
-                pass
+        prompt = f"用户名 {base_info.name}，当前天梯分数 {score}，本赛季1v1胜率 {detail_info.v1WinPercentage: .2f}，本赛季首杀率 {detail_info.firstRate: .2f}"
+        
+        (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = await self.get_all_value(steamid, time_type)
+        prompt += f"{time_type} {base_info.name}进行了{cnt}把比赛"
+        if cnt == 0:
+            return prompt
+        prompt += f"平均rating {avgRating :.2f}，"
+        prompt += f"最高rating {maxRating :.2f}，"
+        prompt += f"最低rating {minRating :.2f}，"
+        prompt += f"平均WE {avgwe :.1f}，"
+        prompt += f"平均ADR {avgADR :.0f}，"
+        prompt += f"胜率 {wr :.2f}，"
+        prompt += f"场均击杀 {avgkill :.1f}，"
+        prompt += f"场均死亡 {avgdeath :.1f}，"
+        prompt += f"场均助攻 {avgassist :.1f}，"
+        prompt += f"分数变化 {ScoreDelta :+.0f}，"
+        prompt += f"回均首杀 {totEK / totR :+.2f}，"
+        prompt += f"回均首死 {totFD / totR :+.2f}，"
+        prompt += f"回均狙杀 {totSK / totR :+.2f}，"
+        prompt += f"爆头率 {avgHS / avgkill :+.2f}，"
+        prompt += f"多杀回合占比 {totMK / totR :+.2f}，"
+        prompt += f"场均道具投掷 {avgTR :+.2f}，"
+        prompt += f"场均闪白对手 {avgFS :+.2f}，"
+        prompt += f"场均闪白队友 {avgFT :+.2f}，"
+        try:
+            var, _ = await (db_val.get_value_config("方差rt").func(steamid, time_type))
+            prompt += f"{time_type}rating方差 {var :+.2f}，"
+        except NoValueError:
+            pass
+        return prompt
+
+    async def get_prompt_with(self, steamid: str, steamid_with: str, time_type: str = "本赛季"):
+        base_info = await db_val.get_base_info(steamid)
+        base_with_info = await db_val.get_base_info(steamid_with)
+        
+        if not base_info or not base_with_info:
+            return None
+        prompt = ""
+        (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = await self.get_all_value_with(steamid, steamid_with, time_type)
+        prompt += f"{time_type} {base_info.name}与 {base_with_info.name} 一起进行了{cnt}把比赛"
+        if cnt == 0:
+            return prompt
+        prompt += f"{time_type}平均rating {avgRating :.2f}，"
+        prompt += f"{time_type}最高rating {maxRating :.2f}，"
+        prompt += f"{time_type}最低rating {minRating :.2f}，"
+        prompt += f"{time_type}平均WE {avgwe :.1f}，"
+        prompt += f"{time_type}平均ADR {avgADR :.0f}，"
+        prompt += f"{time_type}胜率 {wr :.2f}，"
+        prompt += f"{time_type}场均击杀 {avgkill :.1f}，"
+        prompt += f"{time_type}场均死亡 {avgdeath :.1f}，"
+        prompt += f"{time_type}场均助攻 {avgassist :.1f}，"
+        prompt += f"{time_type}分数变化 {ScoreDelta :+.0f}，"
+        prompt += f"{time_type}回均首杀 {totEK / totR :+.2f}，"
+        prompt += f"{time_type}回均首死 {totFD / totR :+.2f}，"
+        prompt += f"{time_type}回均狙杀 {totSK / totR :+.2f}，"
+        prompt += f"{time_type}爆头率 {avgHS / avgkill :+.2f}，"
+        prompt += f"{time_type}多杀回合占比 {totMK / totR :+.2f}，"
+        prompt += f"{time_type}场均道具投掷 {avgTR :+.2f}，"
+        prompt += f"{time_type}场均闪白对手 {avgFS :+.2f}，"
+        prompt += f"{time_type}场均闪白队友 {avgFT :+.2f}，"
+        try:
+            var, _ = await (db_val.get_value_config("方差rt").func(steamid, time_type))
+            prompt += f"{time_type}rating方差 {var :+.2f}，"
+        except NoValueError as e:
+            pass
         return prompt
 
 db = DataManager()
@@ -160,7 +229,7 @@ aimem = on_command("ai记忆", priority=10, block=True)
 
 model_name = config.cs_ai_model
 
-async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message, orimsg: Message) -> Message:
+async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message) -> Message:
     text = await db_val.work_msg(msg)
     msg2id: int | None = None
     try:
@@ -187,111 +256,281 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, type: str | None, msg: Message, 
         api_key=config.cs_ai_api_key,
         base_url=config.cs_ai_url,
     )
-    msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": 
-                """你是一个具备工具调用能力counter strike2助手。你现在需要分析用户的提问，判断需要调用哪些工具\n你可以使用 <query>{"name":"用户名","time":"时间选项"}</query> 来查询此用户在此时间的所有数据，最多调用10次。你的输出需要用<query>和</query>包含json内容。\n你可以使用 <queryall>{"type":"数据选项","time":"时间选项","reverse":true/false}</queryall> 来查询本群此数据选项排名前 5 的对应数据，最多调用 10 次，reverse为 false 代表升序排序，true 代表降序排序。你的输出需要使用<queryall>和</queryall>包含json内容。\n如果用户没有指明详细的时间，优先时间为本赛季。\n你只需要输出需要使用的工具，而不输出额外的内容，不需要给出调用工具的原因，在不超过限制的情况下尽可能调用更多的数据进行更全面的分析。"""}]
-    msgs.append({"role": "system", "content": 
-            f"""可用数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")]
-            可用时间选项：{valid_time}
-            注意："type" 为 "ELO" 时，"time" 只能为 "本赛季"。"""})
-    if mysteamid != None:
-        if baseinfo := await db_val.get_base_info(mysteamid):
-            msgs.append({"role": "system", "content": f"用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。请不要混淆用户的用户名称。"})
-    usernames = []
-    need_times: dict[str, set[str]] = {}
-    steamid_username = {}
-    for steamid in steamids:
-        if baseinfo := await db_val.get_base_info(steamid):
-            usernames.append(baseinfo.name)
-            need_times[baseinfo.name] = set()
-            steamid_username[steamid] = baseinfo.name
-    if usernames:
-        msgs.append({"role": "system", "content": f"这是可以选择的用户名：{usernames}。你需要保证调用工具时 name 用户名在此列表内。"})
-    mem = await db.get_mem(sid)
-    msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
-    msgs.append({"role": "assistant", "content": f"我会参考这些信息，并根据你的问题分析需要调用的工具，并且不输出额外的内容。"})
-    msgs.append({"role": "user","content": text,})
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=msgs,
-    )
-    first_result = response.choices[0].message.content
-    logger.info(first_result)
-    assert first_result is not None
-    msgs = [{"role": "system", "content": "你是一个counter strike2助手。请结合以下数据回答用户的问题。请不要使用markdown格式回答，请不要输出链接。回答尽可能简洁，不超过200字。"}]
-    if type == "贴吧":
-        msgs.append({"role": "system", "content": "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。"})
-    elif type == "xmm":
-        msgs.append({"role": "system", "content": "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式"})
-    elif type == "xhs":
-        msgs.append({"role": "system", "content": "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。"})
-    elif type == "tmr":
-        msgs.append({"role": "system", "content": "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。"})
-    if mysteamid != None:
-        if baseinfo := await db_val.get_base_info(mysteamid):
-            msgs.append({"role": "system", "content": f"用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。用户的用户名是 {baseinfo.name}。请不要混淆用户的用户名称。"})
 
-    querypattern = r'<query>(.*?)</query>'
-    all_matches = re.findall(querypattern, first_result, re.DOTALL)[:10]
-    for data in all_matches:
-        try:
-            data = json.loads(data.strip())
-            need_times[process.extractOne(data['name'], usernames)[0]].add(process.extractOne(data['time'], valid_time)[0])
-        except:
-            import sys
-            exc_type, exc_value, _ = sys.exc_info()
-            logger.warning(f"{data} 解析失败 {exc_type} {exc_value}")
-    for steamid in steamids:
-        if (steamid in steamid_username) and len(need_times[steamid_username[steamid]]) > 0:
-            print(steamid_username[steamid], need_times[steamid_username[steamid]])
-            if prompt := await db.get_propmt(steamid, times=need_times[steamid_username[steamid]]):
-                msgs.append({"role": "system", "content": prompt})
-            
-    msgs.append({"role": "system",
-                "content":'数据选项以及解释：[("ELO", "天梯分数"), ("rt", "平均rating"), ("WE", "平均对回合胜利贡献"), ("ADR", "平均每回合伤害")， ("场次", "进行游戏场次"), ("胜率", "游戏胜率"), ("爆头", "爆头率"), ("击杀", "场均击杀"), ("死亡", "场均死亡"), ("助攻", "场均助攻"), ("回均首杀", "平均每回合首杀数"), ("回均首死", "平均每回合首死数"), ("回均狙杀", "平均每回合狙杀数"), ("多杀", "多杀回合占比"), ("投掷", "场均道具投掷数"), ("方差rt", "rt的方差")'})
+    usernames: list[str] = []
+    steamid_username: dict[str, str] = {}
+    for sid_item in steamids:
+        if baseinfo := await db_val.get_base_info(sid_item):
+            usernames.append(baseinfo.name)
+            steamid_username[sid_item] = baseinfo.name
+
+    mem = await db.get_mem(sid)
+
     
-    queryallpattern = r'<queryall>(.*?)</queryall>'
-    all_matches = re.findall(queryallpattern, first_result, re.DOTALL)[:10]
-    for data in all_matches:
-        data = json.loads(data.strip())
-        rank_type = process.extractOne(data['type'], valid_rank)[0]
-        time_type = process.extractOne(data['time'], valid_time)[0]
-        rankconfig = db_val.get_value_config(rank_type)
-        if time_type not in rankconfig.allowed_time:
-            time_type = rankconfig.default_time
-        rv = data['reverse']
-        rv_name = "降序" if rv else "升序"
-        datas = []
-        for steamid in steamids:
-            try:
-                val = await rankconfig.func(steamid, time_type)
-                datas.append((steamid, val))
-            except NoValueError as e:
-                pass
-        print(rank_type, time_type, datas)
-        if len(datas) == 0:
-            continue
-        datas = sorted(datas, key=lambda x: x[1][0], reverse=rv)
-        avg = sum([x[1][0] for x in datas]) / len(datas)
-        datas = datas[:5]
-        res = f"{time_type} {rank_type}平均值{avg}，{rv_name}前五名："
-        for x in datas:
-            res += f"{steamid_username[x[0]]} {x[1][0]}，"
-        msgs.append({"role": "system", "content":res})
-    msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
-    msgs.append({"role": "assistant", "content": f"我会参考这些信息，请提出你的问题。"})
-    msgs.append({"role": "user","content": text,})
-    # logger.info(f"{msgs}")
+    log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "log"))
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"ai_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_human.txt")
+
+    log_file_handle = open(log_file, "w", encoding="utf-8")
+
+
+    def _pick_name(name: str) -> str | None:
+        if not usernames:
+            return None
+        match = process.extractOne(name, usernames)
+        return match[0] if match else None
+
+    def _pick_time(time_val: str) -> str:
+        match = process.extractOne(time_val, valid_time)
+        return match[0] if match else "本赛季"
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_user_summary",
+                "description": "获取某个用户在指定时间的数据摘要",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "time": {"type": "string", "default": "本赛季"},
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_teammate_ranking",
+                "description": "获取最强/最菜的五个队友统计",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "time": {"type": "string", "default": "本赛季"},
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_duo_summary",
+                "description": "获取两名用户一起游戏时前一名用户的数据摘要",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name1": {"type": "string"},
+                        "name2": {"type": "string"},
+                        "time": {"type": "string", "default": "本赛季"},
+                    },
+                    "required": ["name1", "name2"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_group_rankings",
+                "description": "获取某数据项的均值与前五名",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "time": {"type": "string", "default": "本赛季"},
+                        "reverse": {"type": "boolean", "default": True},
+                    },
+                    "required": ["type"],
+                },
+            },
+        },
+    ]
+
+    messages: list[ChatCompletionMessageParam] = []
+    
+    def add_event(role, content, tool_calls=None, tool_call_id=None):
+        ts = datetime.now().isoformat()
+        log_file_handle.write(f"{ts} [{role}] {content}\n")
+        if tool_calls is not None:
+            messages.append({"role": role, "content": content, "tool_calls": tool_calls})
+            for tool_call in tool_calls:
+                log_file_handle.write(f"{ts}   [tool_call] {tool_call}\n")
+        elif tool_call_id is not None:
+            messages.append({"role": role, "content": content, "tool_call_id": tool_call_id})
+        else:
+            messages.append({"role": role, "content": content})
+        log_file_handle.flush()
+    add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用10次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。")
+    add_event("system", f"可用用户名：{usernames}；可用时间：{valid_time}；可用排名项：{valid_rank}。默认时间为本赛季。")
+    add_event("user", f"已有记忆：{mem}")
+
+    if mysteamid:
+        if baseinfo := await db_val.get_base_info(mysteamid):
+            add_event("system", f"用户的用户名是 {baseinfo.name}，不要混淆。")
+
+    add_event("user", text)
+
+    tool_budget = 20
+
+    tools_param = cast(Any, tools)
     response = client.chat.completions.create(
         model=model_name,
-        messages=msgs,
+        messages=messages,
+        tools=tools_param,
+        tool_choice="auto",
     )
-    output = response.choices[0].message.content
-    assert output is not None
+
+
+    while tool_budget > 0 and response.choices[0].message.tool_calls:
+        msg_with_calls = response.choices[0].message
+        add_event("assistant", msg_with_calls.content or "", tool_calls=msg_with_calls.tool_calls)
+
+        assert msg_with_calls.tool_calls is not None
+        
+        for tool_call in msg_with_calls.tool_calls:
+            if tool_budget <= 0:
+                break
+            # 仅处理 function 类型的 tool call
+            assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
+            func = tool_call.function
+            fname = func.name
+            try:
+                fargs = json.loads(func.arguments)
+            except Exception as e:
+                logger.warning(f"tool arg parse fail {fname}: {e}")
+                continue
+
+            if fname == "fetch_user_summary":
+                name = _pick_name(fargs.get("name", ""))
+                if not name:
+                    continue
+                time_type = _pick_time(fargs.get("time", "本赛季"))
+                sid_target = next((k for k, v in steamid_username.items() if v == name), None)
+                if not sid_target:
+                    continue
+                try:
+                    prompt_text = await db.get_prompt(sid_target, time_type)
+                    add_event("tool", prompt_text or "无数据", tool_call_id=tool_call.id)
+                except Exception as e:
+                    add_event("tool", f"获取用户数据失败: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_teammate_ranking":
+                name = _pick_name(fargs.get("name", ""))
+                if not name:
+                    continue
+                time_type = _pick_time(fargs.get("time", "本赛季"))
+                sid_target = next((k for k, v in steamid_username.items() if v == name), None)
+                if not sid_target:
+                    continue
+                try:
+                    # 使用 rt 作为强度指标，同时返回最强与最弱各前五
+                    results = await db_val.get_match_teammate(sid_target, time_type, ["rt", "_rt"], top_k=5)
+                    strongest = results[0] if results and len(results) > 0 else []
+                    weakest = results[1] if results and len(results) > 1 else []
+                    strongest_text = "最强队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt{v:.2f} 场次{cnt}" for s, v, cnt in strongest]) if strongest else "最强队友暂无数据"
+                    weakest_text = "最弱队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt{v:.2f} 场次{cnt}" for s, v, cnt in weakest]) if weakest else "最弱队友暂无数据"
+                    content = f"{name} {time_type} 队友统计：{strongest_text}；{weakest_text}"
+                    add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    add_event("tool", f"获取队友数据失败: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_duo_summary":
+                name1 = _pick_name(fargs.get("name1", ""))
+                name2 = _pick_name(fargs.get("name2", ""))
+                if not name1 or not name2:
+                    continue
+                time_type = _pick_time(fargs.get("time", "本赛季"))
+                sid1 = next((k for k, v in steamid_username.items() if v == name1), None)
+                sid2 = next((k for k, v in steamid_username.items() if v == name2), None)
+                if not sid1 or not sid2:
+                    continue
+                try:
+                    prompt_text = await db.get_prompt_with(sid1, sid2, time_type)
+                    add_event("tool", prompt_text or "无双排数据", tool_call_id=tool_call.id)
+                except Exception as e:
+                    add_event("tool", f"获取双排数据失败: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_group_rankings":
+                rank_type = process.extractOne(fargs.get("type", ""), valid_rank)
+                if not rank_type:
+                    continue
+                rank_type = rank_type[0]
+                time_type = _pick_time(fargs.get("time", "本赛季"))
+                reverse = bool(fargs.get("reverse", True))
+                try:
+                    rankconfig = db_val.get_value_config(rank_type)
+                    if time_type not in rankconfig.allowed_time:
+                        time_type = rankconfig.default_time
+                    vals = []
+                    for sid_item in await db_val.get_all_steamid():
+                        try:
+                            val = await rankconfig.func(sid_item, time_type)
+                            vals.append((sid_item, val))
+                        except NoValueError:
+                            continue
+                    if not vals:
+                        add_event("tool", "无排名数据", tool_call_id=tool_call.id)
+                    else:
+                        vals = sorted(vals, key=lambda x: x[1][0], reverse=reverse)
+                        avg_val = sum([v[1][0] for v in vals]) / len(vals)
+                        top5 = vals[:5]
+                        res_text = f"{time_type} {rank_type} 平均 {avg_val:.2f}，前五："
+                        res_text += "，".join([f"{steamid_username.get(s, s)} {v:.2f}" for s, (v, _cnt) in top5])
+                        add_event("tool", res_text, tool_call_id=tool_call.id)
+                except Exception as e:
+                    add_event("tool", f"获取排名数据失败: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+
+        if tool_budget <= 0:
+            add_event("system", "工具调用次数已达上限，请基于已有结果作答。")
+            break
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            tools=tools_param,
+            tool_choice="auto",
+        )
+
+    # 记录最后一次assistant响应（无tool_calls）到历史
+    last_msg = response.choices[0].message
+    if last_msg and not last_msg.tool_calls:
+        add_event("assistant", last_msg.content or "")
+
+    
+    if persona == "贴吧":
+        add_event("system", "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。")
+    elif persona == "xmm":
+        add_event("system", "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式")
+    elif persona == "xhs":
+        add_event("system", "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。")
+    elif persona == "tmr":
+        add_event("system", "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。")
+    else:
+        add_event("system", "请回答用户的问题")
+    add_event("user", text)
+
+    # 最终回答，不再触发工具
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+    )
+
+    output = response.choices[0].message.content or ""
+    add_event("assistant", output)
+
+    try:
+        log_file_handle.close()
+    except Exception:
+        pass
+
     if msg2id is not None:
         return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + output
     else:
         return MessageSegment.at(uid) + " " + output
-        
 
 @aiasktest.handle()
 async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):

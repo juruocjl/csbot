@@ -259,10 +259,10 @@ async def matchteammate_function(message: MessageEvent, args: Message = CommandA
             ]
     for i, (title, fmt, cond) in enumerate(info):
         result = results[i]
-        if result is not None and cond(result[1]):
-            baseinfo = await db_val.get_base_info(result[0])
+        if len(result) > 0 and cond(result[0][1]):
+            baseinfo = await db_val.get_base_info(result[0][0])
             assert baseinfo is not None
-            data.append((title, result[0], baseinfo.name, fmt.format(value=result[1], count=result[2])))
+            data.append((title, result[0][0], baseinfo.name, fmt.format(value=result[0][1], count=result[0][2])))
         else:
             data.append((title, "", "虚位以待", fmt.format(value=float("nan"), count=float("nan"))))
     image = await gen_teammate_image(steamid, time_type, data)
