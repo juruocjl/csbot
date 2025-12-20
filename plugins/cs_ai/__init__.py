@@ -337,7 +337,7 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
             "type": "function",
             "function": {
                 "name": "fetch_group_rankings",
-                "description": "获取某数据项的均值与前五名。gp开头的数据说明是官匹数据，此时不支持查询赛季数据。",
+                "description": "获取某数据项的均值与前五名。gp开头的数据说明是官匹数据，此时不支持查询赛季数据。内战开头的是内战数据。其余为天梯数据。",
                 "parameters": {
                     "type": "object",
                     "properties": {
