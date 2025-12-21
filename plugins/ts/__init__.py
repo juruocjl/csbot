@@ -5,7 +5,8 @@ from nonebot import on_command
 from nonebot.params import CommandArg
 from nonebot import require
 
-addpoint = require("allmsg").addpoint
+require("fudu")
+from ..fudu import addpoint
 
 from .config import Config
 
