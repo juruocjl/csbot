@@ -355,7 +355,7 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
         else:
             messages.append({"role": role, "content": content})
         log_file_handle.flush()
-    add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用20次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。")
+    add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用10次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
     add_event("system", f"可用用户名：{usernames}；可用时间：{valid_time}；可用排名项：{valid_rank}。默认时间为本赛季。")
     add_event("user", f"已有记忆：{mem}")
 
@@ -363,8 +363,21 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
         if baseinfo := await db_val.get_base_info(mysteamid):
             add_event("system", f"用户的用户名是 {baseinfo.name}，不要混淆。")
 
+    
+    if persona == "贴吧":
+        add_event("system", "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。")
+    elif persona == "xmm":
+        add_event("system", "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式")
+    elif persona == "xhs":
+        add_event("system", "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。")
+    elif persona == "tmr":
+        add_event("system", "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。")
+    else:
+        add_event("system", "请回答用户的问题。")
+
+    
     add_event("user", text)
-    tool_budget = 20
+    tool_budget = 10
 
     tools_param = cast(Any, tools)
     response = client.chat.completions.create(
@@ -373,7 +386,6 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
         tools=tools_param,
         tool_choice="auto",
     )
-
 
     while tool_budget > 0 and response.choices[0].message.tool_calls:
         msg_with_calls = response.choices[0].message
@@ -477,7 +489,15 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
 
         if tool_budget <= 0:
             add_event("system", "工具调用次数已达上限，请基于已有结果作答。")
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=tools_param,
+                tool_choice="none",
+            )
             break
+        
+        add_event("system", f"你还可以调用 {tool_budget} 次工具，请继续。")
 
         response = client.chat.completions.create(
             model=model_name,
@@ -487,29 +507,6 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
         )
 
     # 记录最后一次assistant响应（无tool_calls）到历史
-    last_msg = response.choices[0].message
-    if last_msg and not last_msg.tool_calls:
-        add_event("assistant", last_msg.content or "")
-
-    add_event("system", "你可以开始回答用户的问题了。不要使用markdown格式。")
-    if persona == "贴吧":
-        add_event("system", "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。")
-    elif persona == "xmm":
-        add_event("system", "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式")
-    elif persona == "xhs":
-        add_event("system", "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。")
-    elif persona == "tmr":
-        add_event("system", "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。")
-    else:
-        add_event("system", "请回答用户的问题。")
-    add_event("user", text)
-
-    # 最终回答，不再触发工具
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-    )
-
     output = response.choices[0].message.content or ""
     add_event("assistant", output)
 
