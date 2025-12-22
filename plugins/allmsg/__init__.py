@@ -193,7 +193,7 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
                             img.save(smallf, format="PNG")
             except Exception as e:
                 logger.error(f"图片处理失败: {e}")
-                filehash = "error"
+                filehash = "error" + random.randbytes(32).hex()
 
             msglist.append(["imagev2", filehash, seg.data.get("sub_type", ""), seg.data.get("summary", "")])
         else:
