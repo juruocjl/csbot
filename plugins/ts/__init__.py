@@ -198,6 +198,7 @@ class ChannelTreeNode(object):
             result += " "*(indent*3) + "|- " + self.info["virtualserver_name"] + "\n"
         else:
             result += " "*(indent*3) + "|- " + self.info["channel_name"] + "\n"
+            assert self.clients is not None
             for client in self.clients:
                 # Ignore query clients
                 if client["client_type"] == "1":

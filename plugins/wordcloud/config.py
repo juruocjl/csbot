@@ -3,3 +3,4 @@ from pydantic import BaseModel
 
 class Config(BaseModel):
     """Plugin Config Here"""
+    cs_group_list: list[str]

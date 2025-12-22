@@ -117,7 +117,18 @@ async def async_download(url: str, file_path: str | Path) -> None:
                     f.write(chunk)
         else:
             raise Exception(f"下载失败，状态码：{response.status}")
-        
+
+async def async_download_to(url: str, f) -> None:
+    async with get_session().get(url) as response:
+        if response.status == 200:
+            while True:
+                chunk = await response.content.read(1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+        else:
+            raise Exception(f"下载失败，状态码：{response.status}")
+
 def path_to_file_url(path: str | Path) -> str:
     absolute_path = os.path.abspath(str(path))
     return 'file://' + absolute_path

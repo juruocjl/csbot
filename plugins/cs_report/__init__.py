@@ -63,6 +63,8 @@ async def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, fil
     for i in range(len(datas)):
         if rk[i] < n:
             baseinfo = await db_val.get_base_info(datas[i][0])
+            if baseinfo is None:
+                continue
             result += prize_name[rk[i]] + ". " + baseinfo.name + " " + output(datas[i][1][0], fmt) + "\n"
     return result
 

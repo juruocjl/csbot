@@ -4,28 +4,30 @@ from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent
 from nonebot import on_command, on_message, on_notice
 from nonebot import logger
 from nonebot import require
-from nonebot.adapters import Bot
+from nonebot.adapters.onebot.v11 import Bot
 from nonebot.params import CommandArg
 from nonebot import get_bot
-
 
 
 require("utils")
 from ..utils import getcard
 from ..utils import async_session_factory, Base
 from ..utils import get_session, get_today_start_timestamp
+from ..utils import async_download_to
 
 from .config import Config
 
+from tempfile import TemporaryFile
 from collections import defaultdict
 import msgpack
 import time
 import math
 import hashlib
+from typing import Awaitable, Callable
 from pathlib import Path
 import random
 import json
-from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text
+from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 __plugin_meta__ = PluginMetadata(
@@ -48,12 +50,34 @@ class GroupMsg(Base):
     timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
     data: Mapped[bytes] = mapped_column(LargeBinary) # 对应 BLOB 类型
 
+
+class ImgCacheInfo(Base):
+    __tablename__ = "img_cache_info"
+
+    hash: Mapped[str] = mapped_column(String, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    valid: Mapped[bool] = mapped_column(Boolean, default=False)
+
 class DataManager:
     async def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes):
         async with async_session_factory() as session:
             async with session.begin():
                 msg = GroupMsg(mid=mid, sid=sid, timestamp=timestamp, data=data_bytes)
                 session.add(msg)
+
+    async def touch_img_cache(self, hashval: str) -> tuple[bool, bool]:
+        async with async_session_factory() as session:
+            async with session.begin():
+                row = await session.get(ImgCacheInfo, hashval)
+                if row is None:
+                    row = ImgCacheInfo(hash=hashval, count=1, valid=True)
+                    session.add(row)
+                    return False, False
+                valid = row.valid
+                row.valid = True
+                row.count = (row.count or 0) + 1
+                return True, valid
+    
 
     async def get_id_by_mid(self, mid: int) -> int:
         async with async_session_factory() as session:
@@ -110,6 +134,15 @@ class DataManager:
             count = result.scalar()
             return count if count is not None else 0
 
+    
+
+full_dir = Path("imgs") / "cache" / "full"
+small_dir = Path("imgs") / "cache" / "small"
+
+if not full_dir.exists():
+    full_dir.mkdir(parents=True)
+if not small_dir.exists():
+    small_dir.mkdir(parents=True)
 
 db = DataManager()
 
@@ -117,14 +150,13 @@ allmsg = on_message(priority=0, block=False)
 
 report = on_command("统计", priority=10, block=True)
 
-async def get_msg_status(groupid):
+async def get_msg_status(groupid) -> str:
     count = await db.get_msg_count(groupid)
     return f"本群已记录消息数：{count}"
 
-
-
-async def insert_message(mid: int, sid: str, timestamp: int, message: Message):
+async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: Message) -> str:
     msglist = []
+    mhs: str | None = None
     for seg in message:
         if seg.type == "text":
             msglist.append(["text", seg.data["text"]])
@@ -134,25 +166,71 @@ async def insert_message(mid: int, sid: str, timestamp: int, message: Message):
             msglist.append(["at", seg.data["qq"]])
         elif seg.type == "face":
             msglist.append(["face", seg.data["id"]])
+        elif seg.type == "image":
+            print(seg.data)
+            with TemporaryFile() as f:
+                await async_download_to(seg.data["url"], f)
+                f.seek(0)
+                filehash = hashlib.sha256(f.read()).hexdigest()
+                # print(filehash)
+                has_small, has_full = await db.touch_img_cache(filehash)
+                filename = filehash + ".png"
+                if not has_full:
+                    f.seek(0)
+                    with open(full_dir / filename, "wb") as fullf:
+                        fullf.write(f.read())
+                if not has_small:
+                    f.seek(0)
+                    from PIL import Image
+                    img = Image.open(f)
+                    img.thumbnail((128, 128))
+                    with open(small_dir / filename, "wb") as smallf:
+                        img.save(smallf, format="PNG")
+                
+            msglist.append(["image", filehash, seg.data.get("sub_type", ""), seg.data.get("summary", "")])
         else:
             msglist.append([seg.type, ])
+            mhs = random.randbytes(32).hex()
     await db.insert_groupmsg(
         mid, sid, timestamp,
         msgpack.dumps(msglist)
     )
+    if mhs is not None:
+        return mhs
+    return hashlib.sha256(msgpack.dumps(msglist)).hexdigest()
+
+FuduType = Callable[[Bot, GroupMessageEvent, str], Awaitable[None]]
+
+class MyDecorator:
+    def __init__(self):
+        self.registered_funcs: list[FuduType] = []
+
+    def handle(self) -> Callable[[FuduType], FuduType]:
+        def decorator(func: FuduType) -> FuduType:
+            self.registered_funcs.append(func)
+            return func
+        return decorator
+
+    async def run(self, bot: Bot, message: GroupMessageEvent, mhs: str) -> None:
+        for func in self.registered_funcs:
+            await func(bot, message, mhs)
+
+myallmsg = MyDecorator()
 
 @allmsg.handle()
-async def allmsg_function(bot: Bot, message: GroupMessageEvent):
+async def allmsg_function(bot: Bot, message: GroupMessageEvent) -> None:
     assert(message.get_session_id().startswith("group"))
-    await insert_message(
+    mhs = await insert_message(
+        bot,
         message.message_id,
         message.get_session_id(),
         message.time,
         message.original_message
     )
+    await myallmsg.run(bot, message, mhs)
 
 @report.handle()
-async def report_function(bot: Bot, message: GroupMessageEvent):
+async def report_function(bot: Bot, message: GroupMessageEvent) -> None:
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]

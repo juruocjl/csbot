@@ -43,7 +43,11 @@ getmgz = on_command("getmgz", priority=10, block=True)
 
 addmgz = on_command("addmgz", priority=10, block=True)
 
-checklp = on_message(priority=0, block=False)
+def islp(evt: MessageEvent) -> bool:
+    text = evt.get_message().extract_plain_text().lower().strip()
+    return text in ["wlp", "nlg"]
+
+checklp = on_message(priority=0, block=False, rule=islp)
 
 def get_file_hash(file_path, chunk_size=8192, algorithm='sha256'):
     hash_obj = hashlib.new(algorithm)
@@ -53,16 +57,16 @@ def get_file_hash(file_path, chunk_size=8192, algorithm='sha256'):
     return hash_obj.hexdigest()
 
 class PicDir:
-    def __init__(self, dirname):
-        self.dirname = dirname
+    def __init__(self, dirname: str):
+        self.dirname = Path("imgs") / dirname
         self.keyname = f"hashset{dirname}"
-        self.hashset = set()
-        if not os.path.exists(dirname):
-            os.makedirs(dirname, exist_ok=True)
+        self.hashset: set[str] = set()
+        if not self.dirname.exists():
+            self.dirname.mkdir(parents=True)
 
     async def real_init(self):
-        if await local_storage.get(self.keyname):
-            self.hashset = ast.literal_eval(await local_storage.get(self.keyname))
+        if value := await local_storage.get(self.keyname):
+            self.hashset = ast.literal_eval(value)
         else:
             self.hashset = set()
             await self.rebuild()
@@ -87,7 +91,7 @@ class PicDir:
         await local_storage.set(self.keyname, str(self.hashset))
 
     async def addpic(self, filename, url):
-        filepath = Path(self.dirname) / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
+        filepath = self.dirname / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
         await async_download(url, filepath)
         hashval = get_file_hash(filepath)
         if hashval in self.hashset:

@@ -1,17 +1,18 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, NoticeEvent, Message, MessageSegment
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, NoticeEvent, Message, MessageSegment, Bot
 from nonebot import logger
 from nonebot import on_command, on_notice, on_message
 from nonebot import require
 from nonebot.permission import SUPERUSER
-from nonebot import get_bot, Bot
+from nonebot import get_bot
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
 require("allmsg")
 from ..allmsg import db as db_all
+from ..allmsg import myallmsg
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
@@ -99,46 +100,11 @@ roll = on_command("roll", priority=10, block=True, permission=SUPERUSER)
 
 pointrank = on_command("点数排行", priority=10, block=True)
 
-fuducheck = on_message(priority=100, block=True)
-
 
 def bancheck(event: NoticeEvent):
     return event.get_event_name().startswith("notice.group_ban.")
 
 admincheck = on_notice(bancheck, priority=100, block=False)
-
-def get_bytes_hash(data, algorithm='sha256'):
-    hash_obj = hashlib.new(algorithm)
-    hash_obj.update(data)
-    return hash_obj.hexdigest()
-
-async def process_message_segments(segments):
-    """处理消息段，提取信息并计算哈希"""
-    hash_source = b""
-    
-    for seg in segments:
-        if seg.type == "text":
-            text = get_bytes_hash(seg.data["text"].encode("utf-8"))
-            hash_source += f"text:{text}".encode("utf-8") + b"|"
-            
-        elif seg.type == "at":
-            user_id = seg.data["qq"]
-            hash_source += f"at:{user_id}".encode("utf-8") + b"|"
-            
-        elif seg.type == "face":
-            face_id = seg.data["id"]
-            hash_source += f"face:{face_id}".encode("utf-8") + b"|"
-            
-        elif seg.type == "image":
-            url = seg.data["url"]
-            async with get_session().get(url) as response:
-                data = get_bytes_hash(await response.read())
-                hash_source += f"image:{data}".encode("utf-8") + b"|"
-
-        else:
-            hash_source += f"{seg.type}:".encode("utf-8") + random.randbytes(16) + b"|"
-
-    return get_bytes_hash(hash_source)
 
 @fuduhelp.handle()
 async def fuduhelp_function():
@@ -179,14 +145,16 @@ async def fudupoint_function(message: GroupMessageEvent):
 
 async def addpoint(gid: str, uid: str, nowpoint: int) -> bool:
     bot = get_bot()
+    assert isinstance(bot, Bot)
+    
     sid = f"group_{gid}_{uid}"
     if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}', "0")):
         await db.add_point(sid, nowpoint)
         prob = sigmoid_step(nowpoint * await db.get_point(sid), admin=True)
         if random.random() < prob:
             await local_storage.set(f'adminqqalive{gid}', '0')
-            await bot.set_group_admin(group_id=gid, user_id=uid, enable=False)
-            await fuducheck.send("恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被下放")
+            await bot.set_group_admin(group_id=int(gid), user_id=int(uid), enable=False)
+            await bot.send_group_msg(group_id=int(gid), message=f"管理员" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被下放")
             return True
     else:
         await db.add_point(sid, nowpoint)
@@ -194,8 +162,8 @@ async def addpoint(gid: str, uid: str, nowpoint: int) -> bool:
         if random.random() < prob:
             await db.add_point(sid, 0)
             tm = await db.get_zero_point(sid)
-            await bot.set_group_ban(group_id=gid, user_id=uid, duration=60 * tm)
-            await fuducheck.send("恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被禁言{tm}分钟")
+            await bot.set_group_ban(group_id=int(gid), user_id=int(uid), duration=60 * tm)
+            await bot.send_group_msg(group_id=int(gid), message="恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被禁言{tm}分钟")
             return True
     return False
 
@@ -212,21 +180,20 @@ def checksb(message: Message):
             return (True, list(atset)[0])
     return (False, None)
 
-@fuducheck.handle()
-async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
+@myallmsg.handle()
+async def fuducheck_function(bot: Bot, message: GroupMessageEvent, mhs: str) -> None:
     uid = message.get_user_id()
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     msg = message.original_message
-    mhs = await process_message_segments(msg)
     nowpoint = 0
     logger.info(f"{uid} send {msg} with {mhs}")
     gid = sid.split('_')[1]
     text = msg.extract_plain_text().lower().strip()
     if text == "gsm" or text == "干什么":
-        await fuducheck.send(MessageSegment.record(Path("assets") / "gsm.mp3"))
+        await bot.send_group_msg(group_id=int(gid), message=Message(MessageSegment.record(Path("assets") / "gsm.mp3")))
     if text == "mbf" or text == "没办法":
-        await fuducheck.send(MessageSegment.record(Path("assets") / "mbf.mp3"))
+        await bot.send_group_msg(group_id=int(gid), message=Message(MessageSegment.record(Path("assets") / "mbf.mp3")))
     msglst = []
     if gid in lastmsg:
         msglst = lastmsg[gid]
@@ -243,10 +210,10 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent):
             msglst = msglst[-1:]
         nowpoint += min(3, len(msglst) - 1)
         if len(msglst) == 3:
-            await fuducheck.send(msglst[0][1])
+            await bot.send_group_msg(group_id=int(gid), message=msglst[0][1])
             if issb:
                 tm = await db.get_zero_point(f"group_{gid}_{whosb}") + 1
-                await bot.set_group_ban(group_id=int(gid), user_id=whosb, duration=60 * tm)
+                await bot.set_group_ban(group_id=int(gid), user_id=int(whosb), duration=60 * tm)
     lastmsg[gid] = msglst
     if nowpoint > 0:
         await addpoint(gid, uid, nowpoint)
@@ -314,6 +281,7 @@ async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str
 
 async def roll_admin(groupid: str):
     bot = get_bot()
+    assert isinstance(bot, Bot)
     
     if time.time() - get_today_start_timestamp() < 86100:
         time_type = "昨日"
@@ -321,7 +289,7 @@ async def roll_admin(groupid: str):
         time_type = "今日"
     
     if int(await local_storage.get(f'adminqqalive{groupid}', "0")):
-        await bot.set_group_admin(group_id=groupid, user_id=await local_storage.get(f'adminqq{groupid}'), enable=False)
+        await bot.set_group_admin(group_id=int(groupid), user_id=int(await local_storage.get(f'adminqq{groupid}', '0')), enable=False)
     
     users = await calc_roll_point(groupid, time_type, 1)
     weights = [point for _, _, point in users]
@@ -330,11 +298,11 @@ async def roll_admin(groupid: str):
     newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
     
-    await bot.send_group_msg(group_id=groupid, message='恭喜' + MessageSegment.at(newadmin) + f" 以{point:.2f}/{totsum:.2f}选为管理员")
-    await bot.send_group_msg(group_id=groupid, message=text)
+    await bot.send_group_msg(group_id=int(groupid), message='恭喜' + MessageSegment.at(newadmin) + f" 以{point:.2f}/{totsum:.2f}选为管理员")
+    await bot.send_group_msg(group_id=int(groupid), message=text)
     await local_storage.set(f'adminqq{groupid}', str(newadmin))
     await local_storage.set(f'adminqqalive{groupid}', '1')
-    await bot.set_group_admin(group_id=groupid, user_id=newadmin, enable=True)
+    await bot.set_group_admin(group_id=int(groupid), user_id=int(newadmin), enable=True)
 
 @pointrank.handle()
 async def pointrank_function(bot: Bot, message: GroupMessageEvent):
@@ -355,4 +323,4 @@ async def roll_function(message: GroupMessageEvent):
 async def autoroll():
     logger.info("start roll")
     for group in config.cs_group_list:
-        await roll_admin(group)
+        await roll_admin(str(group))

@@ -301,8 +301,8 @@ class DataManager:
             stmt = select(func.count()).select_from(MatchStatsPW).where(MatchStatsPW.mid == mid)
             
             result = await session.execute(stmt)
-            count = result.scalar()
-            if count > 0:
+            row = result.scalar()
+            if row is not None and row > 0:
                 logger.info(f"update_matchpw {mid} in db")
                 return 0
         logger.info(f"update_matchpw {mid} not in db, fetching...")
@@ -412,8 +412,8 @@ class DataManager:
             stmt = select(func.count()).select_from(MatchStatsGP).where(MatchStatsGP.mid == mid)
             
             result = await session.execute(stmt)
-            count = result.scalar()
-            if count > 0:
+            row = result.scalar()
+            if row is not None and row > 0:
                 # logger.info(f"update_matchgp {mid} in db")
                 return 0
 

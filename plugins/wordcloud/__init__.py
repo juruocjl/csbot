@@ -60,7 +60,7 @@ async def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
     stopwords = {
         "怎么", "感觉", "什么", "真是", "不是", "一个", "可以", "没有", "你们", "但是", "现在", "这个",
     }
-    wordcount = defaultdict(int)
+    wordcount: defaultdict[str, int] = defaultdict(int)
     for x in msgdict.values():
         msg = extra_plain_text(x[2])
         seg_list = list(jieba.cut(msg, cut_all=False))

@@ -37,7 +37,10 @@ caigou = on_command("采购", priority=10, block=True)
 
 langeng = on_command("烂梗", priority=10, block=True)
 
-autodelete = on_message(priority=0, block=False)
+def need_delete_message(evt: MessageEvent) -> bool:
+    return evt.get_user_id() in config.auto_delete_uid
+
+autodelete = on_message(priority=0, block=False, rule=need_delete_message)
 
 @help.handle()
 async def help_function():
@@ -112,8 +115,6 @@ async def langeng_function():
 
 @autodelete.handle()
 async def autodelete_function(bot: Bot, message: MessageEvent):
-    if message.get_user_id() not in config.auto_delete_uid:
-        return
     logger.info(f"message {message.message_id} will deleted.")
     await asyncio.sleep(config.auto_delete_delay)
     await bot.delete_msg(message_id = message.message_id)

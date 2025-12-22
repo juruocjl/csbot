@@ -1,1 +1,1 @@
-uv run mypy plugins --ignore-missing-imports
+uv run mypy plugins --ignore-missing-imports --check-untyped-defs
