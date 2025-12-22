@@ -27,6 +27,7 @@ from typing import Awaitable, Callable
 from pathlib import Path
 import random
 import json
+import asyncio
 from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -138,6 +139,7 @@ class DataManager:
 
 full_dir = Path("imgs") / "cache" / "full"
 small_dir = Path("imgs") / "cache" / "small"
+img_lock = asyncio.Lock()
 
 if not full_dir.exists():
     full_dir.mkdir(parents=True)
@@ -172,9 +174,10 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
                 await async_download_to(seg.data["url"], f)
                 f.seek(0)
                 filehash = hashlib.sha256(f.read()).hexdigest()
-                # print(filehash)
-                has_small, has_full = await db.touch_img_cache(filehash)
                 filename = filehash + ".png"
+                # print(filehash)
+                async with img_lock:
+                    has_small, has_full = await db.touch_img_cache(filehash)
                 if not has_full:
                     f.seek(0)
                     with open(full_dir / filename, "wb") as fullf:

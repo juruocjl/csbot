@@ -30,7 +30,7 @@ from pathlib import Path
 from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text
 from sqlalchemy.orm import Mapped, mapped_column
 import json
-import hashlib
+import asyncio
 from .config import Config
 
 
@@ -180,6 +180,8 @@ def checksb(message: Message):
             return (True, list(atset)[0])
     return (False, None)
 
+msg_lock = asyncio.Lock()
+
 @myallmsg.handle()
 async def fuducheck_function(bot: Bot, message: GroupMessageEvent, mhs: str) -> None:
     uid = message.get_user_id()
@@ -194,27 +196,30 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent, mhs: str) -> 
         await bot.send_group_msg(group_id=int(gid), message=Message(MessageSegment.record(Path("assets") / "gsm.mp3")))
     if text == "mbf" or text == "没办法":
         await bot.send_group_msg(group_id=int(gid), message=Message(MessageSegment.record(Path("assets") / "mbf.mp3")))
-    msglst = []
-    if gid in lastmsg:
-        msglst = lastmsg[gid]
+    need_send = False
     issb, whosb = checksb(msg)
-    print(issb, whosb)
-    if issb:
-        nowpoint += 5
+    async with msg_lock:
+        msglst = []
+        if gid in lastmsg:
+            msglst = lastmsg[gid]
+        if issb:
+            nowpoint += 5
 
-    if len(msglst) > 0 and msglst[0][2] == mhs and (uid in [a[0] for a in msglst]):
-        nowpoint += 5
-    else:
-        msglst.append((uid, msg, mhs))
-        if len(msglst) > 1 and msglst[-1][2] != msglst[-2][2]:
-            msglst = msglst[-1:]
-        nowpoint += min(3, len(msglst) - 1)
-        if len(msglst) == 3:
-            await bot.send_group_msg(group_id=int(gid), message=msglst[0][1])
-            if issb:
-                tm = await db.get_zero_point(f"group_{gid}_{whosb}") + 1
-                await bot.set_group_ban(group_id=int(gid), user_id=int(whosb), duration=60 * tm)
-    lastmsg[gid] = msglst
+        if len(msglst) > 0 and msglst[0][2] == mhs and (uid in [a[0] for a in msglst]):
+            nowpoint += 5
+        else:
+            msglst.append((uid, msg, mhs))
+            if len(msglst) > 1 and msglst[-1][2] != msglst[-2][2]:
+                msglst = msglst[-1:]
+            nowpoint += min(3, len(msglst) - 1)
+            if len(msglst) == 3:
+                need_send = True
+        lastmsg[gid] = msglst
+    if need_send:
+        await bot.send_group_msg(group_id=int(gid), message=msg)
+        if issb:
+            tm = await db.get_zero_point(f"group_{gid}_{whosb}") + 1
+            await bot.set_group_ban(group_id=int(gid), user_id=int(whosb), duration=60 * tm)
     if nowpoint > 0:
         await addpoint(gid, uid, nowpoint)
 
