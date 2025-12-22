@@ -170,26 +170,31 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
             msglist.append(["face", seg.data["id"]])
         elif seg.type == "image":
             # print(seg.data)
-            with TemporaryFile() as f:
-                await async_download_to(seg.data["url"], f)
-                f.seek(0)
-                filehash = hashlib.sha256(f.read()).hexdigest()
-                filename = filehash + ".png"
-                # print(filehash)
-                async with img_lock:
-                    has_small, has_full = await db.touch_img_cache(filehash)
-                if not has_full:
+            try:
+                res = await bot.get_image(file=seg.data["file"], type="url")
+                print(res)
+                with open(res["file"], "rb") as f:
                     f.seek(0)
-                    with open(full_dir / filename, "wb") as fullf:
-                        fullf.write(f.read())
-                if not has_small:
-                    f.seek(0)
-                    from PIL import Image
-                    img = Image.open(f)
-                    img.thumbnail((128, 128))
-                    with open(small_dir / filename, "wb") as smallf:
-                        img.save(smallf, format="PNG")
-                
+                    filehash = hashlib.sha256(f.read()).hexdigest()
+                    filename = filehash + ".png"
+                    # print(filehash)
+                    async with img_lock:
+                        has_small, has_full = await db.touch_img_cache(filehash)
+                    if not has_full:
+                        f.seek(0)
+                        with open(full_dir / filename, "wb") as fullf:
+                            fullf.write(f.read())
+                    if not has_small:
+                        f.seek(0)
+                        from PIL import Image
+                        img = Image.open(f)
+                        img.thumbnail((128, 128))
+                        with open(small_dir / filename, "wb") as smallf:
+                            img.save(smallf, format="PNG")
+            except Exception as e:
+                logger.error(f"图片处理失败: {e}")
+                filehash = "error"
+
             msglist.append(["imagev2", filehash, seg.data.get("sub_type", ""), seg.data.get("summary", "")])
         else:
             msglist.append([seg.type, ])
