@@ -7,15 +7,22 @@ from nonebot import get_bot
 from nonebot import logger
 from nonebot import require
 
-scheduler = require("nonebot_plugin_apscheduler").scheduler
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
-output = require("utils").output
+require("utils")
+from ..utils import output
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import NoValueError
 
-db_upd = require("cs_db_upd").db
+require("cs_db_upd")
+from ..cs_db_upd import db as db_upd
+
+require("cs_ai")
+from ..cs_ai import ai_ask_main
+
 
 from .config import Config
 
@@ -103,6 +110,11 @@ async def send_day_report():
             message_type="group",
             group_id=groupid,
             message="== 23:30自动日报 ==\n" + await get_report("今日", steamids)
+        )
+        await bot.send_msg(
+            message_type="group",
+            group_id=groupid,
+            message=await ai_ask_main("", f"group_{groupid}_?", None, "请结合今日天梯，官匹，内战数据，锐评本群今日的cs情况。")
         )
 
 @scheduler.scheduled_job("cron", day_of_week="sun", hour="23", minute="45", id="weekreport")

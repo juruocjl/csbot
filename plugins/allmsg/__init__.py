@@ -171,7 +171,7 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         elif seg.type == "image":
             # print(seg.data)
             try:
-                res = await bot.get_image(file=seg.data["file"], type="url")
+                res = await bot.get_image(file=seg.data["file"])
                 print(res)
                 with open(res["file"], "rb") as f:
                     f.seek(0)

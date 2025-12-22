@@ -220,27 +220,7 @@ aimem = on_command("ai记忆", priority=10, block=True)
 
 model_name = config.cs_ai_model
 
-async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message) -> Message:
-    text = await db_val.work_msg(msg)
-    msg2id: int | None = None
-    try:
-        if orimsg[0].type == "reply":
-            msg2id = int(orimsg[0].data["id"])
-            msg2 = await bot.get_msg(message_id=msg2id)
-            text = ""
-            for segment in msg2["message"]:
-                if segment["type"] == "text":
-                    text += segment['data']['text']
-                elif segment["type"] == "at":
-                    if name := await db_val.get_username(segment['data']['qq']):
-                        text += name
-                    else:
-                        text += "<未找到用户>"
-            uid = str(msg2["user_id"])
-    except:
-        logger.warning("获取回复消息失败")
-        return Message("获取回复消息失败。")
-    logger.info(f"UID: {uid}, Text: {text}")
+async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str:
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
     client = OpenAI(
@@ -518,10 +498,35 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
     end_time = time.time()
     duration = int(end_time - start_time)
 
+    return f"（已深度思考 {duration}s）\n" + output
+    
+
+async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message) -> Message:
+    text = await db_val.work_msg(msg)
+    msg2id: int | None = None
+    try:
+        if orimsg[0].type == "reply":
+            msg2id = int(orimsg[0].data["id"])
+            msg2 = await bot.get_msg(message_id=msg2id)
+            text = ""
+            for segment in msg2["message"]:
+                if segment["type"] == "text":
+                    text += segment['data']['text']
+                elif segment["type"] == "at":
+                    if name := await db_val.get_username(segment['data']['qq']):
+                        text += name
+                    else:
+                        text += "<未找到用户>"
+            uid = str(msg2["user_id"])
+    except:
+        logger.warning("获取回复消息失败")
+        return Message("获取回复消息失败。")
+    logger.info(f"UID: {uid}, Text: {text}")
+
     if msg2id is not None:
-        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + f" （已深度思考 {duration}s）\n" + output
+        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text)
     else:
-        return MessageSegment.at(uid) + f" （已深度思考 {duration}s）\n" + output
+        return MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text)
 
 @aiasktest.handle()
 async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
