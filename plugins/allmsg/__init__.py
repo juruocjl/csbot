@@ -187,7 +187,7 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
                     with open(small_dir / filename, "wb") as smallf:
                         img.save(smallf, format="PNG")
                 
-            msglist.append(["image", filehash, seg.data.get("sub_type", ""), seg.data.get("summary", "")])
+            msglist.append(["imagev2", filehash, seg.data.get("sub_type", ""), seg.data.get("summary", "")])
         else:
             msglist.append([seg.type, ])
             mhs = random.randbytes(32).hex()
