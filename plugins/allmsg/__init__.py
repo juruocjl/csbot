@@ -167,7 +167,7 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         elif seg.type == "face":
             msglist.append(["face", seg.data["id"]])
         elif seg.type == "image":
-            print(seg.data)
+            # print(seg.data)
             with TemporaryFile() as f:
                 await async_download_to(seg.data["url"], f)
                 f.seek(0)
