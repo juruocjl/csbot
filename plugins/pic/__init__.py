@@ -11,8 +11,7 @@ from nonebot import get_driver
 require("utils")
 
 from ..utils import local_storage
-
-async_download = require("utils").async_download
+from ..utils import get_session
 
 from .config import Config
 
@@ -92,7 +91,9 @@ class PicDir:
 
     async def addpic(self, filename, url):
         filepath = self.dirname / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
-        await async_download(url, filepath)
+        async with get_session().get(url) as resp:
+            with open(filepath, 'wb') as f:
+                f.write(await resp.read())
         hashval = get_file_hash(filepath)
         if hashval in self.hashset:
             logger.info(f"add{self.dirname}  {filename} existed")

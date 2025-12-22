@@ -6,10 +6,7 @@ from nonebot import logger
 require("utils")
 
 from ..utils import Base, async_session_factory
-
-get_session = require("utils").get_session
-async_download = require("utils").async_download
-get_today_start_timestamp = require("utils").get_today_start_timestamp
+from ..utils import get_session, get_today_start_timestamp
 
 from sqlalchemy import String, Float, Integer, select, delete, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -314,8 +311,8 @@ class DataManager:
             "appversion": "3.5.4.172",
             "token":config.cs_wmtoken
         }
-        async with get_session().post(url,headers=header,json=payload) as result:
-            data = await result.json()
+        async with get_session().post(url,headers=header,json=payload) as resp:
+            data = await resp.json()
         await asyncio.sleep(0.2)
         if data["statusCode"] != 0:
             logger.error(f"爬取失败  {mid} {data}")
@@ -425,8 +422,8 @@ class DataManager:
             "token": config.cs_wmtoken
         }
         
-        async with get_session().post(url, headers=header, json=payload) as result:
-            data = await result.json()
+        async with get_session().post(url, headers=header, json=payload) as resp:
+            data = await resp.json()
         await asyncio.sleep(0.2)
 
         if data["statusCode"] != 0:
@@ -633,7 +630,9 @@ class DataManager:
             async with session.begin():
                 result_info: SteamBaseInfo | None = await session.get(SteamBaseInfo, steamid)
         if not result_info or result_info.avatarlink != data["data"]["avatar"]:
-            await async_download(data["data"]["avatar"], Path(f"./avatar/{steamid}.png"))
+            with open(Path(f"./avatar/{steamid}.png"), "wb") as f:
+                async with get_session().get(data["data"]["avatar"]) as resp:
+                    f.write(await resp.read())
         LastTime = 0
         if result_info:
             LastTime = result_info.lasttime

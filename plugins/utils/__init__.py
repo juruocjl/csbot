@@ -106,28 +106,7 @@ def get_session() -> aiohttp.ClientSession:
     assert session is not None, "Session 未初始化完成"
     return session
 
-async def async_download(url: str, file_path: str | Path) -> None:
-    async with get_session().get(url) as response:
-        if response.status == 200:
-            with open(file_path, "wb") as f:
-                while True:
-                    chunk = await response.content.read(1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-        else:
-            raise Exception(f"下载失败，状态码：{response.status}")
 
-async def async_download_to(url: str, f) -> None:
-    async with get_session().get(url) as response:
-        if response.status == 200:
-            while True:
-                chunk = await response.content.read(1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-        else:
-            raise Exception(f"下载失败，状态码：{response.status}")
 
 def path_to_file_url(path: str | Path) -> str:
     absolute_path = os.path.abspath(str(path))

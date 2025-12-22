@@ -13,21 +13,19 @@ require("utils")
 from ..utils import getcard
 from ..utils import async_session_factory, Base
 from ..utils import get_session, get_today_start_timestamp
-from ..utils import async_download_to
 
 from .config import Config
 
-from tempfile import TemporaryFile
 from collections import defaultdict
 import msgpack
 import time
-import math
 import hashlib
 from typing import Awaitable, Callable
 from pathlib import Path
 import random
 import json
 import asyncio
+from io import BytesIO
 from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -171,26 +169,23 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         elif seg.type == "image":
             # print(seg.data)
             try:
-                res = await bot.get_image(file=seg.data["file"])
-                print(res)
-                with open(res["file"], "rb") as f:
-                    f.seek(0)
-                    filehash = hashlib.sha256(f.read()).hexdigest()
-                    filename = filehash + ".png"
-                    # print(filehash)
-                    async with img_lock:
-                        has_small, has_full = await db.touch_img_cache(filehash)
-                    if not has_full:
-                        f.seek(0)
-                        with open(full_dir / filename, "wb") as fullf:
-                            fullf.write(f.read())
-                    if not has_small:
-                        f.seek(0)
-                        from PIL import Image
-                        img = Image.open(f)
-                        img.thumbnail((128, 128))
-                        with open(small_dir / filename, "wb") as smallf:
-                            img.save(smallf, format="PNG")
+                async with get_session().get(seg.data["url"]) as res:
+                    assert res.status == 200
+                    content = await res.read()
+                filehash = hashlib.sha256(content).hexdigest()
+                filename = filehash + ".png"
+                # print(filehash)
+                async with img_lock:
+                    has_small, has_full = await db.touch_img_cache(filehash)
+                if not has_full:
+                    with open(full_dir / filename, "wb") as fullf:
+                        fullf.write(content)
+                if not has_small:
+                    from PIL import Image
+                    img = Image.open(BytesIO(content))
+                    img.thumbnail((128, 128))
+                    with open(small_dir / filename, "wb") as smallf:
+                        img.save(smallf, format="PNG")
             except Exception as e:
                 logger.error(f"图片处理失败: {e}")
                 filehash = "error" + random.randbytes(32).hex()

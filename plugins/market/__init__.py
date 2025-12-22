@@ -22,7 +22,7 @@ scheduler = require("nonebot_plugin_apscheduler").scheduler
 require("utils")
 
 from ..utils import async_session_factory, Base
-from ..utils import get_session, async_download, path_to_file_url, screenshot_html_to_png
+from ..utils import get_session, path_to_file_url, screenshot_html_to_png
 
 from sqlalchemy import String, Integer, select, desc, asc
 from sqlalchemy.orm import Mapped, mapped_column
@@ -254,7 +254,9 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
             data = await resgood.json()
         await asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
-        await async_download(data['data']['goods_info']['img'], Path("goodsimg") / f"{data['data']['goods_info']['id']}.jpg")
+        with open(Path("goodsimg") / f"{data['data']['goods_info']['id']}.jpg", "wb") as f:
+            async with get_session().get(data['data']['goods_info']['img']) as imgres:
+                f.write(await imgres.read())
         await db.addgoods(uid, data['data']['goods_info']['market_hash_name'])
         res = "成功加仓 "+data['data']['goods_info']['market_hash_name']
     except Exception as e:
