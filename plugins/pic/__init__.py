@@ -9,9 +9,11 @@ from nonebot import logger
 from nonebot import get_driver
 
 require("utils")
-
 from ..utils import local_storage
 from ..utils import get_session
+
+require("allmsg")
+from ..allmsg import get_image
 
 from .config import Config
 
@@ -89,11 +91,10 @@ class PicDir:
             self.hashset.add(hashval)
         await local_storage.set(self.keyname, str(self.hashset))
 
-    async def addpic(self, filename, url):
+    async def addpic(self, filename: str, url: str):
         filepath = self.dirname / (str(uuid.uuid4()) + "." + (filename.split('.')[-1]))
-        async with get_session().get(url) as resp:
-            with open(filepath, 'wb') as f:
-                f.write(await resp.read())
+        with open(filepath, 'wb') as f:
+            f.write(await get_image(filename, url))
         hashval = get_file_hash(filepath)
         if hashval in self.hashset:
             logger.info(f"add{self.dirname}  {filename} existed")

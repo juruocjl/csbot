@@ -1,18 +1,16 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment, NoticeEvent, Event
+from nonebot.adapters.onebot.v11 import Message, GroupMessageEvent
 from nonebot import on_command, on_message, on_notice
 from nonebot import logger
 from nonebot import require
 from nonebot.adapters.onebot.v11 import Bot
-from nonebot.params import CommandArg
-from nonebot import get_bot
-
 
 require("utils")
 from ..utils import getcard
 from ..utils import async_session_factory, Base
 from ..utils import get_session, get_today_start_timestamp
+from ..utils import local_storage
 
 from .config import Config
 
@@ -135,14 +133,20 @@ class DataManager:
 
     
 
-full_dir = Path("imgs") / "cache" / "full"
-small_dir = Path("imgs") / "cache" / "small"
+full_dir = Path("imgs") / "history" / "full"
+small_dir = Path("imgs") / "history" / "small"
+
+cache_dir = Path("imgs") / "cache"
+
 img_lock = asyncio.Lock()
+img_cache_lock = asyncio.Lock()
 
 if not full_dir.exists():
     full_dir.mkdir(parents=True)
 if not small_dir.exists():
     small_dir.mkdir(parents=True)
+if not cache_dir.exists():
+    cache_dir.mkdir(parents=True)
 
 db = DataManager()
 
@@ -153,6 +157,35 @@ report = on_command("统计", priority=10, block=True)
 async def get_msg_status(groupid) -> str:
     count = await db.get_msg_count(groupid)
     return f"本群已记录消息数：{count}"
+
+async def get_image(file: str, url: str) -> bytes:
+    async with img_cache_lock:
+        filepath = cache_dir / file
+        cachc_dict: dict[str, float] = json.loads(await local_storage.get("img_cache_dict", "{}"))
+        content = None
+        if file in cachc_dict and filepath.exists():
+            logger.info(f"使用缓存图片 {file}")
+            with open(filepath, "rb") as f:
+                content = f.read()
+            cachc_dict[file] = time.time()
+        else:
+            logger.info(f"下载图片 {file} 从 {url}")
+            async with get_session().get(url) as res:
+                assert res.status == 200
+                content = await res.read()
+            with open(filepath, "wb") as f:
+                f.write(content)
+            cachc_dict[file] = time.time()
+        # 清理缓存
+        if len(cachc_dict) > 300:
+            sorted_items = sorted(cachc_dict.items(), key=lambda item: item[1])
+            for i in range(len(sorted_items) - 250):
+                fpath = cache_dir / sorted_items[i][0]
+                if fpath.exists():
+                    fpath.unlink()
+                del cachc_dict[sorted_items[i][0]]
+        await local_storage.set("img_cache_dict", json.dumps(cachc_dict))
+        return content
 
 async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: Message) -> str:
     msglist = []
@@ -169,23 +202,21 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         elif seg.type == "image":
             # print(seg.data)
             try:
-                async with get_session().get(seg.data["url"]) as res:
-                    assert res.status == 200
-                    content = await res.read()
+                content = await get_image(seg.data["file"], seg.data["url"])
                 filehash = hashlib.sha256(content).hexdigest()
                 filename = filehash + ".png"
                 # print(filehash)
                 async with img_lock:
                     has_small, has_full = await db.touch_img_cache(filehash)
-                if not has_full:
-                    with open(full_dir / filename, "wb") as fullf:
-                        fullf.write(content)
-                if not has_small:
-                    from PIL import Image
-                    img = Image.open(BytesIO(content))
-                    img.thumbnail((128, 128))
-                    with open(small_dir / filename, "wb") as smallf:
-                        img.save(smallf, format="PNG")
+                    if not has_full:
+                        with open(full_dir / filename, "wb") as fullf:
+                            fullf.write(content)
+                    if not has_small:
+                        from PIL import Image
+                        img = Image.open(BytesIO(content))
+                        img.thumbnail((128, 128))
+                        with open(small_dir / filename, "wb") as smallf:
+                            img.save(smallf, format="PNG")
             except Exception as e:
                 logger.error(f"图片处理失败: {e}")
                 filehash = "error" + random.randbytes(32).hex()
