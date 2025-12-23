@@ -114,7 +114,7 @@ async def send_day_report():
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message=await ai_ask_main("", f"group_{groupid}_?", None, "请结合今日天梯，官匹，内战数据，锐评本群今日的cs情况。")
+            message=await ai_ask_main("", f"group_{groupid}_?", None, "请结合今日天梯，官匹，内战数据，锐评本群今日的cs情况，不必给出具体的数据，只需要总体的评价，尽可能犀利尖锐。")
         )
 
 @scheduler.scheduled_job("cron", day_of_week="sun", hour="23", minute="45", id="weekreport")
