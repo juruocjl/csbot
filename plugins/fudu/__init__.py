@@ -297,8 +297,8 @@ async def roll_admin(groupid: str):
         await bot.set_group_admin(group_id=int(groupid), user_id=int(await local_storage.get(f'adminqq{groupid}', '0')), enable=False)
     
     users = await calc_roll_point(groupid, time_type, 1)
-    weights = [point for _, _, point in users]
     text = await get_roll_point_text(bot, groupid, users)
+    weights = [point for _, _, point in users]
 
     newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
