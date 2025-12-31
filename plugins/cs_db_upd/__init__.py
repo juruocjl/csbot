@@ -4,7 +4,7 @@ from nonebot import require
 from nonebot import logger
 
 require("utils")
-
+from ..utils import avatar_dir
 from ..utils import Base, async_session_factory
 from ..utils import get_session, get_today_start_timestamp
 
@@ -630,7 +630,7 @@ class DataManager:
             async with session.begin():
                 result_info: SteamBaseInfo | None = await session.get(SteamBaseInfo, steamid)
         if not result_info or result_info.avatarlink != data["data"]["avatar"]:
-            with open(Path(f"./avatar/{steamid}.png"), "wb") as f:
+            with open(avatar_dir / f"{steamid}.png", "wb") as f:
                 async with get_session().get(data["data"]["avatar"]) as resp:
                     f.write(await resp.read())
         LastTime = 0

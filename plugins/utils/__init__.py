@@ -34,10 +34,20 @@ config = get_plugin_config(Config)
 
 logger.info("开始加载基本组件...")
 
-driver = get_driver()
+temp_dir = Path("temp")
+temp_dir.mkdir(exist_ok=True)
 
-if not os.path.exists("temp"):
-    os.makedirs("temp", exist_ok=True)
+img_dir = Path("imgs")
+img_dir.mkdir(exist_ok=True)
+
+avatar_dir = img_dir / "avatar"
+avatar_dir.mkdir(exist_ok=True)
+
+goods_dir = img_dir / "goodsimg"
+goods_dir.mkdir(exist_ok=True)
+
+
+driver = get_driver()
 
 def get_today_start_timestamp(refreshtime = 0):
     today = datetime.date.today()

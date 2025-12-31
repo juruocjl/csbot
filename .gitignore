@@ -1,8 +1,7 @@
-.env.prod
 __pycache__
 temp*
 *.db
-.venv
+.*
 avatar
 *.log
 test*

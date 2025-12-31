@@ -20,7 +20,7 @@ from .config import Config
 scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 require("utils")
-
+from ..utils import goods_dir
 from ..utils import async_session_factory, Base
 from ..utils import get_session, path_to_file_url, screenshot_html_to_png
 
@@ -36,9 +36,6 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-
-if not os.path.exists("goodsimg"):
-    os.makedirs("goodsimg", exist_ok=True)
 
 
 headers = {'ApiToken': config.csqaq_api, 'Content-Type': 'application/json'}
@@ -184,7 +181,7 @@ async def get_baojia_image(title: str = "当前底价"):
     data = sorted(data, key = lambda x: x[2])
     for item in data:
         temp_html = market_content[1]
-        temp_html = temp_html.replace("_IMG_", path_to_file_url(Path("goodsimg") / f"{item[0]}.jpg"))
+        temp_html = temp_html.replace("_IMG_", path_to_file_url(goods_dir / f"{item[0]}.jpg"))
         temp_html = temp_html.replace("_NAME_", item[1])
         temp_html = temp_html.replace("_PRICE_", str(item[2]/100))
         if item[3] != None:
@@ -224,11 +221,10 @@ async def get_baojia_image(title: str = "当前底价"):
             temp_html = temp_html.replace("_7DP_", "无数据")
         html += temp_html
     html += market_content[2]
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
-        temp_file.close()
+        temp_file.flush()
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 120 + len(data) * 60)
-        os.remove(temp_file.name)
     return img
 
 @baojia.handle()
@@ -254,7 +250,7 @@ async def addgoods_function(message: MessageEvent, args: Message = CommandArg())
             data = await resgood.json()
         await asyncio.sleep(1.1)
         await db.update_goods([data['data']['goods_info']['market_hash_name']])
-        with open(Path("goodsimg") / f"{data['data']['goods_info']['id']}.jpg", "wb") as f:
+        with open(goods_dir / f"{data['data']['goods_info']['id']}.jpg", "wb") as f:
             async with get_session().get(data['data']['goods_info']['img']) as imgres:
                 f.write(await imgres.read())
         await db.addgoods(uid, data['data']['goods_info']['market_hash_name'])

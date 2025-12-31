@@ -3,6 +3,7 @@ from nonebot.plugin import PluginMetadata
 from nonebot import require
 
 require("utils")
+from ..utils import avatar_dir
 from ..utils import output, path_to_file_url, screenshot_html_to_png
 
 require("cs_db_upd")
@@ -124,7 +125,7 @@ async def gen_rank_image2(datas: list[tuple[int, tuple[float, int]]], min_value:
     for (steamid, value) in datas:
         score = (value[0] - min_value) / (max_value - min_value)
         temp_html = rank_content[1]
-        temp_html = temp_html.replace('_AVATAR_', path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+        temp_html = temp_html.replace('_AVATAR_', path_to_file_url(avatar_dir / f"{steamid}.png"))
         temp_html = temp_html.replace('_COLOR_', red_to_green_color(score))
         if min_value <= 0 <= max_value:
             if value[0] >= 0:
@@ -150,11 +151,10 @@ async def gen_rank_image2(datas: list[tuple[int, tuple[float, int]]], min_value:
     html = html.replace("_AVGPOS_", f"{round(score * 500) + 98}")
     html = html.replace("_AVGLEN_", f"{round(len(datas) * 90) + 40}")
     html = html.replace("_TITLE_", title)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
-        temp_file.close()
+        temp_file.flush()
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 200 + len(datas) * 90)
-        os.remove(temp_file.name)
     return BytesIO(img)
 
 async def gen_matches_image(datas: list[MatchStatsPW], steamid: str, name: str):
@@ -162,7 +162,7 @@ async def gen_matches_image(datas: list[MatchStatsPW], steamid: str, name: str):
     red = "#F44336"
     gray = "#9E9E9E"
     html = matches_content[0]
-    html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+    html = html.replace("_avatar_", path_to_file_url(avatar_dir / f"{steamid}.png"))
     html = html.replace("_name_", normalize('NFKC', name))
     for match in datas:
         temp_html = matches_content[1]
@@ -192,16 +192,15 @@ async def gen_matches_image(datas: list[MatchStatsPW], steamid: str, name: str):
         html += temp_html
     html += matches_content[2]
 
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
-        temp_file.close()
+        temp_file.flush()
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 570, 100 + len(datas) * 80)
-        os.remove(temp_file.name)
     return BytesIO(img)
 
 async def gen_stats_image(baseinfo: SteamBaseInfo, detailinfo: SteamDetailInfo):
     html = data_content
-    html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{baseinfo.steamid}.png")))
+    html = html.replace("_avatar_", path_to_file_url(avatar_dir / f"{baseinfo.steamid}.png"))
     html = html.replace("_name_", normalize('NFKC', baseinfo.name))
     html = html.replace("_WE_", f"{detailinfo.we: .1f}")
     html = html.replace("_Rating_",f"{detailinfo.pwRating: .2f}")
@@ -244,11 +243,10 @@ async def gen_stats_image(baseinfo: SteamBaseInfo, detailinfo: SteamDetailInfo):
     html = html.replace("_COLOR_", color)
     html = html.replace("_ARC_", f"{226.2 * (1 - arc)}")
     html = html.replace("_POOL_", pool)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
-        temp_file.close()
+        temp_file.flush()
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 700)
-        os.remove(temp_file.name)
     return BytesIO(img)
 
 async def gen_teammate_image(steamid: str, timetype: str, data: list[tuple[str, str, str, str]]):
@@ -256,13 +254,13 @@ async def gen_teammate_image(steamid: str, timetype: str, data: list[tuple[str, 
     data: list of (title, steamid, name, content)
     """
     html = teammate_content[0]
-    html = html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+    html = html.replace("_avatar_", path_to_file_url(avatar_dir / f"{steamid}.png"))
     html = html.replace("_time_", timetype)
 
     for titie, steamid, name, content in data:
         temp_html = teammate_content[1]
         temp_html = temp_html.replace("_title_", titie)
-        temp_html = temp_html.replace("_avatar_", path_to_file_url(os.path.join("avatar", f"{steamid}.png")))
+        temp_html = temp_html.replace("_avatar_", path_to_file_url(avatar_dir / f"{steamid}.png"))
         temp_html = temp_html.replace("_name_", normalize('NFKC', name))
         temp_html = temp_html.replace("_content_", content)
         html += temp_html
@@ -270,11 +268,10 @@ async def gen_teammate_image(steamid: str, timetype: str, data: list[tuple[str, 
     html += teammate_content[2]
 
 
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html", dir="temp", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
-        temp_file.close()
+        temp_file.flush()
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 60 + 105 * len(data))
-        os.remove(temp_file.name)
     return BytesIO(img)
 
 def red_to_green_color(score):

@@ -28,11 +28,6 @@ config = get_plugin_config(Config)
 import re
 import os
 
-
-if not os.path.exists("avatar"):
-    os.makedirs("avatar", exist_ok=True)
-
-
 __plugin_meta__ = PluginMetadata(
     name="cs",
     description="",
