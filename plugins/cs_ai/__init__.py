@@ -323,17 +323,24 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
 
     messages: list[ChatCompletionMessageParam] = []
     
-    def add_event(role, content, tool_calls=None, tool_call_id=None):
+    def add_event(role, content, tool_calls=None, tool_call_id=None, reasoning_content=None):
         ts = datetime.now().isoformat()
+        if reasoning_content:
+            log_file_handle.write(f"{ts} [{role}] [思考] {reasoning_content}\n")
         log_file_handle.write(f"{ts} [{role}] {content}\n")
+        
+        msg: dict[str, Any] = {"role": role, "content": content}
         if tool_calls is not None:
-            messages.append({"role": role, "content": content, "tool_calls": tool_calls})
+            msg["tool_calls"] = tool_calls
             for tool_call in tool_calls:
                 log_file_handle.write(f"{ts}   [tool_call] {tool_call.function}\n")
         elif tool_call_id is not None:
-            messages.append({"role": role, "content": content, "tool_call_id": tool_call_id})
-        else:
-            messages.append({"role": role, "content": content})
+            msg["tool_call_id"] = tool_call_id
+        
+        if reasoning_content is not None:
+            msg["reasoning_content"] = reasoning_content
+        
+        messages.append(msg)
         log_file_handle.flush()
     add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用10次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
     add_event("system", f"可用用户名：{usernames}；可用时间：{valid_time}；可用排名项：{valid_rank}。默认时间为本赛季。")
@@ -361,16 +368,25 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
     tool_budget = 10
 
     tools_param = cast(Any, tools)
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        tools=tools_param,
-        tool_choice="auto",
-    )
+    
+    # 构建 API 参数（messages 是引用，会自动更新）
+    api_params: dict[str, Any] = {
+        "model": model_name,
+        "messages": messages,
+        "tools": tools_param,
+        "tool_choice": "auto",
+    }
+    
+    # 如果配置启用思考模式，通过 extra_body 添加 thinking 参数
+    if config.cs_ai_enable_thinking:
+        api_params["extra_body"] = {"thinking": {"type": "enabled", "budget_tokens": 10000}}
+    
+    response = client.chat.completions.create(**api_params)
 
     while tool_budget > 0 and response.choices[0].message.tool_calls:
         msg_with_calls = response.choices[0].message
-        add_event("assistant", msg_with_calls.content or "", tool_calls=msg_with_calls.tool_calls)
+        reasoning = getattr(msg_with_calls, "reasoning_content", None)
+        add_event("assistant", msg_with_calls.content or "", tool_calls=msg_with_calls.tool_calls, reasoning_content=reasoning)
 
         assert msg_with_calls.tool_calls is not None
         
@@ -470,26 +486,19 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
 
         if tool_budget <= 0:
             add_event("system", "工具调用次数已达上限，请基于已有结果作答。")
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                tools=tools_param,
-                tool_choice="none",
-            )
+            # 修改 tool_choice 为 none
+            api_params["tool_choice"] = "none"
+            response = client.chat.completions.create(**api_params)
             break
         
         add_event("system", f"你还可以调用 {tool_budget} 次工具，请继续。")
-
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            tools=tools_param,
-            tool_choice="auto",
-        )
+        response = client.chat.completions.create(**api_params)
 
     # 记录最后一次assistant响应（无tool_calls）到历史
-    output = response.choices[0].message.content or ""
-    add_event("assistant", output)
+    final_msg = response.choices[0].message
+    output = final_msg.content or ""
+    final_reasoning = getattr(final_msg, "reasoning_content", None)
+    add_event("assistant", output, reasoning_content=final_reasoning)
 
     try:
         log_file_handle.close()
