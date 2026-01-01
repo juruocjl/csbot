@@ -102,7 +102,7 @@ async def dayreport_function(message: MessageEvent):
 
 @scheduler.scheduled_job("cron", hour="23", minute="30", id="dayreport")
 @send_day_report.handle()
-async def send_day_report():
+async def send_day_report_function():
     for steamid in await db_val.get_all_steamid():
         try:
             await db_upd.update_stats(steamid)

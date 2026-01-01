@@ -8,14 +8,17 @@ from nonebot import require
 
 import secrets
 import time
-from fastapi import FastAPI, Header, HTTPException, Depends
+from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import String, Integer, Boolean, select
 from sqlalchemy.orm import Mapped, mapped_column
+from pydantic import BaseModel, Field
 
 require("utils")
 from ..utils import Base, async_session_factory
+require("cs_db_val")
+from ..cs_db_val import db as cs_db
 
 from .config import Config
 
@@ -129,27 +132,101 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="Invalid token")
     return user_id
 
-@app.post("/api/auth/init")
+class InitTokenResponse(BaseModel):
+    token: str = Field(..., description="用于 API 认证的 Token")
+    code: str = Field(..., description="用于群内验证的验证码")
+    expires_in: int = Field(..., description="验证码有效期，单位为秒")
+
+@app.post(
+    "/api/auth/init",
+    response_model=InitTokenResponse,
+    summary="申请认证 Token",
+    description="申请一个新的认证 Token 和验证码。"
+)
 async def init_token():
     """
     申请token接口
     返回: {"token": "...", "code": "123456"}
     """
     auth_session = await db.generate_token()
-    return {
-        "token": auth_session.token,
-        "code": auth_session.code,
-        "expires_in": config.auth_code_valid_seconds
-    }
+    return InitTokenResponse(
+        token=auth_session.token,
+        code=auth_session.code,
+        expires_in=config.auth_code_valid_seconds
+    )
 
-@app.post("/api/auth/info")
+class BaseInfoResponse(BaseModel):
+    verify: bool = Field(..., description="Token 是否有效")
+    user_id: str = Field(..., description="绑定的用户 ID")
+
+@app.post(
+    "/api/auth/info",
+    response_model=BaseInfoResponse,
+    summary="获取认证信息",
+    description="验证 Token 并获取绑定的用户 ID。"
+)
 async def verify_token(user_id = Depends(get_current_user)):
     """
     验证token接口
     参数: token (HTTP Bearer 认证)
     返回: {"verified": true, "user_id": "..."}
     """
-    return {
-        "verified": True,
-        "user_id": user_id
-    }
+    return BaseInfoResponse(
+        verify=True,
+        user_id=user_id
+    )
+
+class MatchPWPlayerInfo(BaseModel):
+    steamId: str = Field(..., description="玩家的 Steam ID")
+    nickname: str = Field(..., description="玩家昵称")
+    team: int = Field(..., description="玩家所属队伍 (1 或 2)")
+    rating: float = Field(..., description="玩家的比赛评分")
+    we: float = Field(..., description="玩家的 WE 值")
+    kills: int = Field(..., description="击杀数")
+    deaths: int = Field(..., description="死亡数")
+    assists: int = Field(..., description="助攻数")
+
+class MatchPWInfo(BaseModel):
+    match_id: str = Field(..., description="比赛 ID")
+    timestamp: int = Field(..., description="比赛时间戳")
+    winteam: int = Field(..., description="获胜队伍 (1 或 2)")
+    mode: str = Field(..., description="比赛模式")
+    mapname: str = Field(..., description="比赛地图")
+    score1: int = Field(..., description="队伍 1 分数")
+    score2: int = Field(..., description="队伍 2 分数")
+    players: list[MatchPWPlayerInfo] = Field(..., description="参赛玩家信息列表")
+
+@app.post("/api/data/match_info",
+    response_model=MatchPWInfo,
+    summary="获取比赛详细信息",
+    description="根据比赛 ID 获取比赛的详细信息，包括参赛玩家的数据。需要提供有效的认证 Token。"
+)
+async def get_match_info(match_id: str = Body(..., embed=True), user_id = Depends(get_current_user)):
+    db_result = await cs_db.get_match_detail(match_id)
+    if not db_result:
+        raise HTTPException(status_code=404, detail="Match not found")
+    async def get_nickname(steamid: str) -> str:
+        base_info = await cs_db.get_base_info(steamid)
+        return base_info.name if base_info else "未知玩家"
+    return MatchPWInfo(
+        match_id=match_id,
+        timestamp=db_result[0].timeStamp,
+        winteam=db_result[0].winTeam,
+        mode=db_result[0].mode,
+        mapname=db_result[0].mapName,
+        score1=db_result[0].score1,
+        score2=db_result[0].score2,
+        players=[
+            MatchPWPlayerInfo(
+                steamId=player.steamid,
+                nickname=await get_nickname(player.steamid),
+                team=player.team,
+                rating=player.pwRating,
+                we=player.we,
+                kills=player.kill,
+                deaths=player.death,
+                assists=player.assist
+            ) for player in db_result
+        ]
+    )
+    
