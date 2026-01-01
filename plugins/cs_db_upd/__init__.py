@@ -375,7 +375,7 @@ class DataManager:
 
         await session.merge(detail_info)
 
-    async def _update_stats_card(self, steamid: str, session: AsyncSession):
+    async def _update_stats_card(self, steamid: str, session: AsyncSession, interval: int = 600):
         logger.info(f"获取具体信息 for SteamID: {steamid}")
         url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats/v2"
         payload = {
@@ -389,9 +389,9 @@ class DataManager:
         }
         result_info: SteamBaseInfo | None = await session.get(SteamBaseInfo, steamid)
         if result_info is not None:
-            if time.time() - result_info.updateTime <= 600:
+            if time.time() - result_info.updateTime <= interval:
                 logger.warning(f"数据更新过于频繁 for SteamID: {steamid}")
-                raise RuntimeError(f"数据更新过于频繁，请 {600 - (time.time() - result_info.updateTime):.0f}s 后再试。")
+                raise RuntimeError(f"数据更新过于频繁，请 {interval - (time.time() - result_info.updateTime):.0f}s 后再试。")
             result_info.updateTime = int(time.time())
             await session.merge(result_info)
         else:
@@ -574,10 +574,12 @@ async def qwq():
         allids = list(result.scalars().all())
     async with async_session_factory() as session:
         logger.info(f"启动时更新数据，共有 {len(allids)} 个SteamID需要更新")
-        for steamid in allids:
+        for i in range(len(allids)):
+            logger.info(f"启动时更新数据进度 {i+1}/{len(allids)} SteamID: {allids[i]}")
+            steamid = allids[i]
             try:
                 async with session.begin():
-                    await db._update_stats_card(steamid, session)
+                    await db._update_stats_card(steamid, session, interval=1e10)
                     await db._update_extra_info(steamid, session)
                 await asyncio.sleep(0.5 + random.random())
             except Exception as e:
