@@ -1,5 +1,6 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
+from nonebot.adapters.onebot.v11.message import Message
 from nonebot import require
 from nonebot import logger
 
@@ -116,6 +117,14 @@ class MatchStatsPW(Base):
     throwsCnt: Mapped[int] = mapped_column(Integer)
     snipeNum: Mapped[int] = mapped_column(Integer)
     firstDeath: Mapped[int] = mapped_column(Integer)
+
+class MatchStatsPWExtra(Base):
+    __tablename__ = "matches_extra"
+
+    mid: Mapped[str] = mapped_column(String, primary_key=True)
+
+    team1Legacy: Mapped[float] = mapped_column(Float)
+    team2Legacy: Mapped[float] = mapped_column(Float)
 
 class MatchStatsGP(Base):
     __tablename__ = "matches_gp"
@@ -390,15 +399,15 @@ class DataManager:
             
             return record.steamid if record else None
 
-    async def get_base_info(self, steamid) -> SteamBaseInfo | None:
+    async def get_base_info(self, steamid: str) -> SteamBaseInfo | None:
         async with async_session_factory() as session:
             return await session.get(SteamBaseInfo, steamid)
 
-    async def get_detail_info(self, steamid, seasonid = SeasonId) -> SteamDetailInfo | None:
+    async def get_detail_info(self, steamid: str, seasonid: str = SeasonId) -> SteamDetailInfo | None:
         async with async_session_factory() as session:
             return await session.get(SteamDetailInfo, (steamid, seasonid))
 
-    async def get_extra_info(self, steamid, timeStamp = 1e11) -> SteamExtraInfo | None:
+    async def get_extra_info(self, steamid: str, timeStamp: int = 100000000000) -> SteamExtraInfo | None:
         async with async_session_factory() as session:
             stmt = (
                 select(SteamExtraInfo)
@@ -408,7 +417,7 @@ class DataManager:
                 .limit(1)
             )
             result = await session.execute(stmt)
-            record = result.scalars().one_or_none()
+            record = result.scalar_one_or_none()
             if record is not None:
                 return record
             stmt = (
@@ -419,9 +428,9 @@ class DataManager:
                 .limit(1)
             )
             result = await session.execute(stmt)
-            return result.scalars().one_or_none()
+            return result.scalar_one_or_none()
 
-    async def search_user(self, name, id = 1) -> SteamBaseInfo | None:
+    async def search_user(self, name: str, id: int = 1) -> SteamBaseInfo | None:
         async with async_session_factory() as session:
             stmt = select(SteamBaseInfo).where(SteamBaseInfo.name.like(f"%{name}%")).limit(id)
             result = await session.execute(stmt)
@@ -455,7 +464,7 @@ class DataManager:
         
         return []
     
-    async def get_member_steamid(self, sid):
+    async def get_member_steamid(self, sid: str) -> list[str]:
         uids = await self.get_member(sid)
         steamids = set()
         for uid in uids:
@@ -512,6 +521,10 @@ class DataManager:
             matches = list(result.scalars().all())
 
             return matches if matches else None
+
+    async def get_match_extra(self, mid: str) -> MatchStatsPWExtra | None:
+        async with async_session_factory() as session:
+            return await session.get(MatchStatsPWExtra, mid)
 
     async def get_match_teammate(self, steamid: str, time_type: str, querys: list[str], top_k: int = 1) -> list[list[tuple[str, float, int]]]:
         """
@@ -598,13 +611,13 @@ class DataManager:
             record = result.scalar()
             return record is not None
 
-    async def get_username(self, uid):
+    async def get_username(self, uid: str) -> str | None:
         if steamid := await self.get_steamid(uid):
             if baseinfo := await self.get_base_info(steamid):
                 return baseinfo.name
         return None
 
-    async def work_msg(self, msg):
+    async def work_msg(self, msg: Message):
         result = ""
         for seg in msg:
             if seg.type == "text":
@@ -672,9 +685,8 @@ async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
             
     raise NoValueError()
 
-
 @db.register("底蕴", "天梯底蕴", "全部", None, True, MinAdd(-1), "d0")
-async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
+async def get_legacy(steamid: str, time_type: str) -> tuple[float, int]:
     assert(time_type == "全部")
     extra_info = await db.get_extra_info(steamid)
     base_info = await db.get_base_info(steamid)
@@ -684,6 +696,29 @@ async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
         return (extra_info.legacyScore, TotCount)
     raise NoValueError()
 
+@db.register("底蕴差", "平均己方-对方底蕴", "本赛季", valid_time, True, ZeroIn(-1), "d2")
+async def get_legacy_diff(steamid: str, time_type: str) -> tuple[float, int]:
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(
+                    case(
+                        (MatchStatsPW.team == 1, 1),
+                        else_=-1
+                    ) * (MatchStatsPWExtra.team1Legacy - MatchStatsPWExtra.team2Legacy)
+                ),
+                func.count(MatchStatsPWExtra.mid)
+            )
+            .select_from(MatchStatsPW)
+            .join(MatchStatsPWExtra, MatchStatsPW.mid == MatchStatsPWExtra.mid)
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        print(stmt.compile(compile_kwargs={"literal_binds": True}))
+        res = (await session.execute(stmt)).one()
+        print(res)
+        if res[1]:
+            return (res[0] / res[1], res[1])
+    raise NoValueError()
 
 @db.register("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2")
 async def get_we(steamid: str, time_type: str) -> tuple[float, int]:

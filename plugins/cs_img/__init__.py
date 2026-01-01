@@ -7,7 +7,7 @@ from ..utils import avatar_dir
 from ..utils import output, path_to_file_url, screenshot_html_to_png
 
 require("cs_db_val")
-from ..cs_db_val import MatchStatsPW, SteamBaseInfo, SteamDetailInfo
+from ..cs_db_val import MatchStatsPW, SteamBaseInfo, SteamDetailInfo, MatchStatsPWExtra
 
 import os
 from pathlib import Path
@@ -118,7 +118,7 @@ def get_elo_info(pvpScore, seasonId = "S21"):
         return pool, color, arc
 
 
-async def gen_rank_image2(datas: list[tuple[int, tuple[float, int]]], min_value: float, max_value: float, title: str, format: str):
+async def gen_rank_image2(datas: list[tuple[str, tuple[float, int]]], min_value: float, max_value: float, title: str, format: str):
     html = rank_content[0]
     sum: float = 0
     zeroscore = - min_value / (max_value - min_value)
@@ -157,14 +157,14 @@ async def gen_rank_image2(datas: list[tuple[int, tuple[float, int]]], min_value:
         img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 200 + len(datas) * 90)
     return BytesIO(img)
 
-async def gen_matches_image(datas: list[MatchStatsPW], steamid: str, name: str):
+async def gen_matches_image(datas: list[MatchStatsPW], data_extra: list[MatchStatsPWExtra | None], steamid: str, name: str):
     green = "#4CAF50"
     red = "#F44336"
     gray = "#9E9E9E"
     html = matches_content[0]
     html = html.replace("_avatar_", path_to_file_url(avatar_dir / f"{steamid}.png"))
     html = html.replace("_name_", normalize('NFKC', name))
-    for match in datas:
+    for match, match_extra in zip(datas, data_extra):
         temp_html = matches_content[1]
         myScore = match.score1 if match.team == 1 else match.score2
         opScore = match.score2 if match.team == 1 else match.score1
@@ -189,6 +189,16 @@ async def gen_matches_image(datas: list[MatchStatsPW], steamid: str, name: str):
         temp_html = temp_html.replace("_ARC_", f"{113.1 * (1 - arc)}")
         temp_html = temp_html.replace("_POOL_", pool)
         temp_html = temp_html.replace("_DELTA_", f"{match.pvpScoreChange:+}")
+        if match_extra:
+            legacyDiff = match_extra.team1Legacy - match_extra.team2Legacy
+            if match.team == 2:
+                legacyDiff = -legacyDiff
+            lg_color = green if legacyDiff > 0 else (red if legacyDiff < 0 else gray)
+            temp_html = temp_html.replace("_LG_", f"{legacyDiff:+.0f}")
+            temp_html = temp_html.replace("_LGCOLOR_", lg_color)
+        else:
+            temp_html = temp_html.replace("_LG_", "N/A")
+            temp_html = temp_html.replace("_LGCOLOR_", gray)
         html += temp_html
     html += matches_content[2]
 

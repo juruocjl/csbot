@@ -12,7 +12,7 @@ from ..utils import async_session_factory
 from ..utils import get_session
 
 require("cs_db_val")
-from ..cs_db_val import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsGP, GroupMember
+from ..cs_db_val import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, GroupMember
 from ..cs_db_val import db as db_val
 
 from sqlalchemy import select, delete, func
@@ -40,7 +40,7 @@ lastSeasonId = config.cs_last_season_id
 
 
 class DataManager:
-    
+
 
     async def bind(self, uid: str, steamid: str):
         """
@@ -66,7 +66,36 @@ class DataManager:
                 stmt = delete(MemberSteamID).where(MemberSteamID.uid == uid)
                 await session.execute(stmt)
 
-    async def _update_match(self, mid, timeStamp, season, session: AsyncSession):
+    async def _update_match_extra(self, mid: str, session: AsyncSession):
+        extra_info = await session.get(MatchStatsPWExtra, mid)
+        if extra_info is not None:
+            return
+        logger.info(f"计算 match_extra_info")
+        team1sum, team1cnt = .0, 0
+        team2sum, team2cnt = .0, 0
+        stmt = select(MatchStatsPW).where(MatchStatsPW.mid == mid)
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+        for row in rows:
+            if row.team == 1:
+                if res := await db_val.get_extra_info(row.steamid, timeStamp=row.timeStamp):
+                    team1sum += res.legacyScore
+                    team1cnt += 1
+            elif row.team == 2:
+                if res := await db_val.get_extra_info(row.steamid, timeStamp=row.timeStamp):
+                    team2sum += res.legacyScore
+                    team2cnt += 1
+        if team1cnt == 0 or team2cnt == 0:
+            logger.warning(f"match_extra_info 计算失败，队伍人数为0 {mid}")
+            return
+        extra_info = MatchStatsPWExtra(
+            mid=mid,
+            team1Legacy=team1sum / team1cnt,
+            team2Legacy=team2sum / team2cnt
+        )
+        await session.merge(extra_info)
+
+    async def _update_match(self, mid: str, timeStamp: int, season: str, session: AsyncSession):
         stmt = select(func.count()).select_from(MatchStatsPW).where(MatchStatsPW.mid == mid)
         
         result = await session.execute(stmt)
@@ -177,11 +206,11 @@ class DataManager:
                 await self._update_extra_info(player['playerId'], session)
             except:
                 pass
-
+        await self._update_match_extra(mid, session)
         logger.info(f"update_match {mid} success")
         return 1
 
-    async def _update_matchgp(self, mid, timeStamp, session: AsyncSession):
+    async def _update_matchgp(self, mid: str, timeStamp: int, session: AsyncSession):
         stmt = select(func.count()).select_from(MatchStatsGP).where(MatchStatsGP.mid == mid)
         
         result = await session.execute(stmt)
@@ -569,7 +598,7 @@ class DataManager:
     
         return base_info.name, addMatches, addMatchesGP
     
-    async def add_member(self, gid, uid):
+    async def add_member(self, gid: str, uid: str):
         if gid.startswith("group_"):
             clean_gid = gid.split("_")[1]
 
@@ -604,3 +633,18 @@ async def qwq():
 
             async with session.begin():
                 await db._update_extra_info(steamid, session)
+
+qwqdsadasd = on_command("db_update_matches", permission=SUPERUSER)
+@qwqdsadasd.handle()
+async def qwqdsadasd_f():
+    async with async_session_factory() as session:
+        stmt = select(MatchStatsPW.mid).distinct()
+        result = await session.execute(stmt)
+        allmids = list(result.scalars().all())
+    async with async_session_factory() as session:
+        logger.info(f"启动时更新比赛数据，共有 {len(allmids)} 个比赛需要更新")
+        for i in range(len(allmids)):
+            logger.info(f"启动时更新比赛数据进度 {i+1}/{len(allmids)} 比赛ID: {allmids[i]}")
+            mid = allmids[i]
+            async with session.begin():
+                await db._update_match_extra(mid, session)

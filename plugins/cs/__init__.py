@@ -150,8 +150,7 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                         val = await config.func(steamid, time_type)
                         print(val)
                         datas.append((steamid, val))
-                    except NoValueError as e:
-                        print(e)
+                    except NoValueError:
                         pass
                 print(datas)
                 datas = sorted(datas, key=lambda x: x[1][0], reverse=config.reversed)
@@ -206,8 +205,9 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
         print(steamid, time_type)
         matches_data = await db_val.get_matches(steamid, time_type)
         baseinfo = await db_val.get_base_info(steamid)
-        if matches_data is not None and baseinfo is not None:
-            image = await gen_matches_image(matches_data, steamid, baseinfo.name)
+        if matches_data is not None and baseinfo is not None:   
+            matches_data_extra = [await db_val.get_match_extra(match.mid) for match in matches_data]
+            image = await gen_matches_image(matches_data, matches_data_extra, steamid, baseinfo.name)
             await matches.finish(MessageSegment.image(image))
         else:
             await matches.finish("未找到比赛")
