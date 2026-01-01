@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import time
 import json
 import math
+import random
 import asyncio
 
 from .config import Config
@@ -436,7 +437,7 @@ class DataManager:
             await asyncio.sleep(0.2)
     
     async def _update_extra_info(self, steamid: str, session: AsyncSession):
-        logger.info(f"Updating extra info for SteamID: {steamid}")
+        logger.info(f"计算额外信息 for SteamID: {steamid}")
         base_info = await session.get(SteamBaseInfo, steamid)
         detail_info = await session.get(SteamDetailInfo, (steamid, SeasonId))
         detail_info_last = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
@@ -578,6 +579,6 @@ async def qwq():
                 async with session.begin():
                     await db._update_stats_card(steamid, session)
                     await db._update_extra_info(steamid, session)
+                await asyncio.sleep(0.5 + random.random())
             except Exception as e:
                 logger.error(f"启动时更新数据失败 {steamid} {e}")
-            await asyncio.sleep(2)
