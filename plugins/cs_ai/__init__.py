@@ -321,7 +321,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
         },
     ]
 
-    messages: list[ChatCompletionMessageParam] = []
+    messages: list[dict[str, Any]] = []
     
     def add_event(role, content, tool_calls=None, tool_call_id=None, reasoning_content=None):
         ts = datetime.now().isoformat()

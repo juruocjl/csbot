@@ -6,8 +6,8 @@ require("utils")
 from ..utils import avatar_dir
 from ..utils import output, path_to_file_url, screenshot_html_to_png
 
-require("cs_db_upd")
-from ..cs_db_upd import MatchStatsPW, SteamBaseInfo, SteamDetailInfo
+require("cs_db_val")
+from ..cs_db_val import MatchStatsPW, SteamBaseInfo, SteamDetailInfo
 
 import os
 from pathlib import Path

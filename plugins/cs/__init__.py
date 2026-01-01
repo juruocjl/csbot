@@ -82,17 +82,17 @@ async def update_function(message: MessageEvent):
     steamid = await db_val.get_steamid(uid)
     if steamid != None:
         print(f"更新{steamid}战绩")
-        result = await db_upd.update_stats(steamid)
-        if result[0]:
-            await update.send(f"{result[1]} 成功更新 {result[2]} 场完美数据, {result[3]} 场官匹数据")
-            baseinfo = await db_val.get_base_info(steamid)
-            detailinfo = await db_val.get_detail_info(steamid)
-            if baseinfo is None or detailinfo is None:
-                await update.finish("数据获取失败，请稍后再试")
-            image = await gen_stats_image(baseinfo, detailinfo)
-            await update.finish(MessageSegment.image(image))
-        else:
-            await update.finish(result[1])
+        try:
+            result = await db_upd.update_stats(steamid)
+        except Exception as e:
+            await update.finish(f"更新失败：{e}")
+        await update.send(f"{result[0]} 成功更新 {result[1]} 场完美数据, {result[2]} 场官匹数据")
+        baseinfo = await db_val.get_base_info(steamid)
+        detailinfo = await db_val.get_detail_info(steamid)
+        if baseinfo is None or detailinfo is None:
+            await update.finish("数据获取失败，请稍后再试")
+        image = await gen_stats_image(baseinfo, detailinfo)
+        await update.finish(MessageSegment.image(image))
     else:
         await update.finish("请先使用 /绑定 steamid64 绑定")
 
@@ -220,9 +220,12 @@ async def updateall_function():
     cntwm = 0
     cntgp = 0
     for steamid in await db_val.get_all_steamid():
-        result = await db_upd.update_stats(steamid)
-        cntwm += result[2]
-        cntgp += result[3]
+        try:
+            result = await db_upd.update_stats(steamid)
+            cntwm += result[1]
+            cntgp += result[2]
+        except Exception as e:
+            logger.error(f"更新{steamid}失败：{e}")
     await updateall.finish(f"更新完成 {cntwm} 场完美数据 {cntgp} 场官匹数据")
 
 @matchteammate.handle()
