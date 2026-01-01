@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Awaitable
 import time
+import json
 from sqlalchemy import select, func, text, or_, case
 from collections import defaultdict
 
@@ -670,6 +671,19 @@ async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
             return (float(row[0]), row[1])
             
     raise NoValueError()
+
+
+@db.register("底蕴", "天梯底蕴", "全部", None, True, MinAdd(-1), "d0")
+async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:
+    assert(time_type == "全部")
+    extra_info = await db.get_extra_info(steamid)
+    base_info = await db.get_base_info(steamid)
+    if extra_info is not None and base_info is not None:
+        ladderHistory = json.loads(base_info.ladderScore)
+        TotCount = sum([d["matchCount"] for d in ladderHistory])
+        return (extra_info.legacyScore, TotCount)
+    raise NoValueError()
+
 
 @db.register("WE", "WE", "本赛季", valid_time, True, MinAdd(-1), "d2")
 async def get_we(steamid: str, time_type: str) -> tuple[float, int]:

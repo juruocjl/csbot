@@ -451,7 +451,7 @@ class DataManager:
             await asyncio.sleep(0.2)
     
     async def _update_extra_info(self, steamid: str, session: AsyncSession):
-        logger.info(f"计算额外信息 for SteamID: {steamid}")
+        logger.info(f"计算 extra_info for SteamID: {steamid}")
         base_info = await session.get(SteamBaseInfo, steamid)
         detail_info = await session.get(SteamDetailInfo, (steamid, SeasonId))
         detail_info_last = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
@@ -484,6 +484,8 @@ class DataManager:
         old_extra_info: SteamExtraInfo | None = await db_val.get_extra_info(steamid)
         if old_extra_info is None or abs(old_extra_info.legacyScore - extra_info.legacyScore) > 1:
             await session.merge(extra_info)
+        else:
+            logger.info(f"extra_info no change, skipped for SteamID: {steamid}")
     
     async def update_stats(self, steamid: str) -> tuple[str, int, int]:
         async with async_session_factory() as session:
