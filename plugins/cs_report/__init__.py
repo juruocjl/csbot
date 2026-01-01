@@ -2,6 +2,7 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.params import CommandArg
+from nonebot.permission import SUPERUSER
 from nonebot import on_command
 from nonebot import get_bot
 from nonebot import logger
@@ -40,7 +41,7 @@ weekreport = on_command("周报", priority=10, block=True)
 
 dayreport = on_command("日报", priority=10, block=True)
 
-
+send_day_report = on_command("发送日报", priority=10, block=True, permission=SUPERUSER)
 
 async def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
     prize_name = "🥇🥈🥉456789"
@@ -100,9 +101,13 @@ async def dayreport_function(message: MessageEvent):
     await dayreport.finish("== 日报 ==\n" + await get_report("今日", steamids))
 
 @scheduler.scheduled_job("cron", hour="23", minute="30", id="dayreport")
+@send_day_report.handle()
 async def send_day_report():
     for steamid in await db_val.get_all_steamid():
-        result = await db_upd.update_stats(steamid)
+        try:
+            await db_upd.update_stats(steamid)
+        except Exception:
+            pass
     bot = get_bot()
     for groupid in config.cs_group_list:
         steamids = await db_val.get_member_steamid(f"group_{groupid}")
