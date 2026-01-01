@@ -38,8 +38,9 @@ config = get_plugin_config(Config)
 SeasonId = config.cs_season_id
 lastSeasonId = config.cs_last_season_id
 
-class DataManager:
 
+class DataManager:
+    
 
     async def bind(self, uid: str, steamid: str):
         """
@@ -170,6 +171,13 @@ class DataManager:
 
             # 执行 Upsert 操作
             await session.merge(match_entry)
+
+            try:
+                await self._update_stats_card(player['playerId'], session)
+                await self._update_extra_info(player['playerId'], session)
+            except:
+                pass
+
         logger.info(f"update_match {mid} success")
         return 1
 
@@ -201,70 +209,76 @@ class DataManager:
         base = data['data']['base']
         players = data['data']['players']
         for player in players:
-                # 显式赋值，左边是数据库列名，右边是数据来源
-                stats_entry = MatchStatsGP(
-                    # --- 主键 ---
-                    mid=mid,
-                    steamid=player['playerId'],
-                    
-                    # --- 基础信息 (来自 base) ---
-                    mapName=base['map'],
-                    team=player['team'],
-                    winTeam=base['winTeam'],
-                    score1=base['score1'],
-                    score2=base['score2'],
-                    timeStamp=timeStamp,
-                    mode=base['mode'],
-                    duration=base['duration'],
-                    
-                    # --- 玩家数据 (来自 player) ---
-                    kill=player['kill'],
-                    handGunKill=player['handGunKill'],
-                    entryKill=player['entryKill'],
-                    awpKill=player['awpKill'],
-                    death=player['death'],
-                    entryDeath=player['entryDeath'],
-                    assist=player['assist'],
-                    headShot=player['headShot'],
-                    rating=player['rating'],
-                    
-                    # --- 投掷物 ---
-                    itemThrow=player['itemThrow'],
-                    flash=player['flash'],
-                    flashTeammate=player['flashTeammate'],
-                    flashSuccess=player['flashSuccess'],
-                    
-                    # --- 多杀 ---
-                    twoKill=player['twoKill'],
-                    threeKill=player['threeKill'],
-                    fourKill=player['fourKill'],
-                    fiveKill=player['fiveKill'],
-                    
-                    # --- 残局 ---
-                    vs1=player['vs1'],
-                    vs2=player['vs2'],
-                    vs3=player['vs3'],
-                    vs4=player['vs4'],
-                    vs5=player['vs5'],
-                    
-                    # --- 进阶数据 ---
-                    adpr=player['adpr'],
-                    rws=player['rws'],
-                    kast=player['kast'],
-                    
-                    # --- 其他 ---
-                    rank=player['rank'],
-                    throwsCnt=player['throwsCnt'],
-                    bombPlanted=player['bombPlanted'],
-                    bombDefused=player['bombDefused'],
-                    smokeThrows=player['smokeThrows'],
-                    grenadeDamage=player['grenadeDamage'],
-                    infernoDamage=player['infernoDamage'],
-                    mvp=int(player['mvp']) # 类型转换
-                )
+            # 显式赋值，左边是数据库列名，右边是数据来源
+            stats_entry = MatchStatsGP(
+                # --- 主键 ---
+                mid=mid,
+                steamid=player['playerId'],
                 
-                # 执行 Upsert (存在则更新，不存在则插入)
-                await session.merge(stats_entry)
+                # --- 基础信息 (来自 base) ---
+                mapName=base['map'],
+                team=player['team'],
+                winTeam=base['winTeam'],
+                score1=base['score1'],
+                score2=base['score2'],
+                timeStamp=timeStamp,
+                mode=base['mode'],
+                duration=base['duration'],
+                
+                # --- 玩家数据 (来自 player) ---
+                kill=player['kill'],
+                handGunKill=player['handGunKill'],
+                entryKill=player['entryKill'],
+                awpKill=player['awpKill'],
+                death=player['death'],
+                entryDeath=player['entryDeath'],
+                assist=player['assist'],
+                headShot=player['headShot'],
+                rating=player['rating'],
+                
+                # --- 投掷物 ---
+                itemThrow=player['itemThrow'],
+                flash=player['flash'],
+                flashTeammate=player['flashTeammate'],
+                flashSuccess=player['flashSuccess'],
+                
+                # --- 多杀 ---
+                twoKill=player['twoKill'],
+                threeKill=player['threeKill'],
+                fourKill=player['fourKill'],
+                fiveKill=player['fiveKill'],
+                
+                # --- 残局 ---
+                vs1=player['vs1'],
+                vs2=player['vs2'],
+                vs3=player['vs3'],
+                vs4=player['vs4'],
+                vs5=player['vs5'],
+                
+                # --- 进阶数据 ---
+                adpr=player['adpr'],
+                rws=player['rws'],
+                kast=player['kast'],
+                
+                # --- 其他 ---
+                rank=player['rank'],
+                throwsCnt=player['throwsCnt'],
+                bombPlanted=player['bombPlanted'],
+                bombDefused=player['bombDefused'],
+                smokeThrows=player['smokeThrows'],
+                grenadeDamage=player['grenadeDamage'],
+                infernoDamage=player['infernoDamage'],
+                mvp=int(player['mvp']) # 类型转换
+            )
+            
+            # 执行 Upsert (存在则更新，不存在则插入)
+            await session.merge(stats_entry)
+
+            try:
+                await self._update_stats_card(player['playerId'], session)
+                await self._update_extra_info(player['playerId'], session)
+            except:
+                pass
 
         logger.info(f"update_matchgp {mid} success")
         return 1
@@ -565,8 +579,9 @@ class DataManager:
   
 db = DataManager()
 
-qwq = on_command("db_update_all", permission=SUPERUSER)
-@qwq.handle()
+qwqasdsa = on_command("db_update_all", permission=SUPERUSER)
+
+@qwqasdsa.handle()
 async def qwq():
     async with async_session_factory() as session:
         stmt = select(MatchStatsPW.steamid).distinct()
@@ -579,7 +594,7 @@ async def qwq():
             steamid = allids[i]
             try:
                 async with session.begin():
-                    await db._update_stats_card(steamid, session, interval=1e10)
+                    await db._update_stats_card(steamid, session, interval=100000000000)
                     await db._update_extra_info(steamid, session)
                 await asyncio.sleep(0.5 + random.random())
             except Exception as e:
