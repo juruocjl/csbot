@@ -198,7 +198,8 @@ class SteamBaseInfo(Base):
     
     # 更新信息
     updateTime: Mapped[int] = mapped_column(Integer)
-
+    # 比赛更新信息
+    updateMatchTime: Mapped[int] = mapped_column(Integer)
     # 基础信息
     avatarlink: Mapped[str] = mapped_column(String)
     name: Mapped[str] = mapped_column(String)

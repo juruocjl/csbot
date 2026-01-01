@@ -442,6 +442,7 @@ class DataManager:
                 steamid=steamid,
                 name="",
                 updateTime=int(time.time()),
+                updateMatchTime=0,
                 avatarlink="",
                 lasttime=0,
                 ladderScore="[]"
@@ -516,14 +517,24 @@ class DataManager:
         else:
             logger.info(f"extra_info no change, skipped for SteamID: {steamid}")
     
-    async def update_stats(self, steamid: str) -> tuple[str, int, int]:
-        async with async_session_factory() as session:
-            async with session.begin():
-                await self._update_stats_card(steamid, session)
-            async with session.begin():
-                await self._update_extra_info(steamid, session)
+    async def update_stats(self, steamid: str, interval: int=600) -> tuple[str, int, int]:
+        try:
+            async with async_session_factory() as session:
+                async with session.begin():
+                    await self._update_stats_card(steamid, session)
+                async with session.begin():
+                    await self._update_extra_info(steamid, session)
+        except RuntimeError as e:
+            logger.warning(f"更新数据失败 {steamid} {e}")
         base_info = await db_val.get_base_info(steamid)
         assert base_info is not None
+        if base_info.updateMatchTime + interval > time.time():
+            raise RuntimeError(f"比赛数据更新过于频繁，请 {base_info.updateMatchTime + interval - time.time():.0f}s 后再试。")
+        async with async_session_factory() as session:
+            async with session.begin():
+                base_info.updateMatchTime = int(time.time())
+                await session.merge(base_info)
+
         LastTime = base_info.lasttime
         newLastTime = LastTime
         addMatches = 0
