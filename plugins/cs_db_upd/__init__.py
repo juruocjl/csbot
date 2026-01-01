@@ -592,10 +592,13 @@ async def qwq():
         for i in range(len(allids)):
             logger.info(f"启动时更新数据进度 {i+1}/{len(allids)} SteamID: {allids[i]}")
             steamid = allids[i]
+            
             try:
                 async with session.begin():
                     await db._update_stats_card(steamid, session, interval=100000000000)
-                    await db._update_extra_info(steamid, session)
                 await asyncio.sleep(0.5 + random.random())
             except Exception as e:
                 logger.error(f"启动时更新数据失败 {steamid} {e}")
+
+            async with session.begin():
+                await db._update_extra_info(steamid, session)
