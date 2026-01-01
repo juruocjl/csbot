@@ -1,5 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
+from nonebot import on_command
+from nonebot.permission import SUPERUSER
 from nonebot import require
 from nonebot import logger
 from nonebot import get_driver
@@ -562,9 +564,9 @@ class DataManager:
   
 db = DataManager()
 
-driver = get_driver()
-@driver.on_startup
-async def on_startup():
+qwq = on_command("db_update_all", permission=SUPERUSER)
+@qwq.handle()
+async def qwq():
     async with async_session_factory() as session:
         stmt = select(MatchStatsPW.steamid).distinct()
         result = await session.execute(stmt)
