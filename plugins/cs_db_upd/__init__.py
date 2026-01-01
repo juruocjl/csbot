@@ -10,13 +10,14 @@ from ..utils import async_session_factory
 from ..utils import get_session
 
 require("cs_db_val")
-from ..cs_db_val import MemberSteamID, SteamBaseInfo, SteamDetailInfo, MatchStatsPW, MatchStatsGP, GroupMember
+from ..cs_db_val import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsGP, GroupMember
 from ..cs_db_val import db as db_val
 
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 import time
 import json
+import math
 import asyncio
 
 from .config import Config
@@ -372,6 +373,7 @@ class DataManager:
         await session.merge(detail_info)
 
     async def _update_stats_card(self, steamid: str, session: AsyncSession):
+        logger.info(f"获取具体信息 for SteamID: {steamid}")
         url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats/v2"
         payload = {
             "mySteamId": config.cs_mysteam_id,
@@ -385,6 +387,7 @@ class DataManager:
         result_info: SteamBaseInfo | None = await session.get(SteamBaseInfo, steamid)
         if result_info is not None:
             if time.time() - result_info.updateTime <= 600:
+                logger.warning(f"数据更新过于频繁 for SteamID: {steamid}")
                 raise RuntimeError(f"数据更新过于频繁，请 {600 - (time.time() - result_info.updateTime):.0f}s 后再试。")
             result_info.updateTime = int(time.time())
             await session.merge(result_info)
@@ -430,10 +433,47 @@ class DataManager:
             await self._insert_detail_info(data["data"], session)
             await asyncio.sleep(0.2)
     
+    async def _update_extra_info(self, steamid: str, session: AsyncSession):
+        logger.info(f"Updating extra info for SteamID: {steamid}")
+        base_info = await session.get(SteamBaseInfo, steamid)
+        detail_info = await session.get(SteamDetailInfo, (steamid, SeasonId))
+        detail_info_last = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
+        if base_info is None or detail_info is None or detail_info_last is None:
+            return
+        ladderHistory = json.loads(base_info.ladderScore)
+        MaxScore = max([d["score"] for d in ladderHistory])
+        TotCount = sum([d["matchCount"] for d in ladderHistory])
+        if detail_info.cnt + detail_info_last.cnt == 0:
+            AvgRating = 0.6
+            AvgWe = 4.0
+        else:
+            AvgRating = (
+                detail_info.pwRating * detail_info.cnt 
+                + detail_info_last.pwRating * detail_info_last.cnt
+            ) / (detail_info.cnt + detail_info_last.cnt)
+            AvgWe = (
+                detail_info.we * detail_info.cnt
+                + detail_info_last.we * detail_info_last.cnt
+            ) / (detail_info.cnt + detail_info_last.cnt)
+
+        legacyScore = MaxScore * math.log(TotCount + 1) * (AvgRating / 0.3 + AvgWe / 3)
+
+        extra_info = SteamExtraInfo(
+            steamid=steamid,
+            timeStamp=int(time.time()),
+            legacyScore=legacyScore
+        )
+
+        old_extra_info: SteamExtraInfo | None = await db_val.get_extra_info(steamid)
+        if old_extra_info is None or abs(old_extra_info.legacyScore - extra_info.legacyScore) > 1:
+            await session.merge(extra_info)
+    
     async def update_stats(self, steamid: str) -> tuple[str, int, int]:
         async with async_session_factory() as session:
             async with session.begin():
                 await self._update_stats_card(steamid, session)
+            async with session.begin():
+                await self._update_extra_info(steamid, session)
         base_info = await db_val.get_base_info(steamid)
         assert base_info is not None
         LastTime = base_info.lasttime
@@ -504,6 +544,7 @@ class DataManager:
                 await _work(session)
                 base_info.lasttime = newLastTime
                 await session.merge(base_info)
+
             async with session.begin():
                 await _work_gp(session)
     
@@ -520,3 +561,21 @@ class DataManager:
                     await session.merge(new_member)
   
 db = DataManager()
+
+driver = get_driver()
+@driver.on_startup
+async def on_startup():
+    async with async_session_factory() as session:
+        stmt = select(MatchStatsPW.steamid).distinct()
+        result = await session.execute(stmt)
+        allids = list(result.scalars().all())
+    async with async_session_factory() as session:
+        logger.info(f"启动时更新数据，共有 {len(allids)} 个SteamID需要更新")
+        for steamid in allids:
+            try:
+                async with session.begin():
+                    await db._update_stats_card(steamid, session)
+                    await db._update_extra_info(steamid, session)
+            except Exception as e:
+                logger.error(f"启动时更新数据失败 {steamid} {e}")
+            await asyncio.sleep(2)

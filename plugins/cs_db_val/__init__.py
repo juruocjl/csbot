@@ -193,6 +193,7 @@ class SteamBaseInfo(Base):
     avatarlink: Mapped[str] = mapped_column(String)
     name: Mapped[str] = mapped_column(String)
     ladderScore: Mapped[str] = mapped_column(Text)
+    # 格式 [{"season": "S?", "currSStars": 0, "score": 0, "currSLevel": 0, "matchCount": 0, "startTime": "2020-07-06 00:00:00"}]
     lasttime: Mapped[int] = mapped_column(Integer)
 
 class SteamDetailInfo(Base):
@@ -396,6 +397,29 @@ class DataManager:
         async with async_session_factory() as session:
             return await session.get(SteamDetailInfo, (steamid, seasonid))
 
+    async def get_extra_info(self, steamid, timeStamp = 1e11) -> SteamExtraInfo | None:
+        async with async_session_factory() as session:
+            stmt = (
+                select(SteamExtraInfo)
+                .where(SteamExtraInfo.steamid == steamid)
+                .where(SteamExtraInfo.timeStamp >= timeStamp)
+                .order_by(SteamExtraInfo.timeStamp.asc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            record = result.scalars().one_or_none()
+            if record is not None:
+                return record
+            stmt = (
+                select(SteamExtraInfo)
+                .where(SteamExtraInfo.steamid == steamid)
+                .where(SteamExtraInfo.timeStamp < timeStamp)
+                .order_by(SteamExtraInfo.timeStamp.desc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            return result.scalars().one_or_none()
+
     async def search_user(self, name, id = 1) -> SteamBaseInfo | None:
         async with async_session_factory() as session:
             stmt = select(SteamBaseInfo).where(SteamBaseInfo.name.like(f"%{name}%")).limit(id)
@@ -442,7 +466,6 @@ class DataManager:
         if query_type not in self._registry:
             raise ValueError(f"无效的查询类型，支持的有 {list(self._registry.keys())}")
         return self._registry[query_type]
-
 
     async def get_matches(self, steamid: str, time_type: str, 
                           only_ladder: bool = False, only_custom: bool = False,
