@@ -1,7 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot import get_app
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message, MessageEvent
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot import require
@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 require("utils")
 from ..utils import Base, async_session_factory
 require("cs_db_val")
-from ..cs_db_val import db as cs_db
+from ..cs_db_val import MatchStatsPW
+from ..cs_db_val import db as db_val
 
 from .config import Config
 
@@ -40,8 +41,9 @@ class AuthSession(Base):
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     # 短验证码，用于群内验证 (添加索引以加快查找)
     code: Mapped[str] = mapped_column(String(10), index=True)
-    # 绑定的 QQ 号 (验证前为空)
+    # 绑定的 QQ 号和群号 (验证后填写)
     user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    group_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # 创建时间 (用于计算过期)
     created_at: Mapped[int] = mapped_column(Integer)
     # 上一次使用时间
@@ -65,7 +67,7 @@ class DataMannager:
             await session.commit()
             return auth_session
     
-    async def verify_code(self, code: str, user_id: str) -> bool:
+    async def verify_code(self, code: str, user_id: str, group_id: str) -> bool:
         async with async_session_factory() as session:
             async with session.begin():
                 stmt = (
@@ -77,13 +79,14 @@ class DataMannager:
                 auth_session = result.scalar_one_or_none()
                 if auth_session and not auth_session.is_verified:
                     auth_session.user_id = user_id
+                    auth_session.group_id = group_id
                     auth_session.is_verified = True
                     auth_session.last_used_at = int(time.time())
                     await session.merge(auth_session)
                     return True
                 return False
     
-    async def get_verified_user(self, token: str) -> str | None:
+    async def get_verified_user(self, token: str) -> AuthSession | None:
         async with async_session_factory() as session:
             async with session.begin():
                 stmt = (
@@ -96,7 +99,7 @@ class DataMannager:
                 if auth_session:
                     auth_session.last_used_at = int(time.time())
                     await session.merge(auth_session)
-                    return auth_session.user_id
+                    return auth_session
                 return None
 
 db = DataMannager()
@@ -104,12 +107,13 @@ db = DataMannager()
 verify = on_command("验证", aliases={"verify"}, priority=10)
 
 @verify.handle()
-async def handle_verify(event: MessageEvent, args: Message = CommandArg()):
+async def handle_verify(event: GroupMessageEvent, args: Message = CommandArg()):
     code = args.extract_plain_text().strip()
     if not code:
         await verify.finish("请提供验证码，例如：verify 123456")
     user_id = str(event.get_user_id())
-    success = await db.verify_code(code, user_id)
+    group_id = str(event.get_group_id())
+    success = await db.verify_code(code, user_id, group_id)
     if success:
         await verify.finish("验证成功！")
     else:
@@ -127,10 +131,10 @@ app.add_middleware(
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-    user_id = await db.get_verified_user(token)
-    if not user_id:
+    auth_session = await db.get_verified_user(token)
+    if not auth_session:
         raise HTTPException(status_code=401, detail="Invalid token")
-    return user_id
+    return auth_session
 
 class InitTokenResponse(BaseModel):
     token: str = Field(..., description="用于 API 认证的 Token")
@@ -158,6 +162,7 @@ async def init_token():
 class BaseInfoResponse(BaseModel):
     verify: bool = Field(..., description="Token 是否有效")
     user_id: str = Field(..., description="绑定的用户 ID")
+    group_id: str = Field(..., description="绑定的群 ID")
 
 @app.post(
     "/api/auth/info",
@@ -165,15 +170,11 @@ class BaseInfoResponse(BaseModel):
     summary="获取认证信息",
     description="验证 Token 并获取绑定的用户 ID。"
 )
-async def verify_token(user_id = Depends(get_current_user)):
-    """
-    验证token接口
-    参数: token (HTTP Bearer 认证)
-    返回: {"verified": true, "user_id": "..."}
-    """
+async def verify_token(info = Depends(get_current_user)):
     return BaseInfoResponse(
         verify=True,
-        user_id=user_id
+        user_id=info.user_id,
+        group_id=info.group_id
     )
 
 class MatchPWPlayerInfo(BaseModel):
@@ -185,15 +186,21 @@ class MatchPWPlayerInfo(BaseModel):
     kills: int = Field(..., description="击杀数")
     deaths: int = Field(..., description="死亡数")
     assists: int = Field(..., description="助攻数")
+    legasyscore: float = Field(..., description="玩家的底蕴分数")
+    pvpscore: float = Field(..., description="玩家的天梯分数")
+    pvpstar: int = Field(..., description="玩家的天梯星级")
 
 class MatchPWInfo(BaseModel):
     match_id: str = Field(..., description="比赛 ID")
     timestamp: int = Field(..., description="比赛时间戳")
+    season: str = Field(..., description="赛季（Sxx）")
     winteam: int = Field(..., description="获胜队伍 (1 或 2)")
     mode: str = Field(..., description="比赛模式")
     mapname: str = Field(..., description="比赛地图")
     score1: int = Field(..., description="队伍 1 分数")
     score2: int = Field(..., description="队伍 2 分数")
+    legasyscore1: float = Field(..., description="队伍 1 底蕴均分")
+    legasyscore2: float = Field(..., description="队伍 2 底蕴均分")
     players: list[MatchPWPlayerInfo] = Field(..., description="参赛玩家信息列表")
 
 @app.post("/api/data/match_info",
@@ -201,32 +208,43 @@ class MatchPWInfo(BaseModel):
     summary="获取比赛详细信息",
     description="根据比赛 ID 获取比赛的详细信息，包括参赛玩家的数据。需要提供有效的认证 Token。"
 )
-async def get_match_info(match_id: str = Body(..., embed=True), user_id = Depends(get_current_user)):
-    db_result = await cs_db.get_match_detail(match_id)
-    if not db_result:
+async def get_match_info(match_id: str = Body(..., embed=True), _ = Depends(get_current_user)):
+    match_detail = await db_val.get_match_detail(match_id)
+    if not match_detail:
         raise HTTPException(status_code=404, detail="Match not found")
-    async def get_nickname(steamid: str) -> str:
-        base_info = await cs_db.get_base_info(steamid)
+    match_extra = await db_val.get_match_extra(match_id)
+    assert match_extra is not None
+    async def get_nickname(player: MatchStatsPW) -> str:
+        base_info = await db_val.get_base_info(player.steamid)
         return base_info.name if base_info else "未知玩家"
+    async def get_legacy_score(player: MatchStatsPW) -> float:
+        extra_info = await db_val.get_extra_info(player.steamid, timeStamp=player.timeStamp)
+        return extra_info.legacyScore if extra_info else float('nan')
     return MatchPWInfo(
         match_id=match_id,
-        timestamp=db_result[0].timeStamp,
-        winteam=db_result[0].winTeam,
-        mode=db_result[0].mode,
-        mapname=db_result[0].mapName,
-        score1=db_result[0].score1,
-        score2=db_result[0].score2,
+        timestamp=match_detail[0].timeStamp,
+        season=match_detail[0].seasonId,
+        winteam=match_detail[0].winTeam,
+        mode=match_detail[0].mode,
+        mapname=match_detail[0].mapName,
+        score1=match_detail[0].score1,
+        score2=match_detail[0].score2,
+        legasyscore1=match_extra.team1Legacy,
+        legasyscore2=match_extra.team2Legacy,
         players=[
             MatchPWPlayerInfo(
                 steamId=player.steamid,
-                nickname=await get_nickname(player.steamid),
+                nickname=await get_nickname(player),
                 team=player.team,
                 rating=player.pwRating,
                 we=player.we,
                 kills=player.kill,
                 deaths=player.death,
-                assists=player.assist
-            ) for player in db_result
+                assists=player.assist,
+                legasyscore=await get_legacy_score(player),
+                pvpscore=player.pvpScore,
+                pvpstar=player.pvpStars
+            ) for player in match_detail
         ]
     )
     
