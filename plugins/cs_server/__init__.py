@@ -1,7 +1,7 @@
 from nonebot import get_plugin_config
-from nonebot import get_app
+from nonebot import get_app, get_bot
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, Bot
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot import require
@@ -161,21 +161,30 @@ async def init_token():
     )
 
 class BaseInfoResponse(BaseModel):
-    verify: bool = Field(..., description="Token 是否有效")
-    user_id: str = Field(..., description="绑定的用户 ID")
-    group_id: str = Field(..., description="绑定的群 ID")
+    isVerified: bool = Field(..., description="Token 是否有效")
+    userId: str = Field(..., description="绑定的用户 ID")
+    groupId: str = Field(..., description="绑定的群 ID")
+    steamId: str | None = Field(..., description="绑定的 Steam ID")
+    showName: str = Field(..., description="显示名称")
 
-@app.post(
-    "/api/auth/info",
+@app.post("/api/auth/info",
     response_model=BaseInfoResponse,
     summary="获取认证信息",
     description="验证 Token 并获取绑定的用户 ID。"
 )
-async def verify_token(info = Depends(get_current_user)):
+async def verify_token(info: AuthSession = Depends(get_current_user)):
+    bot = get_bot()
+    assert isinstance(bot, Bot)
+    assert info.user_id is not None
+    assert info.group_id is not None
+    username = (await bot.get_stranger_info(user_id=int(info.user_id), no_cache=False))["nickname"]
+    groupname = (await bot.get_group_info(group_id=int(info.group_id), no_cache=False))["group_name"]
     return BaseInfoResponse(
-        verify=True,
-        user_id=info.user_id,
-        group_id=info.group_id
+        isVerified=True,
+        userId=info.user_id,
+        groupId=info.group_id,
+        steamId=await db_val.get_steamid(info.user_id),
+        showName=f"{username} ({groupname})"
     )
 
 class MatchPWPlayerInfo(BaseModel):
@@ -187,33 +196,54 @@ class MatchPWPlayerInfo(BaseModel):
     kills: int = Field(..., description="击杀数")
     deaths: int = Field(..., description="死亡数")
     assists: int = Field(..., description="助攻数")
-    legasyscore: float = Field(..., description="玩家的底蕴分数")
-    pvpscore: float = Field(..., description="玩家的天梯分数")
-    pvpstar: int = Field(..., description="玩家的天梯星级")
+    legacyScore: float = Field(..., description="玩家的底蕴分数")
+    pvpScore: float = Field(..., description="玩家的天梯分数")
+    pvpStar: int = Field(..., description="玩家的天梯星级")
 
 class MatchPWInfo(BaseModel):
-    match_id: str = Field(..., description="比赛 ID")
+    matchId: str = Field(..., description="比赛 ID")
     timestamp: int = Field(..., description="比赛时间戳")
     season: str = Field(..., description="赛季（Sxx）")
-    winteam: int = Field(..., description="获胜队伍 (1 或 2)")
+    winTeam: int = Field(..., description="获胜队伍 (1 或 2)")
     mode: str = Field(..., description="比赛模式")
-    mapname: str = Field(..., description="比赛地图")
-    score1: int = Field(..., description="队伍 1 分数")
-    score2: int = Field(..., description="队伍 2 分数")
-    legasyscore1: float = Field(..., description="队伍 1 底蕴均分")
-    legasyscore2: float = Field(..., description="队伍 2 底蕴均分")
+    mapName: str = Field(..., description="比赛地图")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    team1LegacyScore: float = Field(..., description="队伍 1 底蕴均分")
+    team2LegacyScore: float = Field(..., description="队伍 2 底蕴均分")
     players: list[MatchPWPlayerInfo] = Field(..., description="参赛玩家信息列表")
 
-@app.post("/api/data/match_info",
+class MatchHistoryItem(BaseModel):
+    matchId: str = Field(..., description="比赛 ID")
+    timeStamp: int = Field(..., description="比赛时间戳")
+    season: str = Field(..., description="赛季")
+    mode: str = Field(..., description="比赛模式")
+    mapName: str = Field(..., description="比赛地图")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    team: int = Field(..., description="玩家所在队伍")
+    winTeam: int = Field(..., description="获胜队伍")
+    rating: float = Field(..., description="玩家评分")
+    we: float = Field(..., description="玩家 WE 值")
+    pvpScore: float = Field(..., description="天梯分数")
+    pvpScoreChange: float = Field(..., description="天梯分数变化")
+    legacyDiff: float = Field(..., description="底蕴分数变化")
+
+class MatchHistoryResponse(BaseModel):
+    totCount: int = Field(..., description="总比赛数")
+    pageSize: int = Field(..., description="每页大小")
+    matches: list[MatchHistoryItem] = Field(..., description="比赛列表")
+
+@app.post("/api/match/info",
     response_model=MatchPWInfo,
     summary="获取比赛详细信息",
     description="根据比赛 ID 获取比赛的详细信息，包括参赛玩家的数据。需要提供有效的认证 Token。"
 )
-async def get_match_info(match_id: str = Body(..., embed=True), _ = Depends(get_current_user)):
-    match_detail = await db_val.get_match_detail(match_id)
+async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_current_user)):
+    match_detail = await db_val.get_match_detail(matchId)
     if not match_detail:
         raise HTTPException(status_code=404, detail="Match not found")
-    match_extra = await db_val.get_match_extra(match_id)
+    match_extra = await db_val.get_match_extra(matchId)
     assert match_extra is not None
     async def get_nickname(player: MatchStatsPW) -> str:
         base_info = await db_val.get_base_info(player.steamid)
@@ -222,16 +252,16 @@ async def get_match_info(match_id: str = Body(..., embed=True), _ = Depends(get_
         extra_info = await db_val.get_extra_info(player.steamid, timeStamp=player.timeStamp)
         return extra_info.legacyScore if extra_info else float('nan')
     return MatchPWInfo(
-        match_id=match_id,
+        matchId=matchId,
         timestamp=match_detail[0].timeStamp,
         season=match_detail[0].seasonId,
-        winteam=match_detail[0].winTeam,
+        winTeam=match_detail[0].winTeam,
         mode=match_detail[0].mode,
-        mapname=match_detail[0].mapName,
-        score1=match_detail[0].score1,
-        score2=match_detail[0].score2,
-        legasyscore1=match_extra.team1Legacy,
-        legasyscore2=match_extra.team2Legacy,
+        mapName=match_detail[0].mapName,
+        team1Score=match_detail[0].score1,
+        team2Score=match_detail[0].score2,
+        team1LegacyScore=match_extra.team1Legacy,
+        team2LegacyScore=match_extra.team2Legacy,
         players=[
             MatchPWPlayerInfo(
                 steamId=player.steamid,
@@ -242,10 +272,78 @@ async def get_match_info(match_id: str = Body(..., embed=True), _ = Depends(get_
                 kills=player.kill,
                 deaths=player.death,
                 assists=player.assist,
-                legasyscore=await get_legacy_score(player),
-                pvpscore=player.pvpScore,
-                pvpstar=player.pvpStars
+                legacyScore=await get_legacy_score(player),
+                pvpScore=player.pvpScore,
+                pvpStar=player.pvpStars
             ) for player in match_detail
         ]
     )
+
+@app.post("/api/match/history",
+    response_model=MatchHistoryResponse,
+    summary="获取比赛历史",
+    description="根据玩家 Steam ID 获取其比赛历史记录。需要提供有效的认证 Token。"
+)
+async def get_match_history(
+    steamId: str = Body(..., embed=True),
+    timeType: str = Body(..., embed=True),
+    page: int = Body(..., embed=True, ge=1),
+    _ = Depends(get_current_user)):
+    # 获取玩家的比赛历史
+    match_records = await db_val.get_matches(steamId, timeType, offset=(page - 1) * 20, limit=20)
+    total_count = await db_val.get_matches_count(steamId, timeType)
+    async def get_legacy_diff(player: MatchStatsPW) -> float:
+        extra_info = await db_val.get_match_extra(player.mid)
+        if not extra_info:
+            return float("nan")
+        if player.team == 1:
+            return extra_info.team1Legacy - extra_info.team2Legacy
+        else:
+            return extra_info.team2Legacy - extra_info.team1Legacy
+    if not total_count:
+        raise HTTPException(status_code=404, detail="No match history found")
     
+    return MatchHistoryResponse(
+        totCount=total_count,
+        pageSize=20,
+        matches=[
+            MatchHistoryItem(
+                matchId=record.mid,
+                timeStamp=record.timeStamp,
+                season=record.seasonId,
+                mode=record.mode,
+                mapName=record.mapName,
+                team=record.team,
+                winTeam=record.winTeam,
+                team1Score=record.score1,
+                team2Score=record.score2,
+                rating=record.pwRating,
+                we=record.we,
+                pvpScore=record.pvpScore,
+                pvpScoreChange=record.pvpScoreChange,
+                legacyDiff=await get_legacy_diff(record)
+            ) for record in match_records
+        ] if match_records else []
+    )
+
+class PlayerBaseRequest(BaseModel):
+    steamId: str = Field(..., description="玩家的 Steam ID")
+
+class PlayerBaseResponse(BaseModel):
+    nickname: str = Field(..., description="玩家昵称")
+    lastUpdate: int = Field(..., description="最后更新时间戳")
+
+@app.post("/api/player/base",
+    response_model=PlayerBaseResponse,
+    summary="获取玩家基本信息",
+    description="根据 Steam ID 获取玩家的基本信息，包括昵称和最后更新时间。"
+)
+async def get_player_base(steamId: str = Body(..., embed=True), _ = Depends(get_current_user)):
+    base_info = await db_val.get_base_info(steamId)
+    if not base_info:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    return PlayerBaseResponse(
+        nickname=base_info.name,
+        lastUpdate=base_info.updateMatchTime
+    )

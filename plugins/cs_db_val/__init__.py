@@ -479,8 +479,11 @@ class DataManager:
         return self._registry[query_type]
 
     async def get_matches(self, steamid: str, time_type: str, 
-                          only_ladder: bool = False, only_custom: bool = False,
-                          limit = 20) -> list[MatchStatsPW] | None:
+                          only_ladder: bool = False,
+                          only_custom: bool = False,
+                          limit: int = 20,
+                          offset: int = 0
+                        ) -> list[MatchStatsPW] | None:
 
         async with async_session_factory() as session:
             assert not (only_ladder and only_custom), "only_ladder 和 only_custom 不能同时为 True"
@@ -488,24 +491,23 @@ class DataManager:
                 stmt = (
                     select(MatchStatsPW)
                     .where(*get_ladder_filter(steamid, time_type))
-                    .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
-                    .limit(limit)
                 )
             elif only_custom:
                 stmt = (
                     select(MatchStatsPW)
                     .where(*get_custom_filter(steamid, time_type))
-                    .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
-                    .limit(limit)
                 )
             else:
                 stmt = (
                     select(MatchStatsPW)
                     .where(MatchStatsPW.steamid == steamid)
                     .where(text(get_time_sql(time_type)))
-                    .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
-                    .limit(limit)
                 )
+            stmt = (
+                stmt
+                .order_by(MatchStatsPW.timeStamp.desc()) # 倒序排列
+                .limit(limit).offset(offset)
+            )
 
             result = await session.execute(stmt)
             matches = result.scalars().all()
@@ -514,6 +516,33 @@ class DataManager:
 
             return match_list if match_list else None
     
+    async def get_matches_count(self, steamid: str, time_type: str, 
+                          only_ladder: bool = False,
+                          only_custom: bool = False
+                        ) -> int:
+        async with async_session_factory() as session:
+            assert not (only_ladder and only_custom), "only_ladder 和 only_custom 不能同时为 True"
+            if only_ladder:
+                stmt = (
+                    select(func.count(MatchStatsPW.mid))
+                    .where(*get_ladder_filter(steamid, time_type))
+                )
+            elif only_custom:
+                stmt = (
+                    select(func.count(MatchStatsPW.mid))
+                    .where(*get_custom_filter(steamid, time_type))
+                )
+            else:
+                stmt = (
+                    select(func.count(MatchStatsPW.mid))
+                    .where(MatchStatsPW.steamid == steamid)
+                    .where(text(get_time_sql(time_type)))
+                )
+
+            result = await session.execute(stmt)
+
+            return result.scalar_one()
+
     async def get_match_detail(self, mid: str) -> list[MatchStatsPW] | None:
         async with async_session_factory() as session:
             stmt = select(MatchStatsPW).where(MatchStatsPW.mid == mid)
