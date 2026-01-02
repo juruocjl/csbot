@@ -60,6 +60,7 @@ class DataMannager:
                 token=token,
                 code=code,
                 user_id=None,
+                group_id=None,
                 created_at=int(time.time()),
                 is_verified=False,
             )
@@ -111,8 +112,8 @@ async def handle_verify(event: GroupMessageEvent, args: Message = CommandArg()):
     code = args.extract_plain_text().strip()
     if not code:
         await verify.finish("请提供验证码，例如：verify 123456")
-    user_id = str(event.get_user_id())
-    group_id = str(event.get_group_id())
+    user_id = event.get_user_id()
+    group_id = str(event.group_id)
     success = await db.verify_code(code, user_id, group_id)
     if success:
         await verify.finish("验证成功！")
