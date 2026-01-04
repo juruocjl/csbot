@@ -472,6 +472,25 @@ class DataManager:
             if steamid := await self.get_steamid(uid):
                 steamids.add(steamid)
         return list(steamids)
+    
+    async def get_group_member(self, gid: str) -> list[str]:
+        """
+        获取群成员列表
+        """
+        async with async_session_factory() as session:
+            stmt = select(GroupMember.uid).where(GroupMember.gid == gid)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+        
+        return []
+    
+    async def get_group_member_steamid(self, gid: str) -> list[str]:
+        uids = await self.get_group_member(gid)
+        steamids = set()
+        for uid in uids:
+            if steamid := await self.get_steamid(uid):
+                steamids.add(steamid)
+        return list(steamids)
 
     def get_value_config(self, query_type: str) -> RankConfig:
         if query_type not in self._registry:

@@ -20,6 +20,7 @@ from ..utils import Base, async_session_factory
 require("cs_db_val")
 from ..cs_db_val import MatchStatsPW
 from ..cs_db_val import db as db_val
+from ..cs_db_val import valid_time, NoValueError
 
 from .config import Config
 
@@ -160,31 +161,48 @@ async def init_token():
         expires_in=config.auth_code_valid_seconds
     )
 
-class BaseInfoResponse(BaseModel):
+class VerifyTokenResponse(BaseModel):
     isVerified: bool = Field(..., description="Token 是否有效")
-    userId: str = Field(..., description="绑定的用户 ID")
-    groupId: str = Field(..., description="绑定的群 ID")
-    steamId: str | None = Field(..., description="绑定的 Steam ID")
+
+@app.post("/api/auth/verify",
+    response_model=VerifyTokenResponse,
+    summary="验证认证 Token",
+    description="验证提供的 Token 是否有效。"
+)
+async def verify_token(_ = Depends(get_current_user)):
+    return VerifyTokenResponse(isVerified=True)
+
+class InfoNameResponse(BaseModel):
     showName: str = Field(..., description="显示名称")
 
-@app.post("/api/auth/info",
-    response_model=BaseInfoResponse,
+@app.post("/api/auth/info/name",
+    response_model=InfoNameResponse,
     summary="获取认证信息",
-    description="验证 Token 并获取绑定的用户 ID。"
+    description="获取绑定的用户 ID。"
 )
-async def verify_token(info: AuthSession = Depends(get_current_user)):
+async def get_token_info(info: AuthSession = Depends(get_current_user)):
     bot = get_bot()
     assert isinstance(bot, Bot)
     assert info.user_id is not None
     assert info.group_id is not None
     username = (await bot.get_stranger_info(user_id=int(info.user_id), no_cache=False))["nickname"]
     groupname = (await bot.get_group_info(group_id=int(info.group_id), no_cache=False))["group_name"]
-    return BaseInfoResponse(
-        isVerified=True,
-        userId=info.user_id,
-        groupId=info.group_id,
-        steamId=await db_val.get_steamid(info.user_id),
+    return InfoNameResponse(
         showName=f"{username} ({groupname})"
+    )
+
+class InfoSteamIdResponse(BaseModel):
+    steamId: str | None = Field(..., description="绑定的 Steam ID")
+
+@app.post("/api/auth/info/steamid",
+    response_model=InfoSteamIdResponse,
+    summary="获取绑定的 Steam ID",
+    description="获取绑定的 Steam ID（如果有）。"
+)
+async def get_token_steamid(info: AuthSession = Depends(get_current_user)):
+    assert info.user_id is not None
+    return InfoSteamIdResponse(
+        steamId=await db_val.get_steamid(info.user_id)
     )
 
 class MatchPWPlayerInfo(BaseModel):
@@ -198,6 +216,7 @@ class MatchPWPlayerInfo(BaseModel):
     assists: int = Field(..., description="助攻数")
     legacyScore: float = Field(..., description="玩家的底蕴分数")
     pvpScore: float = Field(..., description="玩家的天梯分数")
+    pvpScoreChange: float = Field(..., description="玩家的天梯分数变化")
     pvpStar: int = Field(..., description="玩家的天梯星级")
 
 class MatchPWInfo(BaseModel):
@@ -274,6 +293,7 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
                 assists=player.assist,
                 legacyScore=await get_legacy_score(player),
                 pvpScore=player.pvpScore,
+                pvpScoreChange=player.pvpScoreChange,
                 pvpStar=player.pvpStars
             ) for player in match_detail
         ]
@@ -346,4 +366,104 @@ async def get_player_base(steamId: str = Body(..., embed=True), _ = Depends(get_
     return PlayerBaseResponse(
         nickname=base_info.name,
         lastUpdate=base_info.updateMatchTime
+    )
+
+class TimeResponse(BaseModel):
+    timeTypes: list[str] = Field(..., description="支持的时间范围类型列表")
+
+@app.post("/api/config/time",
+    response_model=TimeResponse,
+    summary="获取支持的时间范围类型",
+    description="获取所有支持的时间范围类型列表。"
+)
+async def get_time_types(_ = Depends(get_current_user)):
+    return TimeResponse(
+        timeTypes=valid_time
+    )
+
+class RankConfigItem(BaseModel):
+    name: str = Field(..., description="排名选项名称")
+    description: str = Field(..., description="排名选项描述")
+    defaultTimeType: str = Field(..., description="默认时间范围类型")
+    allowedTimeTypes: list[str] = Field(..., description="允许的时间范围类型列表")
+    outputFormat: str = Field(..., description="输出格式")
+
+class RankConfigResponse(BaseModel):
+    rankOptions: list[RankConfigItem] = Field(..., description="排名选项列表")
+
+@app.post("/api/config/rank",
+    response_model=RankConfigResponse,
+    summary="获取排名配置",
+    description="获取可用的排名选项及其配置。"
+)
+async def get_rank_config(_ = Depends(get_current_user)):
+    rank_options = []
+    for name, config in db_val._registry.items():
+        rank_options.append(RankConfigItem(
+            name=name,
+            description=config.title,
+            defaultTimeType=config.default_time,
+            allowedTimeTypes=config.allowed_time,
+            outputFormat=config.outputfmt
+        ))
+    return RankConfigResponse(
+        rankOptions=rank_options
+    )
+
+class RankItem(BaseModel):
+    steamId: str = Field(..., description="玩家的 Steam ID")
+    nickname: str = Field(..., description="玩家昵称")
+    value: float = Field(..., description="值")
+    count: int = Field(..., description="场次")
+
+class RankResponse(BaseModel):
+    minValue: float = Field(..., description="最小值")
+    maxValue: float = Field(..., description="最大值")
+    players: list[RankItem] = Field(..., description="排名玩家列表")
+
+@app.post("/api/rank",
+    response_model=RankResponse,
+    summary="获取排名列表",
+    description="根据排名名称和时间范围类型获取排名列表。"
+)
+async def get_rank_list(
+    rankName: str = Body(..., embed=True),
+    timeType: str = Body(..., embed=True),
+    info = Depends(get_current_user)):
+    rank_config = db_val.get_value_config(rankName)
+    if not rank_config:
+        raise HTTPException(status_code=400, detail="Invalid rank name")
+    if timeType not in rank_config.allowed_time:
+        raise HTTPException(status_code=400, detail="Invalid time type")
+    
+    async def get_nickname(steamId: str) -> str:
+        base_info = await db_val.get_base_info(steamId)
+        return base_info.name if base_info else "未知玩家"
+    steamids = await db_val.get_group_member_steamid(info.group_id)
+    datas = []
+    for steamid in steamids:
+        try:
+            val = await rank_config.func(steamid, timeType)
+            print(val)
+            datas.append((steamid, val))
+        except NoValueError:
+            pass
+    print(datas)
+    datas = sorted(datas, key=lambda x: x[1][0], reverse=rank_config.reversed)
+    if len(datas) == 0:
+        raise HTTPException(status_code=404, detail="No ranking data found")
+    max_value = datas[0][1][0] if rank_config.reversed else datas[-1][1][0]
+    min_value = datas[-1][1][0] if rank_config.reversed else datas[0][1][0]
+    min_value, max_value = rank_config.range_gen.getval(min_value, max_value)
+    return RankResponse(
+        minValue=min_value,
+        maxValue=max_value,
+        players=[
+            RankItem(
+                steamId=steamid,
+                nickname=await get_nickname(steamid),
+                value=val[0],
+                count=val[1]
+            ) for steamid, val in datas
+        ]
     )
