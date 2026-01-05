@@ -631,7 +631,7 @@ qwqqwq = on_command("qwqqwq", permission=SUPERUSER, priority=5)
 
 @qwqqwq.handle()
 async def _(event):
-    stmt = select(SteamDetailInfo.steamid).distinct().where(SteamDetailInfo.pvpScore>2400).where(SteamDetailInfo.seasonId==lastSeasonId)
+    stmt = select(SteamDetailInfo.steamid).distinct().where(SteamDetailInfo.pvpScore>2400).where(SteamDetailInfo.seasonId==lastSeasonId).where(SteamDetailInfo.pvpStars==0)
     async with async_session_factory() as session:
         result = await session.execute(stmt)
         rows = result.scalars().all()
