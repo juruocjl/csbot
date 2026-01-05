@@ -22,6 +22,8 @@ import json
 import math
 import random
 import asyncio
+from PIL import Image
+from io import BytesIO
 
 from .config import Config
 
@@ -453,9 +455,12 @@ class DataManager:
         if data["statusCode"] != 0:
             raise RuntimeError("爬取失败：" + data["errorMessage"])
         if result_info.avatarlink != data["data"]["avatar"]:
-            with open(avatar_dir / f"{steamid}.png", "wb") as f:
-                async with get_session().get(data["data"]["avatar"]) as resp:
-                    f.write(await resp.read())
+            async with get_session().get(data["data"]["avatar"]) as resp:
+                image_data = await resp.read()
+            # 缩小图片到128*128
+            img = Image.open(BytesIO(image_data))
+            img = img.resize((128, 128), Image.Resampling.LANCZOS)
+            img.save(avatar_dir / f"{steamid}.png", "PNG")
         result_info.name = data["data"]["name"]
 
         result_info.name = data["data"]["name"]
