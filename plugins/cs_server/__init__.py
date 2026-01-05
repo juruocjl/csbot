@@ -384,7 +384,7 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
         
         await bot.send_group_msg(
             group_id=int(info.group_id),
-            message=MessageSegment.at(info.user_id) + " 分享了 " + config.cs_domain + unquote(path) 
+            message=Message(MessageSegment.share(url=f"{config.cs_domain}{path}", title=f"来自 {await get_user_name(info.user_id)} 的分享", content="点击查看详情"))
         )
         
     finally:
