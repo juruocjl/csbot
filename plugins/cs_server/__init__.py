@@ -7,6 +7,7 @@ from nonebot.plugin import PluginMetadata
 from nonebot import require
 
 import secrets
+from urllib.parse import unquote
 import time
 import json
 import psutil
@@ -379,6 +380,11 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
         await bot.send_group_msg(
             group_id=int(info.group_id),
             message=Message(MessageSegment.image(screenshot))
+        )
+        
+        await bot.send_group_msg(
+            group_id=int(info.group_id),
+            message=MessageSegment.at(info.user_id) + " 分享了 " + config.cs_domain + unquote(path) 
         )
         
     finally:
