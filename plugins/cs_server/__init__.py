@@ -1,7 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot import get_app, get_bot
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, Bot
+from nonebot.adapters.onebot.v11 import Message, MessageSegment, GroupMessageEvent, Bot
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot import require
@@ -14,6 +14,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import String, Integer, Boolean, select
 from sqlalchemy.orm import Mapped, mapped_column
 from pydantic import BaseModel, Field
+from pyppeteer import launch
 
 require("utils")
 from ..utils import Base, async_session_factory
@@ -211,6 +212,54 @@ async def get_token_steamid(info: AuthSession = Depends(get_current_user)):
         steamId=await db_val.get_steamid(info.user_id)
     )
 
+@app.post("/api/auth/send",
+    summary="发送指定页面图片",
+    description="向绑定的 QQ 群发送指定页面的图片。")
+async def send_page_image(path: str = Body(..., embed=True), info: AuthSession = Depends(get_current_user)):
+    bot = get_bot()
+    assert isinstance(bot, Bot)
+    assert info.group_id is not None
+    
+    browser = None
+    try:
+        # 启动浏览器
+        browser = await launch(headless=True, args=['--no-sandbox'])
+        page = await browser.newPage()
+        
+        # 访问页面
+        await page.goto(f"http://localhost{path}", waitUntil='networkidle2')
+        
+        # 设置 localStorage 中的 token
+        await page.evaluateOnNewDocument(f"""
+            localStorage.setItem('token', '{info.token}');
+        """)
+        
+        # 重新加载页面以应用 token
+        await page.reload(waitUntil='networkidle2')
+        
+        # 等待页面完全加载（可选：等待特定元素）
+        await page.waitForNavigation(waitUntil='networkidle2')
+        
+        # 获取页面高度
+        height = await page.evaluate('document.documentElement.scrollHeight')
+        
+        # 设置视口大小
+        await page.setViewport({'width': 1280, 'height': int(height)})
+        
+        # 截图
+        screenshot = await page.screenshot({'fullPage': True})
+        
+        # 发送消息
+        await bot.send_group_msg(
+            group_id=int(info.group_id),
+            message=Message(MessageSegment.image(screenshot))
+        )
+        
+    finally:
+        # 确保浏览器被关闭
+        if browser:
+            await browser.close()
+
 class MatchPWPlayerInfo(BaseModel):
     steamId: str = Field(..., description="玩家的 Steam ID")
     nickname: str = Field(..., description="玩家昵称")
@@ -352,12 +401,9 @@ async def get_match_history(
         ] if match_records else []
     )
 
-class PlayerBaseRequest(BaseModel):
-    steamId: str = Field(..., description="玩家的 Steam ID")
-
 class PlayerBaseResponse(BaseModel):
     nickname: str = Field(..., description="玩家昵称")
-    lastUpdate: int = Field(..., description="最后更新时间戳")
+    lastUpdate: int = Field(..., description="最后比赛更新时间戳")
 
 @app.post("/api/player/base",
     response_model=PlayerBaseResponse,
@@ -380,7 +426,6 @@ class PlayerDetailItem(BaseModel):
     maxValue: float = Field(..., description="最大值")
     avgValue: float = Field(..., description="平均值")
 
-
 # 火力 (FirePower)
 class FirePowerDetail(BaseModel):
     score: int = Field(..., description="火力分")
@@ -393,7 +438,6 @@ class FirePowerDetail(BaseModel):
     we: PlayerDetailItem = Field(..., description="WE")
     pistolRoundRating: PlayerDetailItem = Field(..., description="手枪局Rating")
 
-
 # 枪法 (Marksmanship)
 class MarksmanshipDetail(BaseModel):
     score: int = Field(..., description="枪法分")
@@ -402,7 +446,6 @@ class MarksmanshipDetail(BaseModel):
     smHitRate: PlayerDetailItem = Field(..., description="副武器命中率")
     reactionTime: PlayerDetailItem = Field(..., description="反应时间")
     rapidStopRate: PlayerDetailItem = Field(..., description="急停率")
-
 
 # 补枪与辅助 (FollowUp)
 class FollowUpShotDetail(BaseModel):
@@ -413,7 +456,6 @@ class FollowUpShotDetail(BaseModel):
     assistKillsPercentage: PlayerDetailItem = Field(..., description="助攻击杀占比")
     damagePerKill: PlayerDetailItem = Field(..., description="每次击杀的伤害")
 
-
 # 首杀 (First Blood)
 class FirstBloodDetail(BaseModel):
     score: int = Field(..., description="首杀分")
@@ -422,7 +464,6 @@ class FirstBloodDetail(BaseModel):
     firstSuccessRate: PlayerDetailItem = Field(..., description="首杀成功率")
     firstKill: PlayerDetailItem = Field(..., description="首杀数")
     firstRate: PlayerDetailItem = Field(..., description="首杀率")
-
 
 # 道具 (Item/Utility)
 class ItemDetail(BaseModel):
@@ -433,7 +474,6 @@ class ItemDetail(BaseModel):
     flashbangFlashRate: PlayerDetailItem = Field(..., description="闪光弹命中率")
     timeOpponentFlashedPerRound: PlayerDetailItem = Field(..., description="每回合敌人被闪白时间")
 
-
 # 残局 (Clutch / 1vN)
 class ClutchDetail(BaseModel):
     score: int = Field(..., description="残局分")
@@ -442,7 +482,6 @@ class ClutchDetail(BaseModel):
     lastAlivePercentage: PlayerDetailItem = Field(..., description="最后活着占比")
     timeAlivePerRound: PlayerDetailItem = Field(..., description="每回合存活时间")
     savesPerRoundLoss: PlayerDetailItem = Field(..., description="失败回合保枪率")
-
 
 # 狙击 (Sniper)
 class SniperDetail(BaseModel):
@@ -453,7 +492,6 @@ class SniperDetail(BaseModel):
     roundsWithSniperKillsPercentage: PlayerDetailItem = Field(..., description="有狙击击杀的回合占比")
     sniperMultipleKillRoundPercentage: PlayerDetailItem = Field(..., description="狙击多杀回合占比")
 
-
 # 基础评分
 class BaseRatingDetail(BaseModel):
     pwRating: PlayerDetailItem = Field(..., description="rating")
@@ -462,10 +500,10 @@ class BaseRatingDetail(BaseModel):
     pwRatingCtAvg: PlayerDetailItem = Field(..., description="CT方平均Rating")
     kastPerRound: PlayerDetailItem = Field(..., description="每回合KAST")
 
-
 class PlayerDetailResponse(BaseModel):
     # 基础综合数据
     seasonId: str = Field(..., description="赛季")
+    lastUpdate: int = Field(..., description="最后数据更新时间戳")
     pvpScore: int = Field(..., description="PVP分数")
     pvpStars: int = Field(..., description="PVP星级")
     cnt: int = Field(..., description="比赛场次")
@@ -493,9 +531,10 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
     from ..cs_db_val import SteamDetailInfo
     
     detail_info = await db_val.get_detail_info(steamId)
+    base_info = await db_val.get_base_info(steamId)
     if not detail_info:
         raise HTTPException(status_code=404, detail="Player detail info not found")
-    
+    assert base_info is not None
     # 获取或更新全局统计数据缓存
     current_time = time.time()
     if detail_info.seasonId in SEASON_STATS_CACHE:
@@ -514,6 +553,7 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
     
     return PlayerDetailResponse(
         seasonId=detail_info.seasonId,
+        lastUpdate=base_info.updateTime,
         pvpScore=detail_info.pvpScore,
         pvpStars=detail_info.pvpStars,
         cnt=detail_info.cnt,
@@ -638,8 +678,6 @@ def _get_player_stats(detail_info, global_stats: dict[str, tuple[float, float, f
         )
     
     return stats_data
-
-
 
 
 class TimeResponse(BaseModel):

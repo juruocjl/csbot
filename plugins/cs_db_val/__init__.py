@@ -409,28 +409,32 @@ class DataManager:
         async with async_session_factory() as session:
             return await session.get(SteamDetailInfo, (steamid, seasonid))
 
+    async def _get_extra_info(self, steamid: str, session, timeStamp: int = 100000000000) -> SteamExtraInfo | None:
+        """接受 session 参数的版本，用于事务内调用"""
+        stmt = (
+            select(SteamExtraInfo)
+            .where(SteamExtraInfo.steamid == steamid)
+            .where(SteamExtraInfo.timeStamp >= timeStamp)
+            .order_by(SteamExtraInfo.timeStamp.asc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        record = result.scalar_one_or_none()
+        if record is not None:
+            return record
+        stmt = (
+            select(SteamExtraInfo)
+            .where(SteamExtraInfo.steamid == steamid)
+            .where(SteamExtraInfo.timeStamp < timeStamp)
+            .order_by(SteamExtraInfo.timeStamp.desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_extra_info(self, steamid: str, timeStamp: int = 100000000000) -> SteamExtraInfo | None:
         async with async_session_factory() as session:
-            stmt = (
-                select(SteamExtraInfo)
-                .where(SteamExtraInfo.steamid == steamid)
-                .where(SteamExtraInfo.timeStamp >= timeStamp)
-                .order_by(SteamExtraInfo.timeStamp.asc())
-                .limit(1)
-            )
-            result = await session.execute(stmt)
-            record = result.scalar_one_or_none()
-            if record is not None:
-                return record
-            stmt = (
-                select(SteamExtraInfo)
-                .where(SteamExtraInfo.steamid == steamid)
-                .where(SteamExtraInfo.timeStamp < timeStamp)
-                .order_by(SteamExtraInfo.timeStamp.desc())
-                .limit(1)
-            )
-            result = await session.execute(stmt)
-            return result.scalar_one_or_none()
+            return await self._get_extra_info(steamid, session, timeStamp)
 
     async def search_user(self, name: str, id: int = 1) -> SteamBaseInfo | None:
         async with async_session_factory() as session:
