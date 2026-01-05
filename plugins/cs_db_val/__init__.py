@@ -216,6 +216,7 @@ class SteamDetailInfo(Base):
 
     # --- 基础综合数据 ---
     pvpScore: Mapped[int] = mapped_column(Integer)
+    pvpStars: Mapped[int] = mapped_column(Integer)
     cnt: Mapped[int] = mapped_column(Integer)
     winRate: Mapped[float] = mapped_column(Float)
     pwRating: Mapped[float] = mapped_column(Float)
@@ -745,7 +746,7 @@ async def get_legacy(steamid: str, time_type: str) -> tuple[float, int]:
         return (extra_info.legacyScore, TotCount)
     raise NoValueError()
 
-@db.register("底蕴差", "平均己方-对方底蕴", "本赛季", valid_time, True, ZeroIn(-1), "d2")
+@db.register("底蕴差", "平均己方-对方底蕴", "本赛季", valid_time, True, ZeroIn(-1), "d0")
 async def get_legacy_diff(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         stmt = (

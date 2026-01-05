@@ -345,6 +345,7 @@ class DataManager:
 
             # 基础综合
             pvpScore=int(data['pvpScore']),
+            pvpStars=int(data['stars']),
             cnt=int(data['cnt']),
             winRate=float(data['winRate']),
             pwRating=float(data['pwRating']),
@@ -459,8 +460,8 @@ class DataManager:
                 image_data = await resp.read()
             # 缩小图片到128*128
             img = Image.open(BytesIO(image_data))
-            img = img.resize((128, 128), Image.Resampling.LANCZOS)
-            img.save(avatar_dir / f"{steamid}.png", "PNG")
+            img_small = img.resize((128, 128), Image.Resampling.LANCZOS)
+            img_small.save(avatar_dir / f"{steamid}.png", "PNG")
         result_info.name = data["data"]["name"]
 
         result_info.name = data["data"]["name"]

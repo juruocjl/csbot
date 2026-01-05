@@ -368,6 +368,247 @@ async def get_player_base(steamId: str = Body(..., embed=True), _ = Depends(get_
         lastUpdate=base_info.updateMatchTime
     )
 
+class PlayerDetailItem(BaseModel):
+    value: float = Field(..., description="数值")
+    minValue: float = Field(..., description="最小值")
+    maxValue: float = Field(..., description="最大值")
+    avgValue: float = Field(..., description="平均值")
+
+
+# 火力 (FirePower)
+class FirePowerDetail(BaseModel):
+    score: int = Field(..., description="火力分")
+    killsPerRound: PlayerDetailItem = Field(..., description="场均击杀")
+    killsPerWinRound: PlayerDetailItem = Field(..., description="胜局场均击杀")
+    damagePerRound: PlayerDetailItem = Field(..., description="场均伤害")
+    damagePerRoundWin: PlayerDetailItem = Field(..., description="胜局场均伤害")
+    roundsWithAKill: PlayerDetailItem = Field(..., description="有击杀的回合占比")
+    multiKillRoundsPercentage: PlayerDetailItem = Field(..., description="多杀回合占比")
+    we: PlayerDetailItem = Field(..., description="WE")
+    pistolRoundRating: PlayerDetailItem = Field(..., description="手枪局Rating")
+
+
+# 枪法 (Marksmanship)
+class MarksmanshipDetail(BaseModel):
+    score: int = Field(..., description="枪法分")
+    headshotRate: PlayerDetailItem = Field(..., description="爆头率")
+    killTime: PlayerDetailItem = Field(..., description="击杀时间")
+    smHitRate: PlayerDetailItem = Field(..., description="副武器命中率")
+    reactionTime: PlayerDetailItem = Field(..., description="反应时间")
+    rapidStopRate: PlayerDetailItem = Field(..., description="急停率")
+
+
+# 补枪与辅助 (FollowUp)
+class FollowUpShotDetail(BaseModel):
+    score: int = Field(..., description="补枪分")
+    savedTeammatePerRound: PlayerDetailItem = Field(..., description="每回合拯救队友次数")
+    tradeKillsPerRound: PlayerDetailItem = Field(..., description="每回合补枪击杀")
+    tradeKillsPercentage: PlayerDetailItem = Field(..., description="补枪击杀占比")
+    assistKillsPercentage: PlayerDetailItem = Field(..., description="助攻击杀占比")
+    damagePerKill: PlayerDetailItem = Field(..., description="每次击杀的伤害")
+
+
+# 首杀 (First Blood)
+class FirstBloodDetail(BaseModel):
+    score: int = Field(..., description="首杀分")
+    firstHurt: PlayerDetailItem = Field(..., description="首杀伤害")
+    winAfterOpeningKill: PlayerDetailItem = Field(..., description="开局杀后胜率")
+    firstSuccessRate: PlayerDetailItem = Field(..., description="首杀成功率")
+    firstKill: PlayerDetailItem = Field(..., description="首杀数")
+    firstRate: PlayerDetailItem = Field(..., description="首杀率")
+
+
+# 道具 (Item/Utility)
+class ItemDetail(BaseModel):
+    score: int = Field(..., description="道具分")
+    itemRate: PlayerDetailItem = Field(..., description="道具使用率")
+    utilityDamagePerRounds: PlayerDetailItem = Field(..., description="每回合道具伤害")
+    flashAssistPerRound: PlayerDetailItem = Field(..., description="每回合闪白助攻")
+    flashbangFlashRate: PlayerDetailItem = Field(..., description="闪光弹命中率")
+    timeOpponentFlashedPerRound: PlayerDetailItem = Field(..., description="每回合敌人被闪白时间")
+
+
+# 残局 (Clutch / 1vN)
+class ClutchDetail(BaseModel):
+    score: int = Field(..., description="残局分")
+    v1WinPercentage: PlayerDetailItem = Field(..., description="1v1胜率")
+    clutchPointsPerRound: PlayerDetailItem = Field(..., description="每回合残局点数")
+    lastAlivePercentage: PlayerDetailItem = Field(..., description="最后活着占比")
+    timeAlivePerRound: PlayerDetailItem = Field(..., description="每回合存活时间")
+    savesPerRoundLoss: PlayerDetailItem = Field(..., description="失败回合保枪率")
+
+
+# 狙击 (Sniper)
+class SniperDetail(BaseModel):
+    score: int = Field(..., description="狙击分")
+    sniperFirstKillPercentage: PlayerDetailItem = Field(..., description="狙击首杀占比")
+    sniperKillsPercentage: PlayerDetailItem = Field(..., description="狙击击杀占比")
+    sniperKillPerRound: PlayerDetailItem = Field(..., description="每回合狙击击杀")
+    roundsWithSniperKillsPercentage: PlayerDetailItem = Field(..., description="有狙击击杀的回合占比")
+    sniperMultipleKillRoundPercentage: PlayerDetailItem = Field(..., description="狙击多杀回合占比")
+
+
+# 基础评分
+class BaseRatingDetail(BaseModel):
+    pwRating: PlayerDetailItem = Field(..., description="rating")
+    rws: PlayerDetailItem = Field(..., description="RWS")
+    pwRatingTAvg: PlayerDetailItem = Field(..., description="T方平均Rating")
+    pwRatingCtAvg: PlayerDetailItem = Field(..., description="CT方平均Rating")
+    kastPerRound: PlayerDetailItem = Field(..., description="每回合KAST")
+
+
+class PlayerDetailResponse(BaseModel):
+    # 基础综合数据
+    seasonId: str = Field(..., description="赛季")
+    pvpScore: int = Field(..., description="PVP分数")
+    pvpStars: int = Field(..., description="PVP星级")
+    cnt: int = Field(..., description="比赛场次")
+    winRate: PlayerDetailItem = Field(..., description="胜率")
+    
+    # 基础评分
+    baseRating: BaseRatingDetail = Field(..., description="基础评分")
+    
+    # 各能力分项
+    firePower: FirePowerDetail = Field(..., description="火力")
+    marksmanship: MarksmanshipDetail = Field(..., description="枪法")
+    followUpShot: FollowUpShotDetail = Field(..., description="补枪与辅助")
+    firstBlood: FirstBloodDetail = Field(..., description="首杀")
+    item: ItemDetail = Field(..., description="道具")
+    clutch: ClutchDetail = Field(..., description="残局")
+    sniper: SniperDetail = Field(..., description="狙击")
+
+@app.post("/api/player/detail",
+    response_model=PlayerDetailResponse,
+    summary="获取玩家详细信息",
+    description="根据 Steam ID 获取玩家在当前赛季的详细统计信息。"
+)
+async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(get_current_user)):
+    from sqlalchemy import select, func
+    from ..cs_db_val import SteamDetailInfo
+    
+    detail_info = await db_val.get_detail_info(steamId)
+    if not detail_info:
+        raise HTTPException(status_code=404, detail="Player detail info not found")
+    
+    # 获取所有玩家的详细信息用于计算统计数据
+    async with async_session_factory() as session:
+        stmt = select(SteamDetailInfo).where(SteamDetailInfo.seasonId == detail_info.seasonId)
+        result = await session.execute(stmt)
+        all_details = result.scalars().all()
+    
+    # 定义用于计算统计数据的字段
+    float_fields = [
+        'winRate', 'pwRating', 'rws', 'pwRatingTAvg', 'pwRatingCtAvg', 'kastPerRound',
+        'killsPerRound', 'killsPerWinRound', 'damagePerRound', 'damagePerRoundWin',
+        'roundsWithAKill', 'multiKillRoundsPercentage', 'we', 'pistolRoundRating',
+        'headshotRate', 'killTime', 'smHitRate', 'reactionTime', 'rapidStopRate',
+        'savedTeammatePerRound', 'tradeKillsPerRound', 'tradeKillsPercentage',
+        'assistKillsPercentage', 'damagePerKill', 'firstHurt', 'winAfterOpeningKill',
+        'firstSuccessRate', 'firstKill', 'firstRate', 'itemRate', 'utilityDamagePerRounds',
+        'flashAssistPerRound', 'flashbangFlashRate', 'timeOpponentFlashedPerRound',
+        'v1WinPercentage', 'clutchPointsPerRound', 'lastAlivePercentage',
+        'timeAlivePerRound', 'savesPerRoundLoss', 'sniperFirstKillPercentage',
+        'sniperKillsPercentage', 'sniperKillPerRound', 'roundsWithSniperKillsPercentage',
+        'sniperMultipleKillRoundPercentage'
+    ]
+    
+    # 为每个float字段计算统计数据
+    stats_data = {}
+    for field in float_fields:
+        values = [getattr(d, field) for d in all_details if hasattr(d, field) and getattr(d, field) is not None]
+        if values:
+            value = getattr(detail_info, field)
+            stats_data[field] = PlayerDetailItem(
+                value=value,
+                minValue=min(values),
+                maxValue=max(values),
+                avgValue=sum(values) / len(values)
+            )
+        else:
+            stats_data[field] = PlayerDetailItem(
+                value=getattr(detail_info, field, 0.0),
+                minValue=0.0,
+                maxValue=0.0,
+                avgValue=0.0
+            )
+    
+    return PlayerDetailResponse(
+        seasonId=detail_info.seasonId,
+        pvpScore=detail_info.pvpScore,
+        pvpStars=detail_info.pvpStars,
+        cnt=detail_info.cnt,
+        winRate=stats_data['winRate'],
+        baseRating=BaseRatingDetail(
+            pwRating=stats_data['pwRating'],
+            rws=stats_data['rws'],
+            pwRatingTAvg=stats_data['pwRatingTAvg'],
+            pwRatingCtAvg=stats_data['pwRatingCtAvg'],
+            kastPerRound=stats_data['kastPerRound']
+        ),
+        firePower=FirePowerDetail(
+            score=detail_info.firePowerScore,
+            killsPerRound=stats_data['killsPerRound'],
+            killsPerWinRound=stats_data['killsPerWinRound'],
+            damagePerRound=stats_data['damagePerRound'],
+            damagePerRoundWin=stats_data['damagePerRoundWin'],
+            roundsWithAKill=stats_data['roundsWithAKill'],
+            multiKillRoundsPercentage=stats_data['multiKillRoundsPercentage'],
+            we=stats_data['we'],
+            pistolRoundRating=stats_data['pistolRoundRating']
+        ),
+        marksmanship=MarksmanshipDetail(
+            score=detail_info.marksmanshipScore,
+            headshotRate=stats_data['headshotRate'],
+            killTime=stats_data['killTime'],
+            smHitRate=stats_data['smHitRate'],
+            reactionTime=stats_data['reactionTime'],
+            rapidStopRate=stats_data['rapidStopRate']
+        ),
+        followUpShot=FollowUpShotDetail(
+            score=detail_info.followUpShotScore,
+            savedTeammatePerRound=stats_data['savedTeammatePerRound'],
+            tradeKillsPerRound=stats_data['tradeKillsPerRound'],
+            tradeKillsPercentage=stats_data['tradeKillsPercentage'],
+            assistKillsPercentage=stats_data['assistKillsPercentage'],
+            damagePerKill=stats_data['damagePerKill']
+        ),
+        firstBlood=FirstBloodDetail(
+            score=detail_info.firstScore,
+            firstHurt=stats_data['firstHurt'],
+            winAfterOpeningKill=stats_data['winAfterOpeningKill'],
+            firstSuccessRate=stats_data['firstSuccessRate'],
+            firstKill=stats_data['firstKill'],
+            firstRate=stats_data['firstRate']
+        ),
+        item=ItemDetail(
+            score=detail_info.itemScore,
+            itemRate=stats_data['itemRate'],
+            utilityDamagePerRounds=stats_data['utilityDamagePerRounds'],
+            flashAssistPerRound=stats_data['flashAssistPerRound'],
+            flashbangFlashRate=stats_data['flashbangFlashRate'],
+            timeOpponentFlashedPerRound=stats_data['timeOpponentFlashedPerRound']
+        ),
+        clutch=ClutchDetail(
+            score=detail_info.oneVnScore,
+            v1WinPercentage=stats_data['v1WinPercentage'],
+            clutchPointsPerRound=stats_data['clutchPointsPerRound'],
+            lastAlivePercentage=stats_data['lastAlivePercentage'],
+            timeAlivePerRound=stats_data['timeAlivePerRound'],
+            savesPerRoundLoss=stats_data['savesPerRoundLoss']
+        ),
+        sniper=SniperDetail(
+            score=detail_info.sniperScore,
+            sniperFirstKillPercentage=stats_data['sniperFirstKillPercentage'],
+            sniperKillsPercentage=stats_data['sniperKillsPercentage'],
+            sniperKillPerRound=stats_data['sniperKillPerRound'],
+            roundsWithSniperKillsPercentage=stats_data['roundsWithSniperKillsPercentage'],
+            sniperMultipleKillRoundPercentage=stats_data['sniperMultipleKillRoundPercentage']
+        )
+    )
+
+
+
+
 class TimeResponse(BaseModel):
     timeTypes: list[str] = Field(..., description="支持的时间范围类型列表")
 
