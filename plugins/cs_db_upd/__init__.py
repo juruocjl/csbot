@@ -626,18 +626,3 @@ class DataManager:
                     await session.merge(new_member)
   
 db = DataManager()
-
-qwqdsadasd = on_command("db_update_matches", permission=SUPERUSER)
-@qwqdsadasd.handle()
-async def qwqdsadasd_f():
-    async with async_session_factory() as session:
-        stmt = select(MatchStatsPW.mid).distinct()
-        result = await session.execute(stmt)
-        allmids = list(result.scalars().all())
-    async with async_session_factory() as session:
-        logger.info(f"启动时更新比赛数据，共有 {len(allmids)} 个比赛需要更新")
-        for i in range(len(allmids)):
-            logger.info(f"启动时更新比赛数据进度 {i+1}/{len(allmids)} 比赛ID: {allmids[i]}")
-            mid = allmids[i]
-            async with session.begin():
-                await db._update_match_extra(mid, session)

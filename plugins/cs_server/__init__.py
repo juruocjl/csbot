@@ -8,6 +8,7 @@ from nonebot import require
 
 import secrets
 import time
+import psutil
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -22,6 +23,12 @@ require("cs_db_val")
 from ..cs_db_val import MatchStatsPW
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time, NoValueError
+
+require("allmsg")
+from ..allmsg import get_msg_status
+
+require("pic")
+from ..pic import get_pic_status
 
 from .config import Config
 
@@ -58,6 +65,16 @@ class AuthSession(Base):
     last_used_at: Mapped[int] = mapped_column(Integer, default=0)
     # 是否已验证
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+
+class UserInfo(Base):
+    __tablename__ = "user_info"
+    
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    nickname: Mapped[str] = mapped_column(String)
+    
+    last_send_time: Mapped[int] = mapped_column(Integer, default=0)
+    last_update_time: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class DataMannager:
     async def generate_token(self) -> AuthSession:
@@ -111,6 +128,50 @@ class DataMannager:
                     return auth_session
                 return None
 
+    async def get_user(self, uid: str) -> UserInfo | None:
+        async with async_session_factory() as session:
+            return await session.get(UserInfo, uid)
+
+    async def set_user_name(self, uid: str, nickname: str):
+        async with async_session_factory() as session:
+            async with session.begin():
+                user = await session.get(UserInfo, uid)
+                if user != None:
+                    user.nickname = nickname
+                    user.last_update_time = int(time.time())
+                else:
+                    user = UserInfo(
+                        user_id=uid,
+                        nickname=nickname,
+                        last_update_time=int(time.time())
+                    )
+                await session.merge(user)
+    
+    async def set_user_send(self, uid: str):
+        async with async_session_factory() as session:
+            async with session.begin():
+                user = await session.get(UserInfo, uid)
+                if user != None:
+                    user.last_send_time = int(time.time())
+                    await session.merge(user)
+    
+
+async def get_user_name(uid: str, interval: int = config.user_name_cache_expiration) -> str:
+    user = await db.get_user(uid)
+    if user != None and user.last_update_time and (int(time.time()) - user.last_update_time) < interval:
+        return user.nickname
+    bot = get_bot()
+    assert isinstance(bot, Bot)
+    username = "未知用户"
+    try:
+        username = (await bot.get_stranger_info(user_id=int(uid), no_cache=True))["nickname"]
+    except:
+        pass
+    await db.set_user_name(uid, username)
+    result = await db.get_user(uid)
+    assert result is not None
+    return result.nickname
+
 db = DataMannager()
 
 verify = on_command("验证", aliases={"verify"}, priority=10)
@@ -123,6 +184,7 @@ async def handle_verify(event: GroupMessageEvent, args: Message = CommandArg()):
     user_id = event.get_user_id()
     group_id = str(event.group_id)
     success = await db.verify_code(code, user_id, group_id)
+    await get_user_name(user_id, interval=0)  # 强制更新昵称
     if success:
         await verify.finish("验证成功！")
     else:
@@ -149,6 +211,15 @@ class InitTokenResponse(BaseModel):
     token: str = Field(..., description="用于 API 认证的 Token")
     code: str = Field(..., description="用于群内验证的验证码")
     expires_in: int = Field(..., description="验证码有效期，单位为秒")
+
+class StatusResponse(BaseModel):
+    cpuUsage: float = Field(..., description="CPU 使用率百分比")
+    memoryTotal: float = Field(..., description="内存总容量 GB")
+    memoryUsed: float = Field(..., description="已使用内存 GB")
+    memoryUsagePercent: float = Field(..., description="内存使用百分比")
+    memoryAvailable: float = Field(..., description="可用内存 GB")
+    pictureLibrary: str = Field(..., description="图库状态")
+    messageCount: str = Field(..., description="消息计数信息")
 
 @app.post(
     "/api/auth/init",
@@ -192,7 +263,7 @@ async def get_token_info(info: AuthSession = Depends(get_current_user)):
     assert isinstance(bot, Bot)
     assert info.user_id is not None
     assert info.group_id is not None
-    username = (await bot.get_stranger_info(user_id=int(info.user_id), no_cache=False))["nickname"]
+    username = await get_user_name(info.user_id)
     groupname = (await bot.get_group_info(group_id=int(info.group_id), no_cache=False))["group_name"]
     return InfoNameResponse(
         showName=f"{username} ({groupname})"
@@ -212,10 +283,62 @@ async def get_token_steamid(info: AuthSession = Depends(get_current_user)):
         steamId=await db_val.get_steamid(info.user_id)
     )
 
+@app.post("/api/status",
+    response_model=StatusResponse,
+    summary="获取服务器状态",
+    description="获取 CPU、内存、图库和消息统计等服务器状态信息。"
+)
+async def get_status(info: AuthSession = Depends(get_current_user)):
+    cpu_usage = psutil.cpu_percent()
+    
+    # 获取内存信息
+    memory = psutil.virtual_memory()
+    total_mem = memory.total / (1024 ** 3)  # 转换为GB
+    used_mem = memory.used / (1024 ** 3)
+    available_mem = memory.available / (1024 ** 3)
+    mem_usage = memory.percent
+    
+    # 获取图库状态
+    tuku = get_pic_status()
+    
+    # 获取消息计数
+    assert info.group_id is not None
+    msgcount = await get_msg_status(int(info.group_id))
+    
+    return StatusResponse(
+        cpuUsage=cpu_usage,
+        memoryTotal=total_mem,
+        memoryUsed=used_mem,
+        memoryUsagePercent=mem_usage,
+        memoryAvailable=available_mem,
+        pictureLibrary=tuku,
+        messageCount=msgcount
+    )
+
+class InfoQQResponse(BaseModel):
+    qq: str = Field(..., description="绑定的 QQ 号")
+
+@app.post("/api/auth/info/qq",
+    response_model=InfoQQResponse,
+    summary="获取绑定的 QQ 号",
+    description="获取绑定的 QQ 号。"
+)
+async def get_token_qq(info: AuthSession = Depends(get_current_user)):
+    assert info.user_id is not None
+    return InfoQQResponse(
+        qq=info.user_id
+    )
+
 @app.post("/api/auth/send",
     summary="发送指定页面图片",
     description="向绑定的 QQ 群发送指定页面的图片。")
 async def send_page_image(path: str = Body(..., embed=True), info: AuthSession = Depends(get_current_user)):
+    assert info.user_id is not None
+    user_info = await db.get_user(info.user_id)
+    assert user_info is not None
+    if user_info.last_send_time and (int(time.time()) - user_info.last_send_time) < config.send_interval_seconds:
+        raise HTTPException(status_code=429, detail=f"发送过于频繁，请 {config.send_interval_seconds - (int(time.time()) - user_info.last_send_time)}s 后再试")
+    await db.set_user_send(info.user_id)
     bot = get_bot()
     assert isinstance(bot, Bot)
     assert info.group_id is not None
@@ -227,24 +350,26 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
         page = await browser.newPage()
         
         # 访问页面
-        await page.goto(f"http://localhost{path}", waitUntil='networkidle2')
+        await page.goto(f"http://localhost", waitUntil='networkidle2')
         
         # 设置 localStorage 中的 token
-        await page.evaluateOnNewDocument(f"""
+        await page.evaluate(f"""
             localStorage.setItem('token', '{info.token}');
         """)
         
         # 重新加载页面以应用 token
-        await page.reload(waitUntil='networkidle2')
+        await page.goto(f"http://localhost{path}", waitUntil='networkidle2')
         
         # 等待页面完全加载（可选：等待特定元素）
         await page.waitForNavigation(waitUntil='networkidle2')
         
-        # 获取页面高度
-        height = await page.evaluate('document.documentElement.scrollHeight')
+        await page.setViewport({'width': 1000, 'height': 1000})
+
+        # 获取.main-container的高度
+        height = await page.evaluate('document.querySelector(".content").scrollHeight + 50')
         
         # 设置视口大小
-        await page.setViewport({'width': 1280, 'height': int(height)})
+        await page.setViewport({'width': 1000, 'height': int(height)})
         
         # 截图
         screenshot = await page.screenshot({'fullPage': True})
@@ -259,6 +384,7 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
         # 确保浏览器被关闭
         if browser:
             await browser.close()
+    return {}
 
 class MatchPWPlayerInfo(BaseModel):
     steamId: str = Field(..., description="玩家的 Steam ID")
@@ -269,10 +395,10 @@ class MatchPWPlayerInfo(BaseModel):
     kills: int = Field(..., description="击杀数")
     deaths: int = Field(..., description="死亡数")
     assists: int = Field(..., description="助攻数")
-    legacyScore: float = Field(..., description="玩家的底蕴分数")
+    legacyScore: float | None = Field(..., description="玩家的底蕴分数")
     pvpScore: float = Field(..., description="玩家的天梯分数")
     pvpScoreChange: float = Field(..., description="玩家的天梯分数变化")
-    pvpStar: int = Field(..., description="玩家的天梯星级")
+    pvpStars: int = Field(..., description="玩家的天梯星级")
 
 class MatchPWInfo(BaseModel):
     matchId: str = Field(..., description="比赛 ID")
@@ -283,8 +409,8 @@ class MatchPWInfo(BaseModel):
     mapName: str = Field(..., description="比赛地图")
     team1Score: int = Field(..., description="队伍 1 分数")
     team2Score: int = Field(..., description="队伍 2 分数")
-    team1LegacyScore: float = Field(..., description="队伍 1 底蕴均分")
-    team2LegacyScore: float = Field(..., description="队伍 2 底蕴均分")
+    team1LegacyScore: float | None = Field(..., description="队伍 1 底蕴均分")
+    team2LegacyScore: float | None = Field(..., description="队伍 2 底蕴均分")
     players: list[MatchPWPlayerInfo] = Field(..., description="参赛玩家信息列表")
 
 class MatchHistoryItem(BaseModel):
@@ -301,7 +427,7 @@ class MatchHistoryItem(BaseModel):
     we: float = Field(..., description="玩家 WE 值")
     pvpScore: float = Field(..., description="天梯分数")
     pvpScoreChange: float = Field(..., description="天梯分数变化")
-    legacyDiff: float = Field(..., description="底蕴分数变化")
+    legacyDiff: float | None = Field(..., description="底蕴分数变化")
 
 class MatchHistoryResponse(BaseModel):
     totCount: int = Field(..., description="总比赛数")
@@ -318,13 +444,12 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
     if not match_detail:
         raise HTTPException(status_code=404, detail="Match not found")
     match_extra = await db_val.get_match_extra(matchId)
-    assert match_extra is not None
     async def get_nickname(player: MatchStatsPW) -> str:
         base_info = await db_val.get_base_info(player.steamid)
         return base_info.name if base_info else "未知玩家"
-    async def get_legacy_score(player: MatchStatsPW) -> float:
+    async def get_legacy_score(player: MatchStatsPW) -> float | None:
         extra_info = await db_val.get_extra_info(player.steamid, timeStamp=player.timeStamp)
-        return extra_info.legacyScore if extra_info else float('nan')
+        return extra_info.legacyScore if extra_info else None
     return MatchPWInfo(
         matchId=matchId,
         timestamp=match_detail[0].timeStamp,
@@ -334,8 +459,8 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
         mapName=match_detail[0].mapName,
         team1Score=match_detail[0].score1,
         team2Score=match_detail[0].score2,
-        team1LegacyScore=match_extra.team1Legacy,
-        team2LegacyScore=match_extra.team2Legacy,
+        team1LegacyScore=match_extra.team1Legacy if match_extra else None,
+        team2LegacyScore=match_extra.team2Legacy if match_extra else None,
         players=[
             MatchPWPlayerInfo(
                 steamId=player.steamid,
@@ -349,7 +474,7 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
                 legacyScore=await get_legacy_score(player),
                 pvpScore=player.pvpScore,
                 pvpScoreChange=player.pvpScoreChange,
-                pvpStar=player.pvpStars
+                pvpStars=player.pvpStars
             ) for player in match_detail
         ]
     )
@@ -367,10 +492,10 @@ async def get_match_history(
     # 获取玩家的比赛历史
     match_records = await db_val.get_matches(steamId, timeType, offset=(page - 1) * 20, limit=20)
     total_count = await db_val.get_matches_count(steamId, timeType)
-    async def get_legacy_diff(player: MatchStatsPW) -> float:
+    async def get_legacy_diff(player: MatchStatsPW) -> float | None:
         extra_info = await db_val.get_match_extra(player.mid)
         if not extra_info:
-            return float("nan")
+            return None
         if player.team == 1:
             return extra_info.team1Legacy - extra_info.team2Legacy
         else:
@@ -720,6 +845,37 @@ async def get_rank_config(_ = Depends(get_current_user)):
         ))
     return RankConfigResponse(
         rankOptions=rank_options
+    )
+
+class UserQQItem(BaseModel):
+    qq: str = Field(..., description="玩家的 QQ 号")
+    qqNickname: str = Field(..., description="玩家的 QQ 昵称")
+    steamId: str = Field(..., description="玩家的 Steam ID")
+    nickname: str = Field(..., description="玩家昵称")
+
+class UserResponse(BaseModel):
+    users: list[UserQQItem] = Field(..., description="绑定用户列表")
+@app.post("/api/config/users",
+    response_model=UserResponse,
+    summary="获取绑定用户列表",
+    description="获取当前认证 Token 所在群组的绑定用户列表。"
+)
+async def get_bound_users(info: AuthSession = Depends(get_current_user)):
+    assert info.group_id is not None
+    qqs = await db_val.get_group_member(info.group_id)
+    users: list[UserQQItem] = [] 
+    for qq in qqs:
+        if steamid := await db_val.get_steamid(qq):
+            base_info = await db_val.get_base_info(steamid)
+            if base_info is not None:
+                users.append(UserQQItem(
+                    qq=qq,
+                    qqNickname=await get_user_name(qq),
+                    steamId=steamid,
+                    nickname=base_info.name
+                ))
+    return UserResponse(
+        users=users
     )
 
 class RankItem(BaseModel):

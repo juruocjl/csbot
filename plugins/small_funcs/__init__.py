@@ -8,9 +8,10 @@ from nonebot import logger
 
 require("allmsg")
 from ..allmsg import get_msg_status
+from ..utils import get_session
 
-get_pic_status = require("pic").get_pic_status
-get_session = require("utils").get_session
+require("pic")
+from ..pic import get_pic_status
 
 import time
 import psutil
