@@ -8,6 +8,7 @@ from nonebot import require
 
 import secrets
 import time
+import json
 import psutil
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -625,6 +626,13 @@ class BaseRatingDetail(BaseModel):
     pwRatingCtAvg: PlayerDetailItem = Field(..., description="CT方平均Rating")
     kastPerRound: PlayerDetailItem = Field(..., description="每回合KAST")
 
+# 历史天梯
+class LadderItem(BaseModel):
+    seasonId: str = Field(..., description="赛季")
+    pvpScore: int = Field(..., description="PVP分数")
+    pvpStars: int = Field(..., description="PVP星级")
+
+
 class PlayerDetailResponse(BaseModel):
     # 基础综合数据
     seasonId: str = Field(..., description="赛季")
@@ -633,6 +641,7 @@ class PlayerDetailResponse(BaseModel):
     pvpStars: int = Field(..., description="PVP星级")
     cnt: int = Field(..., description="比赛场次")
     winRate: PlayerDetailItem = Field(..., description="胜率")
+    ladderHistory: list[LadderItem] = Field(..., description="历史天梯记录")
     
     # 基础评分
     baseRating: BaseRatingDetail = Field(..., description="基础评分")
@@ -683,6 +692,14 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
         pvpStars=detail_info.pvpStars,
         cnt=detail_info.cnt,
         winRate=stats_data['winRate'],
+        ladderHistory=[
+            LadderItem(
+                seasonId=data['season'],
+                pvpScore=data['score'],
+                pvpStars=data['currSStars']
+            )
+            for data in json.loads(base_info.ladderScore)
+        ],
         baseRating=BaseRatingDetail(
             pwRating=stats_data['pwRating'],
             rws=stats_data['rws'],
