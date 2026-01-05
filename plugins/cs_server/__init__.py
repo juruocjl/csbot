@@ -701,7 +701,7 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
             LadderItem(
                 seasonId=data['season'],
                 pvpScore=data['score'],
-                pvpStars=data['currSStars']
+                pvpStars=data['currSStars'] if data['currSStars'] else 0
             )
             for data in json.loads(base_info.ladderScore)
         ],
