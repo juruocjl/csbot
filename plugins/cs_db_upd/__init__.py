@@ -626,33 +626,3 @@ class DataManager:
                     await session.merge(new_member)
   
 db = DataManager()
-
-qwqqwq = on_command("qwqqwq", permission=SUPERUSER, priority=5)
-
-@qwqqwq.handle()
-async def _(event):
-    stmt = select(SteamDetailInfo.steamid).distinct().where(SteamDetailInfo.pvpScore>2400).where(SteamDetailInfo.seasonId==lastSeasonId).where(SteamDetailInfo.pvpStars==0)
-    async with async_session_factory() as session:
-        result = await session.execute(stmt)
-        rows = result.scalars().all()
-        logger.info(f"共计 {len(rows)} 人")
-        for row in rows:
-            logger.info(f"is S: {row} ")
-            async with async_session_factory() as session:
-                async with session.begin():
-                    url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats/v2"
-                    header = {
-                        "appversion": "3.5.4.172",
-                        "token":config.cs_wmtoken
-                    }
-                    payload = {
-                        "mySteamId": config.cs_mysteam_id,
-                        "toSteamId": row,
-                        "csgoSeasonId": lastSeasonId,
-                    }
-                    async with get_session().post(url,headers=header,json=payload) as result:
-                        data = await result.json()
-                    if data["statusCode"] != 0:
-                        raise RuntimeError("上赛季爬取失败：" + data["errorMessage"])
-                    await db._insert_detail_info(data["data"], session)
-                    await asyncio.sleep(0.2)

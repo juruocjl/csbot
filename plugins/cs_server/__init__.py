@@ -35,6 +35,12 @@ security = HTTPBearer()
 
 config = get_plugin_config(Config)
 
+# 全局缓存配置
+from typing import Any
+SEASON_STATS_CACHE: dict[str, tuple[dict[str, tuple[float, float, float]], float]] = {}  # 格式: {seasonId: (global_stats, timestamp)}
+# global_stats 格式: {field_name: (min, max, avg)}
+CACHE_EXPIRE_TIME: int = 3600  # 缓存过期时间，单位为秒（1小时）
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
     
@@ -490,47 +496,21 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
     if not detail_info:
         raise HTTPException(status_code=404, detail="Player detail info not found")
     
-    # 获取所有玩家的详细信息用于计算统计数据
-    async with async_session_factory() as session:
-        stmt = select(SteamDetailInfo).where(SteamDetailInfo.seasonId == detail_info.seasonId)
-        result = await session.execute(stmt)
-        all_details = result.scalars().all()
+    # 获取或更新全局统计数据缓存
+    current_time = time.time()
+    if detail_info.seasonId in SEASON_STATS_CACHE:
+        global_stats, cached_time = SEASON_STATS_CACHE[detail_info.seasonId]
+        if current_time - cached_time >= CACHE_EXPIRE_TIME:
+            # 缓存已过期，重新计算
+            global_stats = await _calculate_global_stats(detail_info.seasonId)
+            SEASON_STATS_CACHE[detail_info.seasonId] = (global_stats, current_time)
+    else:
+        # 无缓存，计算并存储
+        global_stats = await _calculate_global_stats(detail_info.seasonId)
+        SEASON_STATS_CACHE[detail_info.seasonId] = (global_stats, current_time)
     
-    # 定义用于计算统计数据的字段
-    float_fields = [
-        'winRate', 'pwRating', 'rws', 'pwRatingTAvg', 'pwRatingCtAvg', 'kastPerRound',
-        'killsPerRound', 'killsPerWinRound', 'damagePerRound', 'damagePerRoundWin',
-        'roundsWithAKill', 'multiKillRoundsPercentage', 'we', 'pistolRoundRating',
-        'headshotRate', 'killTime', 'smHitRate', 'reactionTime', 'rapidStopRate',
-        'savedTeammatePerRound', 'tradeKillsPerRound', 'tradeKillsPercentage',
-        'assistKillsPercentage', 'damagePerKill', 'firstHurt', 'winAfterOpeningKill',
-        'firstSuccessRate', 'firstKill', 'firstRate', 'itemRate', 'utilityDamagePerRounds',
-        'flashAssistPerRound', 'flashbangFlashRate', 'timeOpponentFlashedPerRound',
-        'v1WinPercentage', 'clutchPointsPerRound', 'lastAlivePercentage',
-        'timeAlivePerRound', 'savesPerRoundLoss', 'sniperFirstKillPercentage',
-        'sniperKillsPercentage', 'sniperKillPerRound', 'roundsWithSniperKillsPercentage',
-        'sniperMultipleKillRoundPercentage'
-    ]
-    
-    # 为每个float字段计算统计数据
-    stats_data = {}
-    for field in float_fields:
-        values = [getattr(d, field) for d in all_details if hasattr(d, field) and getattr(d, field) is not None]
-        if values:
-            value = getattr(detail_info, field)
-            stats_data[field] = PlayerDetailItem(
-                value=value,
-                minValue=min(values),
-                maxValue=max(values),
-                avgValue=sum(values) / len(values)
-            )
-        else:
-            stats_data[field] = PlayerDetailItem(
-                value=getattr(detail_info, field, 0.0),
-                minValue=0.0,
-                maxValue=0.0,
-                avgValue=0.0
-            )
+    # 使用全局统计数据计算个人的 PlayerDetailItem
+    stats_data = _get_player_stats(detail_info, global_stats)
     
     return PlayerDetailResponse(
         seasonId=detail_info.seasonId,
@@ -605,6 +585,59 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
             sniperMultipleKillRoundPercentage=stats_data['sniperMultipleKillRoundPercentage']
         )
     )
+
+async def _calculate_global_stats(seasonId: str) -> dict[str, tuple[float, float, float]]:
+    """计算整个赛季的全局统计数据"""
+    from sqlalchemy import select
+    from ..cs_db_val import SteamDetailInfo
+    
+    async with async_session_factory() as session:
+        stmt = select(SteamDetailInfo).where(SteamDetailInfo.seasonId == seasonId)
+        result = await session.execute(stmt)
+        all_details = result.scalars().all()
+    
+    # 定义用于计算统计数据的字段
+    float_fields = [
+        'winRate', 'pwRating', 'rws', 'pwRatingTAvg', 'pwRatingCtAvg', 'kastPerRound',
+        'killsPerRound', 'killsPerWinRound', 'damagePerRound', 'damagePerRoundWin',
+        'roundsWithAKill', 'multiKillRoundsPercentage', 'we', 'pistolRoundRating',
+        'headshotRate', 'killTime', 'smHitRate', 'reactionTime', 'rapidStopRate',
+        'savedTeammatePerRound', 'tradeKillsPerRound', 'tradeKillsPercentage',
+        'assistKillsPercentage', 'damagePerKill', 'firstHurt', 'winAfterOpeningKill',
+        'firstSuccessRate', 'firstKill', 'firstRate', 'itemRate', 'utilityDamagePerRounds',
+        'flashAssistPerRound', 'flashbangFlashRate', 'timeOpponentFlashedPerRound',
+        'v1WinPercentage', 'clutchPointsPerRound', 'lastAlivePercentage',
+        'timeAlivePerRound', 'savesPerRoundLoss', 'sniperFirstKillPercentage',
+        'sniperKillsPercentage', 'sniperKillPerRound', 'roundsWithSniperKillsPercentage',
+        'sniperMultipleKillRoundPercentage'
+    ]
+    
+    # 计算全局统计数据：(min, max, avg)
+    global_stats: dict[str, tuple[float, float, float]] = {}
+    for field in float_fields:
+        values = [getattr(d, field) for d in all_details if hasattr(d, field) and getattr(d, field) is not None]
+        if values:
+            global_stats[field] = (min(values), max(values), sum(values) / len(values))
+        else:
+            global_stats[field] = (0.0, 0.0, 0.0)
+    
+    return global_stats
+
+def _get_player_stats(detail_info, global_stats: dict[str, tuple[float, float, float]]) -> dict[str, PlayerDetailItem]:
+    """从全局统计数据中获取个人的 PlayerDetailItem"""
+    stats_data: dict[str, PlayerDetailItem] = {}
+    
+    for field, (min_val, max_val, avg_val) in global_stats.items():
+        field_value = getattr(detail_info, field, 0.0)
+        
+        stats_data[field] = PlayerDetailItem(
+            value=field_value,
+            minValue=min_val,
+            maxValue=max_val,
+            avgValue=avg_val
+        )
+    
+    return stats_data
 
 
 
