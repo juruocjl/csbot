@@ -627,41 +627,17 @@ class DataManager:
   
 db = DataManager()
 
-qwqasdsa = on_command("db_update_all", permission=SUPERUSER)
+qwqqwq = on_command("qwqqwq", permission=SUPERUSER, priority=5)
 
-@qwqasdsa.handle()
-async def qwq():
+@qwqqwq.handle()
+async def _(event):
+    stmt = select(SteamDetailInfo.steamid).distinct().where(SteamDetailInfo.pvpScore>2400)
     async with async_session_factory() as session:
-        stmt = select(MatchStatsPW.steamid).distinct()
         result = await session.execute(stmt)
-        allids = list(result.scalars().all())
-    async with async_session_factory() as session:
-        logger.info(f"启动时更新数据，共有 {len(allids)} 个SteamID需要更新")
-        for i in range(len(allids)):
-            logger.info(f"启动时更新数据进度 {i+1}/{len(allids)} SteamID: {allids[i]}")
-            steamid = allids[i]
-            
-            try:
+        rows = result.scalars().all()
+        logger.info(f"共计 {len(rows)} 人")
+        for row in rows:
+            logger.info(f"is S: {row} ")
+            async with async_session_factory() as session:
                 async with session.begin():
-                    await db._update_stats_card(steamid, session, interval=100000000000)
-                await asyncio.sleep(0.5 + random.random())
-            except Exception as e:
-                logger.error(f"启动时更新数据失败 {steamid} {e}")
-
-            async with session.begin():
-                await db._update_extra_info(steamid, session)
-
-qwqdsadasd = on_command("db_update_matches", permission=SUPERUSER)
-@qwqdsadasd.handle()
-async def qwqdsadasd_f():
-    async with async_session_factory() as session:
-        stmt = select(MatchStatsPW.mid).distinct()
-        result = await session.execute(stmt)
-        allmids = list(result.scalars().all())
-    async with async_session_factory() as session:
-        logger.info(f"启动时更新比赛数据，共有 {len(allmids)} 个比赛需要更新")
-        for i in range(len(allmids)):
-            logger.info(f"启动时更新比赛数据进度 {i+1}/{len(allmids)} 比赛ID: {allmids[i]}")
-            mid = allmids[i]
-            async with session.begin():
-                await db._update_match_extra(mid, session)
+                    await db._update_stats_card(row, session, interval=0)
