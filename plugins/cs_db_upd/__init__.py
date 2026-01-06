@@ -40,6 +40,10 @@ config = get_plugin_config(Config)
 SeasonId = config.cs_season_id
 lastSeasonId = config.cs_last_season_id
 
+class TooFrequentError(Exception):
+    def __init__(self, wait_time: int):
+        self.wait_time = wait_time
+        super().__init__(f"操作过于频繁，请等待 {wait_time} 秒后再试。")
 
 class DataManager:
 
@@ -437,7 +441,7 @@ class DataManager:
         if result_info is not None:
             if time.time() - result_info.updateTime <= interval:
                 logger.warning(f"数据更新过于频繁 for SteamID: {steamid}")
-                raise RuntimeError(f"数据更新过于频繁，请 {interval - (time.time() - result_info.updateTime):.0f}s 后再试。")
+                raise TooFrequentError(int(interval - (time.time() - result_info.updateTime)))
             result_info.updateTime = int(time.time())
             await session.merge(result_info)
         else:
@@ -535,7 +539,7 @@ class DataManager:
         base_info = await db_val.get_base_info(steamid)
         assert base_info is not None
         if base_info.updateMatchTime + interval > time.time():
-            raise RuntimeError(f"比赛数据更新过于频繁，请 {base_info.updateMatchTime + interval - time.time():.0f}s 后再试。")
+            raise TooFrequentError(int(base_info.updateMatchTime + interval - time.time()))
         async with async_session_factory() as session:
             async with session.begin():
                 base_info.updateMatchTime = int(time.time())

@@ -8,6 +8,7 @@ from nonebot import require
 
 import secrets
 import time
+import re
 import json
 import psutil
 from fastapi import FastAPI, Body, HTTPException, Depends
@@ -24,6 +25,9 @@ require("cs_db_val")
 from ..cs_db_val import MatchStatsPW
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time, NoValueError
+require("cs_db_upd")
+from ..cs_db_upd import db as db_upd
+from ..cs_db_upd import TooFrequentError
 
 require("allmsg")
 from ..allmsg import get_msg_status
@@ -364,7 +368,7 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
         # 等待页面完全加载（可选：等待特定元素）
         await page.waitForNavigation(waitUntil='networkidle2')
         
-        await page.setViewport({'width': 1000, 'height': 1000})
+        await page.setViewport({'width': 1000, 'height': 100})
 
         # 获取.main-container的高度
         height = await page.evaluate('document.querySelector(".content").scrollHeight + 50')
@@ -826,6 +830,30 @@ def _get_player_stats(detail_info, global_stats: dict[str, tuple[float, float, f
     
     return stats_data
 
+class PlayerUpdateResponse(BaseModel):
+    nickname: str = Field(..., description="玩家昵称")
+    matchCount: int = Field(..., description="更新的比赛数量")
+    matchgpCount: int = Field(..., description="更新的官匹比赛数量")
+
+@app.post("/api/player/update",
+    response_model=PlayerUpdateResponse,
+    summary="更新玩家数据",
+    description="根据 Steam ID 更新玩家的数据。"
+)
+async def update_player_data(steamId: str = Body(..., embed=True), _ = Depends(get_current_user)):
+    if not re.match(r'^\d{17}$', steamId):
+        raise HTTPException(status_code=400, detail="不合法的 Steam ID 格式")
+    try:
+        res = await db_upd.update_stats(steamId)
+    except TooFrequentError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="获取失败: " + str(e))
+    return PlayerUpdateResponse(
+        nickname=res[0],
+        matchCount=res[1],
+        matchgpCount=res[2]
+    )
 
 class TimeResponse(BaseModel):
     timeTypes: list[str] = Field(..., description="支持的时间范围类型列表")
