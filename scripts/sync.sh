@@ -1,2 +1,2 @@
 #!/bin/bash
-rsync --include='imgs/***' --include='main.db' --include='*.log' --include='log/***' --include='main.db' --exclude='*' -avz ubuntu@clab:~/csbot/ .
+rsync --include='imgs/***' --include='*.log' --include='log/***'  --exclude='*' -avz ubuntu@clab:~/csbot/ .

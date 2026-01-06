@@ -113,6 +113,7 @@ async def fuduhelp_function():
 复读自己/使用poke5，第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为50""")
 
 def sigmoid_step(x, admin = False):
+    x = float(x)  # 确保 x 是 float 类型，处理 Decimal 等其他数值类型
     if admin:
         t = (x / 100 - 50) / 500.0
         return max(0, math.tanh(t))
