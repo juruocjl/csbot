@@ -6,6 +6,8 @@ from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot import require
 
+from sqlalchemy import text
+
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
@@ -69,10 +71,10 @@ sql = on_command("sql", priority=10, block=True, permission=SUPERUSER)
 async def pull_function():
     await pull.finish(git_pull())
 
-async def query(sql):
+async def query(sql: str):
     async with async_session_factory() as session:
         async with session.begin():
-            cursor = await session.execute(sql)
+            cursor = await session.execute(text(sql))
             return cursor.fetchall()
 
 @sql.handle()
