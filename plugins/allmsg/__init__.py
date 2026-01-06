@@ -43,7 +43,7 @@ class GroupMsg(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
     mid: Mapped[int] = mapped_column(Integer)
-    sid: Mapped[str] = mapped_column(String)
+    sid: Mapped[str] = mapped_column(String(50))
     timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
     data: Mapped[bytes] = mapped_column(LargeBinary) # 对应 BLOB 类型
 
@@ -51,7 +51,7 @@ class GroupMsg(Base):
 class ImgCacheInfo(Base):
     __tablename__ = "img_cache_info"
 
-    hash: Mapped[str] = mapped_column(String, primary_key=True)
+    hash: Mapped[str] = mapped_column(String(255), primary_key=True)
     count: Mapped[int] = mapped_column(Integer, default=0)
     valid: Mapped[bool] = mapped_column(Boolean, default=False)
 

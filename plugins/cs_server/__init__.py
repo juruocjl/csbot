@@ -62,8 +62,8 @@ class AuthSession(Base):
     # 短验证码，用于群内验证 (添加索引以加快查找)
     code: Mapped[str] = mapped_column(String(10), index=True)
     # 绑定的 QQ 号和群号 (验证后填写)
-    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    group_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    group_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # 创建时间 (用于计算过期)
     created_at: Mapped[int] = mapped_column(Integer)
     # 上一次使用时间
@@ -74,8 +74,8 @@ class AuthSession(Base):
 class UserInfo(Base):
     __tablename__ = "user_info"
     
-    user_id: Mapped[str] = mapped_column(String, primary_key=True)
-    nickname: Mapped[str] = mapped_column(String)
+    user_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    nickname: Mapped[str] = mapped_column(String(100))
     
     last_send_time: Mapped[int] = mapped_column(Integer, default=0)
     last_update_time: Mapped[int] = mapped_column(Integer, default=0)

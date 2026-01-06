@@ -44,7 +44,7 @@ config = get_plugin_config(Config)
 class AIMemory(Base):
     __tablename__ = "ai_mem"
 
-    gid: Mapped[str] = mapped_column(String, primary_key=True)
+    gid: Mapped[str] = mapped_column(String(20), primary_key=True)
     # 使用 Text 类型，因为 'mem' 看起来可能存储较长的文本或 JSON
     mem: Mapped[str] = mapped_column(Text)
 

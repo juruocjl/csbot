@@ -76,7 +76,7 @@ class StorageItem(Base):
     val: Mapped[str] = mapped_column(Text)
 
 
-engine = create_async_engine("sqlite+aiosqlite:///main.db")
+engine = create_async_engine(config.cs_database)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 class LocalStorage:

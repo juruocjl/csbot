@@ -52,15 +52,15 @@ except:
 
 class MemberGoods(Base):
     __tablename__ = "member_goods"
-    uid: Mapped[str] = mapped_column(String, primary_key=True)
-    marketHashName: Mapped[str] = mapped_column(String, primary_key=True)
+    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    marketHashName: Mapped[str] = mapped_column(String(500), primary_key=True)
 
 class GoodsInfo(Base):
     __tablename__ = "goods_info"
-    marketHashName: Mapped[str] = mapped_column(String, primary_key=True)
+    marketHashName: Mapped[str] = mapped_column(String(500), primary_key=True)
     timeStamp: Mapped[int] = mapped_column(Integer, primary_key=True)
     goodId: Mapped[int] = mapped_column(Integer)
-    name: Mapped[str] = mapped_column(String)
+    name: Mapped[str] = mapped_column(String(500))
     buffSellPrice: Mapped[int] = mapped_column(Integer)
     buffSellNum: Mapped[int] = mapped_column(Integer)
     yyypSellPrice: Mapped[int] = mapped_column(Integer)

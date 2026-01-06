@@ -23,7 +23,7 @@ from unicodedata import normalize
 import json
 import asyncio
 from pathlib import Path
-from sqlalchemy import String, Float, update, select
+from sqlalchemy import String, Float, Text, update, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .gen_win_matrix import gen_win_matrix
@@ -45,10 +45,10 @@ class MajorHW(Base):
     __tablename__ = "major_hw"
 
     # 复合主键：给两个字段都加上 primary_key=True
-    uid: Mapped[str] = mapped_column(String, primary_key=True)
-    stage: Mapped[str] = mapped_column(String, primary_key=True)
+    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(50), primary_key=True)
     
-    teams: Mapped[str] = mapped_column(String)
+    teams: Mapped[str] = mapped_column(Text)
     winrate: Mapped[float] = mapped_column(Float)
     expval: Mapped[float] = mapped_column(Float)
 

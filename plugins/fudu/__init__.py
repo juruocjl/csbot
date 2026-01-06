@@ -38,7 +38,7 @@ class FuduPoint(Base):
     __tablename__ = "fudu_points"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
-    uid: Mapped[str] = mapped_column(String)
+    uid: Mapped[str] = mapped_column(String(50))
     timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
     point: Mapped[int] = mapped_column(Integer)
 

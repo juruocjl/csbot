@@ -9,7 +9,7 @@ require("utils")
 from ..utils import async_session_factory, Base
 from ..utils import get_today_start_timestamp
 
-from sqlalchemy import String, Float, Integer, Text, select, delete, func
+from sqlalchemy import String, Float, Integer, BigInteger, Text, select, delete, func
 from sqlalchemy.orm import Mapped, mapped_column
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -37,25 +37,25 @@ lastSeasonId = config.cs_last_season_id
 class GroupMember(Base):
     __tablename__ = "group_members"
 
-    gid: Mapped[str] = mapped_column(String, primary_key=True)
-    uid: Mapped[str] = mapped_column(String, primary_key=True)
+    gid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
 
 class MemberSteamID(Base):
     __tablename__ = "members_steamid"
 
-    uid: Mapped[str] = mapped_column(String, primary_key=True)
-    steamid: Mapped[str] = mapped_column(String)
+    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    steamid: Mapped[str] = mapped_column(String(20))
 
 class MatchStatsPW(Base):
     __tablename__ = "matches"
 
     # --- 复合主键 ---
-    mid: Mapped[str] = mapped_column(String, primary_key=True)
-    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+    mid: Mapped[str] = mapped_column(String(50), primary_key=True)
+    steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
 
     # --- 赛季与地图 ---
-    seasonId: Mapped[str] = mapped_column(String)
-    mapName: Mapped[str] = mapped_column(String)
+    seasonId: Mapped[str] = mapped_column(String(20))
+    mapName: Mapped[str] = mapped_column(String(50))
     
     # --- 队伍与比分 ---
     team: Mapped[int] = mapped_column(Integer)
@@ -73,7 +73,7 @@ class MatchStatsPW(Base):
     death: Mapped[int] = mapped_column(Integer)
     assist: Mapped[int] = mapped_column(Integer)
     duration: Mapped[int] = mapped_column(Integer)
-    mode: Mapped[str] = mapped_column(String)
+    mode: Mapped[str] = mapped_column(String(100))
     
     # --- PVP/完美特有数据 ---
     pvpScore: Mapped[int] = mapped_column(Integer)
@@ -113,7 +113,7 @@ class MatchStatsPW(Base):
     adpr: Mapped[float] = mapped_column(Float) 
     rws: Mapped[float] = mapped_column(Float)
     
-    teamId: Mapped[int] = mapped_column(Integer)
+    teamId: Mapped[int] = mapped_column(BigInteger)
     throwsCnt: Mapped[int] = mapped_column(Integer)
     snipeNum: Mapped[int] = mapped_column(Integer)
     firstDeath: Mapped[int] = mapped_column(Integer)
@@ -121,7 +121,7 @@ class MatchStatsPW(Base):
 class MatchStatsPWExtra(Base):
     __tablename__ = "matches_extra"
 
-    mid: Mapped[str] = mapped_column(String, primary_key=True)
+    mid: Mapped[str] = mapped_column(String(50), primary_key=True)
 
     team1Legacy: Mapped[float] = mapped_column(Float)
     team2Legacy: Mapped[float] = mapped_column(Float)
@@ -130,17 +130,17 @@ class MatchStatsGP(Base):
     __tablename__ = "matches_gp"
 
     # --- 复合主键 ---
-    mid: Mapped[str] = mapped_column(String, primary_key=True)
-    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+    mid: Mapped[str] = mapped_column(String(50), primary_key=True)
+    steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
 
     # --- 基础信息 ---
-    mapName: Mapped[str] = mapped_column(String)
+    mapName: Mapped[str] = mapped_column(String(50))
     team: Mapped[int] = mapped_column(Integer)
     winTeam: Mapped[int] = mapped_column(Integer)
     score1: Mapped[int] = mapped_column(Integer)
     score2: Mapped[int] = mapped_column(Integer)
     timeStamp: Mapped[int] = mapped_column(Integer)
-    mode: Mapped[str] = mapped_column(String)
+    mode: Mapped[str] = mapped_column(String(100))
     duration: Mapped[int] = mapped_column(Integer)
     
     # --- 击杀/死亡数据 ---
@@ -194,15 +194,15 @@ class SteamBaseInfo(Base):
     __tablename__ = "steamid_baseinfo_v2"
 
     # 主键
-    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+    steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
     
     # 更新信息
     updateTime: Mapped[int] = mapped_column(Integer)
     # 比赛更新信息
     updateMatchTime: Mapped[int] = mapped_column(Integer)
     # 基础信息
-    avatarlink: Mapped[str] = mapped_column(String)
-    name: Mapped[str] = mapped_column(String)
+    avatarlink: Mapped[str] = mapped_column(String(500))
+    name: Mapped[str] = mapped_column(String(100))
     ladderScore: Mapped[str] = mapped_column(Text)
     # 格式 [{"season": "S?", "currSStars": 0, "score": 0, "currSLevel": 0, "matchCount": 0, "startTime": "2020-07-06 00:00:00"}]
     lasttime: Mapped[int] = mapped_column(Integer)
@@ -211,8 +211,8 @@ class SteamDetailInfo(Base):
     __tablename__ = "steam_detail_info"
 
     # --- 复合主键 ---
-    steamid: Mapped[str] = mapped_column(String, primary_key=True)
-    seasonId: Mapped[str] = mapped_column(String, primary_key=True)
+    steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    seasonId: Mapped[str] = mapped_column(String(20), primary_key=True)
 
     # --- 基础综合数据 ---
     pvpScore: Mapped[int] = mapped_column(Integer)
@@ -290,7 +290,7 @@ class SteamDetailInfo(Base):
 class SteamExtraInfo(Base):
     __tablename__ = "steam_extra_info"
 
-    steamid: Mapped[str] = mapped_column(String, primary_key=True)
+    steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
     timeStamp: Mapped[int] = mapped_column(Integer, primary_key=True)
 
     legacyScore: Mapped[float] = mapped_column(Float)
@@ -343,13 +343,13 @@ def get_time_sql(time_type: str) -> str:
     elif time_type == "本周":
         return f"({int(time.time()) - 7 * 24 * 3600} <= timeStamp)"
     elif time_type == "本赛季":
-        return f"(seasonId == '{SeasonId}')"
+        return f"(seasonId = '{SeasonId}')"
     elif time_type == "两赛季":
-        return f"(seasonId == '{SeasonId}' or seasonId == '{lastSeasonId}')"
+        return f"(seasonId = '{SeasonId}' or seasonId = '{lastSeasonId}')"
     elif time_type == "上赛季":
-        return f"(seasonId == '{lastSeasonId}')"
+        return f"(seasonId = '{lastSeasonId}')"
     elif time_type == "全部":
-        return f"( 1 == 1 )"
+        return f"( 1 = 1 )"
     else:
         raise ValueError("err time")
 

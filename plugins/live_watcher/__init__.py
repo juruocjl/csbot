@@ -32,7 +32,7 @@ config = get_plugin_config(Config)
 class LiveStatus(Base):
     __tablename__ = "live_status"
 
-    liveid: Mapped[str] = mapped_column(String, primary_key=True)
+    liveid: Mapped[str] = mapped_column(String(50), primary_key=True)
     islive: Mapped[int] = mapped_column(Integer)
 
 class DataManager:

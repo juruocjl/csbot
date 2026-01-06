@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.9, <4.0"
 dependencies = [
     "aiohttp>=3.13.2",
+    "aiomysql>=0.3.2",
     "bs4>=0.0.2",
+    "cryptography>=46.0.3",
     "curl-cffi>=0.13.0",
     "emoji>=2.15.0",
     "emojiswitch>=0.0.3",
@@ -28,6 +30,7 @@ dependencies = [
     "openai>=2.6.1",
     "pip>=25.3",
     "psutil>=7.1.2",
+    "pymysql>=1.1.2",
     "pyppeteer>=2.0.0",
     "ts3>=2.0.0b2",
     "types-tqdm>=4.67.0.20250809",
