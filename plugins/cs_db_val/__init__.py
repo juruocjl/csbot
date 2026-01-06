@@ -1185,7 +1185,7 @@ async def get_var_adr(steamid: str, time_type: str) -> tuple[float, int]:
 async def get_benefit(steamid: str, time_type: str) -> tuple[float, int]:
     async with async_session_factory() as session:
         is_win = case((MatchStatsPW.winTeam == MatchStatsPW.team, 1), else_=0)
-        expected_win = func.max(0, (MatchStatsPW.we - 2.29) / (16 - 2.29))
+        expected_win = func.greatest(0, (MatchStatsPW.we - 2.29) / (16 - 2.29))
         
         stmt = (
             select(
