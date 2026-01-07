@@ -767,7 +767,6 @@ async def get_legacy_diff(steamid: str, time_type: str) -> tuple[float, int]:
             .join(MatchStatsPWExtra, MatchStatsPW.mid == MatchStatsPWExtra.mid)
             .where(*get_ladder_filter(steamid, time_type))
         )
-        print(stmt.compile(compile_kwargs={"literal_binds": True}))
         res = (await session.execute(stmt)).one()
         print(res)
         if res[1]:
@@ -844,7 +843,7 @@ async def get_hsrate(steamid: str, time_type: str) -> tuple[float, int]:
         row = (await session.execute(stmt)).one()
         # row: (总爆头, 总击杀, 场次)
         if row[2] > 0 and row[1] and row[1] > 0:
-            return (row[0] / row[1], row[2])
+            return (int(row[0]) / int(row[1]), row[2])
     raise NoValueError()
 
 @db.register("1v1", "1v1胜率", "本赛季", None, True, Fix(0), "p0")
@@ -1033,7 +1032,7 @@ async def get_rpek(steamid: str, time_type: str) -> tuple[float, int]:
         )
         row = (await session.execute(stmt)).one()
         if row[2] > 0 and row[1] > 0:
-            return (float(row[0]) / row[1], row[2])
+            return (float(row[0]) / int(row[1]), row[2])
     raise NoValueError()
 
 @db.register("回均首死", "平均每回合首死", "本赛季", valid_time, True, MinAdd(-0.01), "d2")
@@ -1049,7 +1048,7 @@ async def get_rpfd(steamid: str, time_type: str) -> tuple[float, int]:
         )
         row = (await session.execute(stmt)).one()
         if row[2] > 0 and row[1] > 0:
-            return (float(row[0]) / row[1], row[2])
+            return (float(row[0]) / int(row[1]), row[2])
     raise NoValueError()
 
 @db.register("回均狙杀", "平均每回合狙杀", "本赛季", valid_time, True, MinAdd(-0.01), "d2")
@@ -1065,7 +1064,7 @@ async def get_rpsn(steamid: str, time_type: str) -> tuple[float, int]:
         )
         row = (await session.execute(stmt)).one()
         if row[2] > 0 and row[1] > 0:
-            return (float(row[0]) / row[1], row[2])
+            return (float(row[0]) / int(row[1]), row[2])
     raise NoValueError()
 
 @db.register("多杀", "多杀回合占比", "本赛季", valid_time, True, MinAdd(-0.01), "p0")
@@ -1081,7 +1080,7 @@ async def get_rpmk(steamid: str, time_type: str) -> tuple[float, int]:
         )
         row = (await session.execute(stmt)).one()
         if row[2] > 0 and row[1] > 0:
-            return (float(row[0]) / row[1], row[2])
+            return (float(row[0]) / int(row[1]), row[2])
     raise NoValueError()
 
 @db.register("内鬼", "场均闪白队友", "本赛季", valid_time, True, MinAdd(-0.5), "d1")
@@ -1134,7 +1133,7 @@ async def get_rpbg(steamid: str, time_type: str) -> tuple[float, int]:
         )
         row = (await session.execute(stmt)).one()
         if row[3] > 0 and row[2] > 0:
-            return ((float(row[0]) - float(row[1])) / row[2], row[3])
+            return ((float(row[0]) - float(row[1])) / int(row[2]), row[3])
     raise NoValueError()
 
 @db.register("方差rt", "rt方差", "两赛季", valid_time, True, Fix(0) , "d2")
@@ -1315,7 +1314,7 @@ async def get_gp_rpek(steamid: str, time_type: str) -> tuple[float, int]:
             # SQL SUM 可能返回 None，转为 0.0 安全处理
             tot_ek = row[0] if row[0] else 0
             tot_rounds = row[1]
-            return (tot_ek / tot_rounds, row[2])
+            return (int(tot_ek) / int(tot_rounds), row[2])
     raise NoValueError()
 
 @db.register("gp回均首死", "官匹平均每回合首死", "全部", gp_time, True, MinAdd(-0.01), "d2")
@@ -1336,7 +1335,7 @@ async def get_gp_rpfd(steamid: str, time_type: str) -> tuple[float, int]:
         if row[2] > 0 and row[1] > 0:
             tot_fd = row[0] if row[0] else 0
             tot_rounds = row[1]
-            return (tot_fd / tot_rounds, row[2])
+            return (int(tot_fd) / int(tot_rounds), row[2])
     raise NoValueError()
 
 @db.register("gp回均狙杀", "官匹平均每回合狙杀", "全部", gp_time, True, MinAdd(-0.01), "d2")
@@ -1357,7 +1356,7 @@ async def get_gp_rpsn(steamid: str, time_type: str) -> tuple[float, int]:
         if row[2] > 0 and row[1] > 0:
             tot_awp = row[0] if row[0] else 0
             tot_rounds = row[1]
-            return (tot_awp / tot_rounds, row[2])
+            return (int(tot_awp) / int(tot_rounds), row[2])
     raise NoValueError()
 
 @db.register("gp白给", "官匹平均每回合首杀-首死", "全部", gp_time, False, ZeroIn(-0.01), "d2")
@@ -1378,7 +1377,7 @@ async def get_gp_rpbg(steamid: str, time_type: str) -> tuple[float, int]:
         if row[2] > 0 and row[1] > 0:
             diff = row[0] if row[0] else 0
             tot_rounds = row[1]
-            return (diff / tot_rounds, row[2])
+            return (int(diff) / int(tot_rounds), row[2])
     raise NoValueError()
 
 @db.register("gp击杀", "官匹场均击杀", "全部", gp_time, True, MinAdd(-0.1), "d2")

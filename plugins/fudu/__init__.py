@@ -63,7 +63,7 @@ class DataManager:
             )
             result = await session.execute(stmt)
             total = result.scalar() # scalar() 获取第一行第一列
-            return total if total is not None else 0
+            return int(total) if total else 0
 
     async def get_zero_point(self, uid: str, day: int = 0) -> int:
         starttime = get_today_start_timestamp(refreshtime=86100) - day * 86400
