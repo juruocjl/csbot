@@ -374,12 +374,12 @@ class DataManager:
             
             # 执行 Upsert (存在则更新，不存在则插入)
             await session.merge(stats_entry)
-
-            try:
-                await self._update_stats_card(player['playerId'], session)
-                await self._update_extra_info(player['playerId'], session)
-            except:
-                pass
+            if not already_in_db:
+                try:
+                    await self._update_stats_card(player['playerId'], session)
+                    await self._update_extra_info(player['playerId'], session)
+                except:
+                    pass
         await self._update_match_gp_extra(mid, session)
         await self._set_match_gp_extra(mid,
                 int(time.time() + (random.random() + 1) * 80000 * math.pow(2, extra_info.fetchCount)),
