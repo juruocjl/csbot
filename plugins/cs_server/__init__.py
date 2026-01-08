@@ -14,15 +14,16 @@ import psutil
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy import String, Integer, Boolean, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import select
 from pydantic import BaseModel, Field
 from pyppeteer import launch
 
 require("utils")
-from ..utils import Base, async_session_factory
+from ..utils import async_session_factory
+require("models")
+from ..models import AuthSession, UserInfo
+from ..models import MatchStatsPW, MatchStatsGP
 require("cs_db_val")
-from ..cs_db_val import MatchStatsPW, MatchStatsGP
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time, gp_time, NoValueError
 require("cs_db_upd")
@@ -53,32 +54,6 @@ from typing import Any
 SEASON_STATS_CACHE: dict[str, tuple[dict[str, tuple[float, float, float]], float]] = {}  # 格式: {seasonId: (global_stats, timestamp)}
 # global_stats 格式: {field_name: (min, max, avg)}
 CACHE_EXPIRE_TIME: int = 3600  # 缓存过期时间，单位为秒（1小时）
-
-class AuthSession(Base):
-    __tablename__ = "auth_sessions"
-    
-    # 长 Token，用于 API 鉴权 (主键)
-    token: Mapped[str] = mapped_column(String(64), primary_key=True)
-    # 短验证码，用于群内验证 (添加索引以加快查找)
-    code: Mapped[str] = mapped_column(String(10), index=True)
-    # 绑定的 QQ 号和群号 (验证后填写)
-    user_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    group_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    # 创建时间 (用于计算过期)
-    created_at: Mapped[int] = mapped_column(Integer)
-    # 上一次使用时间
-    last_used_at: Mapped[int] = mapped_column(Integer, default=0)
-    # 是否已验证
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
-
-class UserInfo(Base):
-    __tablename__ = "user_info"
-    
-    user_id: Mapped[str] = mapped_column(String(20), primary_key=True)
-    nickname: Mapped[str] = mapped_column(String(100))
-    
-    last_send_time: Mapped[int] = mapped_column(Integer, default=0)
-    last_update_time: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class DataMannager:

@@ -18,29 +18,24 @@ require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import NoValueError
 
+require("models")
+from ..models import FuduPoint
+
 require("utils")
 from ..utils import local_storage
-from ..utils import Base, async_session_factory
-from ..utils import get_today_start_timestamp, get_session, getcard
+from ..utils import async_session_factory
+from ..utils import get_today_start_timestamp, getcard
 
 import math
 import random
 import time
 from pathlib import Path
-from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import select, func
 import json
 import asyncio
 from .config import Config
 
 
-class FuduPoint(Base):
-    __tablename__ = "fudu_points"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
-    uid: Mapped[str] = mapped_column(String(50))
-    timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
-    point: Mapped[int] = mapped_column(Integer)
 
 
 class DataManager:

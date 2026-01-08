@@ -2,13 +2,10 @@ from nonebot import get_plugin_config
 from nonebot import get_driver
 from nonebot.adapters import Bot
 from nonebot import logger
+from nonebot import require
 
 from typing import overload
-
-from sqlalchemy import String, Text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass, Mapped, mapped_column
-
 import datetime
 import time
 import aiohttp
@@ -16,8 +13,13 @@ import os
 from pyppeteer import launch
 import asyncio
 from pathlib import Path
+from alembic.runtime.migration import MigrationContext
+from alembic.autogenerate import compare_metadata
 
 from nonebot.plugin import PluginMetadata
+
+require("models")
+from ..models import StorageItem, Base
 
 from .config import Config
 
@@ -66,14 +68,6 @@ def output(val, format):
     elif format.startswith("p"):
         return f"{val * 100: .{int(format[1:])}f}%"
 
-class Base(MappedAsDataclass, DeclarativeBase):
-    pass
-
-class StorageItem(Base):
-    __tablename__ = "local_storage"
-
-    key: Mapped[str] = mapped_column(String(255), primary_key=True)
-    val: Mapped[str] = mapped_column(Text)
 
 
 engine = create_async_engine(config.cs_database)
@@ -107,9 +101,32 @@ local_storage = LocalStorage()
 async def init_session():
     global session
     session = aiohttp.ClientSession()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("表结构初始化完成！")
+
+    logger.info("正在检查数据库结构与模型定义是否一致...")
+    
+    # 定义同步检查函数
+    def check_diff(connection):
+        # 配置迁移上下文
+        opts = {
+            'compare_type': True,  # 检查字段类型改变
+            'compare_server_default': True, # 检查默认值改变
+        }
+        mc = MigrationContext.configure(connection, opts=opts)
+        
+        # 执行对比：返回差异列表
+        diff = compare_metadata(mc, Base.metadata)
+        return diff
+
+
+    async with engine.connect() as conn:
+        # 运行同步对比逻辑
+        diff = await conn.run_sync(check_diff)
+
+    if diff:
+        logger.warning("!!! 检测到数据库结构变更 !!!")
+        raise RuntimeError("数据库结构与代码模型不一致，已停止启动！")
+    else:
+        logger.success("数据库结构一致，继续启动。")
 
 def get_session() -> aiohttp.ClientSession:
     global session

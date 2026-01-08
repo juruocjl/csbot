@@ -1,16 +1,20 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, GroupMessageEvent
-from nonebot import on_command, on_message, on_notice
+from nonebot import on_command, on_message
 from nonebot import logger
 from nonebot import require
 from nonebot.adapters.onebot.v11 import Bot
 
 require("utils")
 from ..utils import getcard
-from ..utils import async_session_factory, Base
+from ..utils import async_session_factory
 from ..utils import get_session, get_today_start_timestamp
 from ..utils import local_storage
+
+require("models")
+from ..models import GroupMsg, ImgCacheInfo
+
 
 from .config import Config
 
@@ -37,23 +41,6 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-
-class GroupMsg(Base):
-    __tablename__ = "groupmsg"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
-    mid: Mapped[int] = mapped_column(Integer)
-    sid: Mapped[str] = mapped_column(String(50))
-    timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
-    data: Mapped[bytes] = mapped_column(LargeBinary) # 对应 BLOB 类型
-
-
-class ImgCacheInfo(Base):
-    __tablename__ = "img_cache_info"
-
-    hash: Mapped[str] = mapped_column(String(255), primary_key=True)
-    count: Mapped[int] = mapped_column(Integer, default=0)
-    valid: Mapped[bool] = mapped_column(Boolean, default=False)
 
 class DataManager:
     async def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes):

@@ -21,11 +21,13 @@ scheduler = require("nonebot_plugin_apscheduler").scheduler
 
 require("utils")
 from ..utils import goods_dir
-from ..utils import async_session_factory, Base
+from ..utils import async_session_factory
 from ..utils import get_session, path_to_file_url, screenshot_html_to_png
 
-from sqlalchemy import String, Integer, select, desc, asc
-from sqlalchemy.orm import Mapped, mapped_column
+require("models")
+from ..models import GoodsInfo, MemberGoods
+
+from sqlalchemy import select
 
 __plugin_meta__ = PluginMetadata(
     name="market",
@@ -49,24 +51,6 @@ try:
 except:
     logger.error("Bind csqaq api fail")
 
-
-class MemberGoods(Base):
-    __tablename__ = "member_goods"
-    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
-    marketHashName: Mapped[str] = mapped_column(String(500), primary_key=True)
-
-class GoodsInfo(Base):
-    __tablename__ = "goods_info"
-    marketHashName: Mapped[str] = mapped_column(String(500), primary_key=True)
-    timeStamp: Mapped[int] = mapped_column(Integer, primary_key=True)
-    goodId: Mapped[int] = mapped_column(Integer)
-    name: Mapped[str] = mapped_column(String(500))
-    buffSellPrice: Mapped[int] = mapped_column(Integer)
-    buffSellNum: Mapped[int] = mapped_column(Integer)
-    yyypSellPrice: Mapped[int] = mapped_column(Integer)
-    yyypSellNum: Mapped[int] = mapped_column(Integer)
-    steamSellPrice: Mapped[int] = mapped_column(Integer)
-    steamSellNum: Mapped[int] = mapped_column(Integer)
 
 class DataManager:
     def __init__(self):

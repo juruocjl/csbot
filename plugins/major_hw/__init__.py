@@ -9,12 +9,11 @@ from nonebot import on_command
 from nonebot import require
 from nonebot import logger
 
-require("nonebot_plugin_orm")
-from nonebot_plugin_orm import AsyncSession
+require("models")
+from ..models import MajorHW
 
 require("utils")
-
-from ..utils import async_session_factory, Base
+from ..utils import async_session_factory
 from ..utils import local_storage
 from ..utils import getcard
 
@@ -23,8 +22,7 @@ from unicodedata import normalize
 import json
 import asyncio
 from pathlib import Path
-from sqlalchemy import String, Float, Text, update, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import update, select
 
 from .gen_win_matrix import gen_win_matrix
 from .simulate import simulate
@@ -41,16 +39,6 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-class MajorHW(Base):
-    __tablename__ = "major_hw"
-
-    # 复合主键：给两个字段都加上 primary_key=True
-    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
-    stage: Mapped[str] = mapped_column(String(50), primary_key=True)
-    
-    teams: Mapped[str] = mapped_column(Text)
-    winrate: Mapped[float] = mapped_column(Float)
-    expval: Mapped[float] = mapped_column(Float)
 
 class DataManager:
     async def add_hw(self, uid: str, stage: str, teams: str):

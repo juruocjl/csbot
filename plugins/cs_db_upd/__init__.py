@@ -11,8 +11,9 @@ from ..utils import avatar_dir
 from ..utils import async_session_factory
 from ..utils import get_session
 
+require("models")
+from ..models import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, GroupMember
 require("cs_db_val")
-from ..cs_db_val import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, GroupMember
 from ..cs_db_val import db as db_val
 
 from sqlalchemy import select, delete, func

@@ -7,16 +7,16 @@ from nonebot import logger
 
 import asyncio
 import re
-from sqlalchemy import String, Integer
-from sqlalchemy.orm import Mapped, mapped_column
 
-scheduler = require("nonebot_plugin_apscheduler").scheduler
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
+from ..utils import async_session_factory
+from ..utils import get_session
 
-from ..utils import async_session_factory, Base
-
-get_session = require("utils").get_session
+require("models")
+from ..models import LiveStatus
 
 from .config import Config
 
@@ -29,11 +29,6 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-class LiveStatus(Base):
-    __tablename__ = "live_status"
-
-    liveid: Mapped[str] = mapped_column(String(50), primary_key=True)
-    islive: Mapped[int] = mapped_column(Integer)
 
 class DataManager:
     async def get_live_status(self, liveid: str) -> int:

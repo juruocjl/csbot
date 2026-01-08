@@ -9,13 +9,16 @@ from nonebot.params import CommandArg
 from nonebot import logger
 
 require("utils")
-from ..utils import Base, async_session_factory
+from ..utils import async_session_factory
+
+require("models")
+from ..models import AIMemory, MatchStatsPW
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time,valid_rank
 from ..cs_db_val import NoValueError
-from ..cs_db_val import MatchStatsPW, get_ladder_filter
+from ..cs_db_val import get_ladder_filter
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageFunctionToolCall
@@ -24,10 +27,7 @@ import json
 from fuzzywuzzy import process
 import os
 from datetime import datetime
-from sqlalchemy import select, func, text, or_, case
-from sqlalchemy import String, Text
-from sqlalchemy.orm import Mapped, mapped_column
-import re
+from sqlalchemy import select, func, case
 import time
 
 from .config import Config
@@ -40,13 +40,6 @@ __plugin_meta__ = PluginMetadata(
 )
 
 config = get_plugin_config(Config)
-
-class AIMemory(Base):
-    __tablename__ = "ai_mem"
-
-    gid: Mapped[str] = mapped_column(String(20), primary_key=True)
-    # 使用 Text 类型，因为 'mem' 看起来可能存储较长的文本或 JSON
-    mem: Mapped[str] = mapped_column(Text)
 
 class DataManager:
 
