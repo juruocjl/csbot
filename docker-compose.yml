@@ -24,8 +24,8 @@ services:
       - "80:80"
     volumes:
       - ./assets/default.conf:/etc/nginx/conf.d/default.conf
-      - ./imgs/:/usr/share/nginx/imgs/
-      - ../csbot-front/dist:/usr/share/nginx/html
+      - ./imgs:/usr/share/nginx/imgs/
+      - ./dist:/usr/share/nginx/html
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
