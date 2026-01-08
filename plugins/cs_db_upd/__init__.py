@@ -343,7 +343,7 @@ class DataManager:
                 await self._update_extra_info(player['playerId'], session)
             except:
                 pass
-
+        await self._update_match_gp_extra(mid, session)
         logger.info(f"update_matchgp {mid} success")
         return 1
 
