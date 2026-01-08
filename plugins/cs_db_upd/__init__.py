@@ -285,7 +285,7 @@ class DataManager:
             if completed:
                 logger.info(f"update_matchgp {mid} in db")
                 return 0
-            elif time.time() > extra_info.nextUpdateTime:
+            elif time.time() < extra_info.nextUpdateTime:
                 logger.info(f"update_matchgp {mid} too frequent, skipped")
                 return 0
             else:
