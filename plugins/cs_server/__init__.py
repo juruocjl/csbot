@@ -614,6 +614,8 @@ async def get_match_gp_history(
         extra_info = await db_val.get_match_gp_extra(player.mid)
         if not extra_info:
             return None
+        if not extra_info.team1Legacy or not extra_info.team2Legacy:
+            return None
         if player.team == 1:
             return extra_info.team1Legacy - extra_info.team2Legacy
         else:
