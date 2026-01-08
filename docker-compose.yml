@@ -34,6 +34,9 @@ services:
     ports:
       - 6099:6099
     restart: unless-stopped
+    volumes:
+      - ./napcat/config:/app/napcat/config
+      - ./ntqq:/app/.config/QQ
     extra_hosts:
       - "host.docker.internal:host-gateway"
   cloudflared:
