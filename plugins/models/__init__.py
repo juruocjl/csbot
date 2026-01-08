@@ -205,9 +205,6 @@ class MatchStatsGPExtra(Base):
     team1Legacy: Mapped[float | None] = mapped_column(Float, nullable=True)
     team2Legacy: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    
-
-
 # Steam 用户基础信息
 class SteamBaseInfo(Base):
     __tablename__ = "steamid_baseinfo_v2"

@@ -564,6 +564,8 @@ class DataManager:
                     await self._update_stats_card(steamid, session)
                 async with session.begin():
                     await self._update_extra_info(steamid, session)
+        except TooFrequentError as e:
+            pass
         except RuntimeError as e:
             logger.warning(f"更新数据失败 {steamid} {e}")
         base_info = await db_val.get_base_info(steamid)
