@@ -2,7 +2,7 @@ services:
   db:
     image: mysql:8.0
     container_name: csbot-database
-    restart: always
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: csbot
@@ -13,13 +13,13 @@ services:
     command: --default-authentication-plugin=mysql_native_password
   adminer:
     image: adminer
-    restart: always
+    restart: unless-stopped
     ports:
       - "8081:8080" # 这里我们用 8081 端口
   nginx:
     image: nginx:alpine
     container_name: csbot-nginx
-    restart: always
+    restart: unless-stopped
     ports:
       - "80:80"
     volumes:
@@ -28,7 +28,14 @@ services:
       - ./dist:/usr/share/nginx/html
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: csbot-napcat
+    ports:
+      - 6099:6099
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: csbot-tunnel
