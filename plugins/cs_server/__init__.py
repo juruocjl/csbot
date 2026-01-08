@@ -22,7 +22,7 @@ from pyppeteer import launch
 require("utils")
 from ..utils import Base, async_session_factory
 require("cs_db_val")
-from ..cs_db_val import MatchStatsPW
+from ..cs_db_val import MatchStatsPW, MatchStatsGP
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time, gp_time, NoValueError
 require("cs_db_upd")
@@ -423,27 +423,6 @@ class MatchPWInfo(BaseModel):
     team2LegacyScore: float | None = Field(..., description="队伍 2 底蕴均分")
     players: list[MatchPWPlayerInfo] = Field(..., description="参赛玩家信息列表")
 
-class MatchHistoryItem(BaseModel):
-    matchId: str = Field(..., description="比赛 ID")
-    timeStamp: int = Field(..., description="比赛时间戳")
-    season: str = Field(..., description="赛季")
-    mode: str = Field(..., description="比赛模式")
-    mapName: str = Field(..., description="比赛地图")
-    team1Score: int = Field(..., description="队伍 1 分数")
-    team2Score: int = Field(..., description="队伍 2 分数")
-    team: int = Field(..., description="玩家所在队伍")
-    winTeam: int = Field(..., description="获胜队伍")
-    rating: float = Field(..., description="玩家评分")
-    we: float = Field(..., description="玩家 WE 值")
-    pvpScore: float = Field(..., description="天梯分数")
-    pvpScoreChange: float = Field(..., description="天梯分数变化")
-    legacyDiff: float | None = Field(..., description="底蕴分数变化")
-
-class MatchHistoryResponse(BaseModel):
-    totCount: int = Field(..., description="总比赛数")
-    pageSize: int = Field(..., description="每页大小")
-    matches: list[MatchHistoryItem] = Field(..., description="比赛列表")
-
 @app.post("/api/match/info",
     response_model=MatchPWInfo,
     summary="获取比赛详细信息",
@@ -488,6 +467,27 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
             ) for player in match_detail
         ]
     )
+
+class MatchHistoryItem(BaseModel):
+    matchId: str = Field(..., description="比赛 ID")
+    timeStamp: int = Field(..., description="比赛时间戳")
+    season: str = Field(..., description="赛季")
+    mode: str = Field(..., description="比赛模式")
+    mapName: str = Field(..., description="比赛地图")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    team: int = Field(..., description="玩家所在队伍")
+    winTeam: int = Field(..., description="获胜队伍")
+    rating: float = Field(..., description="玩家评分")
+    we: float = Field(..., description="玩家 WE 值")
+    pvpScore: float = Field(..., description="天梯分数")
+    pvpScoreChange: float = Field(..., description="天梯分数变化")
+    legacyDiff: float | None = Field(..., description="底蕴分数变化")
+
+class MatchHistoryResponse(BaseModel):
+    totCount: int = Field(..., description="总比赛数")
+    pageSize: int = Field(..., description="每页大小")
+    matches: list[MatchHistoryItem] = Field(..., description="比赛列表")
 
 @app.post("/api/match/history",
     response_model=MatchHistoryResponse,
@@ -535,6 +535,138 @@ async def get_match_history(
             ) for record in match_records
         ] if match_records else []
     )
+
+
+class MatchGPPlayerInfo(BaseModel):
+    steamId: str = Field(..., description="玩家的 Steam ID")
+    nickname: str = Field(..., description="玩家昵称")
+    team: int = Field(..., description="玩家所属队伍 (1 或 2)")
+    rating: float = Field(..., description="玩家的比赛评分")
+    adr: float = Field(..., description="玩家的 ADR 值")
+    kills: int = Field(..., description="击杀数")
+    deaths: int = Field(..., description="死亡数")
+    assists: int = Field(..., description="助攻数")
+    legacyScore: float | None = Field(..., description="玩家的底蕴分数")
+    rank: float = Field(..., description="玩家的段位")
+
+class MatchGPInfo(BaseModel):
+    matchId: str = Field(..., description="比赛 ID")
+    timestamp: int = Field(..., description="比赛时间戳")
+    winTeam: int = Field(..., description="获胜队伍 (1 或 2)")
+    mode: str = Field(..., description="比赛模式")
+    mapName: str = Field(..., description="比赛地图")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    team1LegacyScore: float | None = Field(..., description="队伍 1 底蕴均分")
+    team2LegacyScore: float | None = Field(..., description="队伍 2 底蕴均分")
+    players: list[MatchGPPlayerInfo] = Field(..., description="参赛玩家信息列表")
+
+@app.post("/api/match/infogp",
+    response_model=MatchGPInfo,
+    summary="获取官匹比赛详细信息",
+    description="根据比赛 ID 获取官匹比赛的详细信息，包括参赛玩家的数据。"
+)
+async def get_match_gp_info(matchId: str = Body(..., embed=True), _ = Depends(get_current_user)):
+    match_detail = await db_val.get_match_gp_detail(matchId)
+    if not match_detail:
+        raise HTTPException(status_code=404, detail="Match not found")
+    match_extra = await db_val.get_match_gp_extra(matchId)
+    async def get_nickname(player: MatchStatsGP) -> str:
+        base_info = await db_val.get_base_info(player.steamid)
+        return base_info.name if base_info else "未知玩家"
+    async def get_legacy_score(player: MatchStatsGP) -> float | None:
+        extra_info = await db_val.get_extra_info(player.steamid, timeStamp=player.timeStamp)
+        return extra_info.legacyScore if extra_info else None
+    return MatchGPInfo(
+        matchId=matchId,
+        timestamp=match_detail[0].timeStamp,
+        winTeam=match_detail[0].winTeam,
+        mode=match_detail[0].mode,
+        mapName=match_detail[0].mapName,
+        team1Score=match_detail[0].score1,
+        team2Score=match_detail[0].score2,
+        team1LegacyScore=match_extra.team1Legacy if match_extra else None,
+        team2LegacyScore=match_extra.team2Legacy if match_extra else None,
+        players=[
+            MatchGPPlayerInfo(
+                steamId=player.steamid,
+                nickname=await get_nickname(player),
+                team=player.team,
+                rating=player.rating,
+                adr=player.adpr,
+                kills=player.kill,
+                deaths=player.death,
+                assists=player.assist,
+                legacyScore=await get_legacy_score(player),
+                rank=player.rank
+            ) for player in match_detail
+        ]
+    )
+
+class MatchGPHistoryItem(BaseModel):
+    matchId: str = Field(..., description="比赛 ID")
+    timeStamp: int = Field(..., description="比赛时间戳")
+    mode: str = Field(..., description="比赛模式")
+    mapName: str = Field(..., description="比赛地图")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    team: int = Field(..., description="玩家所在队伍")
+    winTeam: int = Field(..., description="获胜队伍")
+    rating: float = Field(..., description="玩家评分")
+    adr: float = Field(..., description="玩家 ADR")
+    rank: float = Field(..., description="官匹等级")
+    legacyDiff: float | None = Field(..., description="底蕴分数变化")
+
+class MatchGPHistoryResponse(BaseModel):
+    totCount: int = Field(..., description="总比赛数")
+    pageSize: int = Field(..., description="每页大小")
+    matches: list[MatchGPHistoryItem] = Field(..., description="比赛列表")
+
+@app.post("/api/match/historygp",
+    response_model=MatchGPHistoryResponse,
+    summary="获取官匹比赛历史",
+    description="根据玩家 Steam ID 获取其官匹比赛历史记录。"
+)
+async def get_match_gp_history(
+    steamId: str = Body(..., embed=True),
+    timeType: str = Body(..., embed=True),
+    page: int = Body(..., embed=True, ge=1),
+    _ = Depends(get_current_user)):
+    # 获取玩家的官匹比赛历史
+    match_records = await db_val.get_matches_gp(steamId, timeType, offset=(page - 1) * 20, limit=20)
+    total_count = await db_val.get_matches_gp_count(steamId, timeType)
+    async def get_legacy_diff(player: MatchStatsGP) -> float | None:
+        extra_info = await db_val.get_match_gp_extra(player.mid)
+        if not extra_info:
+            return None
+        if player.team == 1:
+            return extra_info.team1Legacy - extra_info.team2Legacy
+        else:
+            return extra_info.team2Legacy - extra_info.team1Legacy
+    if not total_count:
+        raise HTTPException(status_code=404, detail="No match history found")
+    
+    return MatchGPHistoryResponse(
+        totCount=total_count,
+        pageSize=20,
+        matches=[
+            MatchGPHistoryItem(
+                matchId=record.mid,
+                timeStamp=record.timeStamp,
+                mode=record.mode,
+                mapName=record.mapName,
+                team=record.team,
+                winTeam=record.winTeam,
+                team1Score=record.score1,
+                team2Score=record.score2,
+                rating=record.rating,
+                adr=record.adpr,
+                rank=record.rank,
+                legacyDiff=await get_legacy_diff(record)
+            ) for record in match_records
+        ] if match_records else []
+    )
+
 
 class PlayerBaseResponse(BaseModel):
     nickname: str = Field(..., description="玩家昵称")

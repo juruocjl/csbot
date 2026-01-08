@@ -659,16 +659,3 @@ class DataManager:
                     await session.merge(new_member)
   
 db = DataManager()
-
-qwqqwq = on_command("qwqqwq", permission=SUPERUSER)
-
-@qwqqwq.handle()
-async def _():
-    async with async_session_factory() as session:
-        stmt = select(MatchStatsGP.mid).distinct()
-        result = (await session.execute(stmt)).scalars().all()
-    async with async_session_factory() as session:
-        for mid in result:
-            print(mid)
-            async with session.begin():
-                await db._update_match_gp_extra(mid, session)

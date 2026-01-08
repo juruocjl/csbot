@@ -666,6 +666,50 @@ class DataManager:
                 assert False, "未知的查询类型"
         return result
 
+    async def get_matches_gp(self, steamid: str, time_type: str, limit: int = 20, offset: int = 0) -> list[MatchStatsGP] | None:
+        assert time_type in gp_time, "时间类型错误"
+        async with async_session_factory() as session:
+            stmt = (
+                select(MatchStatsGP)
+                .where(MatchStatsGP.steamid == steamid)
+                .where(text(get_time_sql(time_type)))
+                .order_by(MatchStatsGP.timeStamp.desc()) # 倒序排列
+                .limit(limit).offset(offset)
+            )
+
+            result = await session.execute(stmt)
+            matches = result.scalars().all()
+
+            match_list = list(matches)
+
+            return match_list if match_list else None
+    
+    async def get_matches_gp_count(self, steamid: str, time_type: str) -> int:
+        assert time_type in gp_time, "时间类型错误"
+        async with async_session_factory() as session:
+            stmt = (
+                select(func.count(MatchStatsGP.mid))
+                .where(MatchStatsGP.steamid == steamid)
+                .where(text(get_time_sql(time_type)))
+            )
+
+            result = await session.execute(stmt)
+
+            return result.scalar_one()
+    
+    async def get_match_gp_detail(self, mid: str) -> list[MatchStatsGP] | None:
+        async with async_session_factory() as session:
+            stmt = select(MatchStatsGP).where(MatchStatsGP.mid == mid)
+
+            result = await session.execute(stmt)
+            matches = list(result.scalars().all())
+
+            return matches if matches else None
+    
+    async def get_match_gp_extra(self, mid: str) -> MatchStatsGPExtra | None:
+        async with async_session_factory() as session:
+            return await session.get(MatchStatsGPExtra, mid)
+
     async def steamid_in_db(self, steamid: str) -> bool:
         async with async_session_factory() as session:
             stmt = select(MemberSteamID).where(MemberSteamID.steamid == steamid)
