@@ -190,6 +190,14 @@ class MatchStatsGP(Base):
     infernoDamage: Mapped[int] = mapped_column(Integer)
     mvp: Mapped[int] = mapped_column(Integer)
 
+class MatchStatsGPExtra(Base):
+    __tablename__ = "matches_gp_extra"
+
+    mid: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+    team1Legacy: Mapped[float] = mapped_column(Float)
+    team2Legacy: Mapped[float] = mapped_column(Float)
+
 class SteamBaseInfo(Base):
     __tablename__ = "steamid_baseinfo_v2"
 

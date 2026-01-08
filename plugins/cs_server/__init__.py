@@ -24,7 +24,7 @@ from ..utils import Base, async_session_factory
 require("cs_db_val")
 from ..cs_db_val import MatchStatsPW
 from ..cs_db_val import db as db_val
-from ..cs_db_val import valid_time, NoValueError
+from ..cs_db_val import valid_time, gp_time, NoValueError
 require("cs_db_upd")
 from ..cs_db_upd import db as db_upd
 from ..cs_db_upd import TooFrequentError
@@ -857,6 +857,7 @@ async def update_player_data(steamId: str = Body(..., embed=True), _ = Depends(g
 
 class TimeResponse(BaseModel):
     timeTypes: list[str] = Field(..., description="支持的时间范围类型列表")
+    gpTimeTypes: list[str] = Field(..., description="支持的官匹时间范围类型列表")
 
 @app.post("/api/config/time",
     response_model=TimeResponse,
@@ -865,7 +866,8 @@ class TimeResponse(BaseModel):
 )
 async def get_time_types(_ = Depends(get_current_user)):
     return TimeResponse(
-        timeTypes=valid_time
+        timeTypes=valid_time,
+        gpTimeTypes=gp_time
     )
 
 class RankConfigItem(BaseModel):

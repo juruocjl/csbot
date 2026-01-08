@@ -12,7 +12,7 @@ from ..utils import async_session_factory
 from ..utils import get_session
 
 require("cs_db_val")
-from ..cs_db_val import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, GroupMember
+from ..cs_db_val import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, GroupMember
 from ..cs_db_val import db as db_val
 
 from sqlalchemy import select, delete, func
@@ -72,6 +72,35 @@ class DataManager:
                 stmt = delete(MemberSteamID).where(MemberSteamID.uid == uid)
                 await session.execute(stmt)
 
+    async def _update_match_gp_extra(self, mid: str, session: AsyncSession):
+        extra_info = await session.get(MatchStatsGPExtra, mid)
+        if extra_info is not None:
+            return
+        logger.info(f"计算 match_gp_extra_info")
+        team1sum, team1cnt = .0, 0
+        team2sum, team2cnt = .0, 0
+        stmt = select(MatchStatsGP).where(MatchStatsGP.mid == mid)
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+        for row in rows:
+            if row.team == 1:
+                if res := await db_val._get_extra_info(row.steamid, session, timeStamp=row.timeStamp):
+                    team1sum += res.legacyScore
+                    team1cnt += 1
+            elif row.team == 2:
+                if res := await db_val._get_extra_info(row.steamid, session, timeStamp=row.timeStamp):
+                    team2sum += res.legacyScore
+                    team2cnt += 1
+        if team1cnt == 0 or team2cnt == 0:
+            logger.warning(f"match_extra_gp_info 计算失败，队伍人数为0 {mid}")
+            return
+        extra_info = MatchStatsGPExtra(
+            mid=mid,
+            team1Legacy=team1sum / team1cnt,
+            team2Legacy=team2sum / team2cnt
+        )
+        await session.merge(extra_info)
+    
     async def _update_match_extra(self, mid: str, session: AsyncSession):
         extra_info = await session.get(MatchStatsPWExtra, mid)
         if extra_info is not None:
@@ -630,3 +659,16 @@ class DataManager:
                     await session.merge(new_member)
   
 db = DataManager()
+
+qwqqwq = on_command("qwqqwq", permission=SUPERUSER)
+
+@qwqqwq.handle()
+async def _():
+    async with async_session_factory() as session:
+        stmt = select(MatchStatsGP.mid).distinct()
+        result = (await session.execute(stmt)).scalars().all()
+    async with async_session_factory() as session:
+        for mid in result:
+            print(mid)
+            async with session.begin():
+                await db._update_match_gp_extra(mid, session)
