@@ -33,11 +33,12 @@ services:
     container_name: csbot-napcat
     ports:
       - 6099:6099
-    network_mode: bridge
     restart: unless-stopped
     volumes:
       - ./napcat/config:/app/napcat/config
       - ./ntqq:/app/.config/QQ
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: csbot-tunnel
