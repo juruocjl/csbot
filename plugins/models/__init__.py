@@ -205,7 +205,7 @@ class MatchStatsGPExtra(Base):
     team1Legacy: Mapped[float | None] = mapped_column(Float, nullable=True)
     team2Legacy: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    updateTime: Mapped[int] = mapped_column(Integer)
+    nextUpdateTime: Mapped[int] = mapped_column(Integer)
     fetchCount: Mapped[int] = mapped_column(Integer)
 
 # Steam 用户基础信息

@@ -73,10 +73,10 @@ class DataManager:
                 stmt = delete(MemberSteamID).where(MemberSteamID.uid == uid)
                 await session.execute(stmt)
 
-    async def _set_match_gp_extra(self, mid: str, updateTime: int, fetchCount: int, session: AsyncSession):
+    async def _set_match_gp_extra(self, mid: str, nextUpdateTime: int, fetchCount: int, session: AsyncSession):
         record = await session.get(MatchStatsGPExtra, mid)
         assert record is not None
-        record.updateTime = updateTime
+        record.nextUpdateTime = nextUpdateTime
         record.fetchCount = fetchCount
         await session.merge(record)
 
@@ -85,7 +85,7 @@ class DataManager:
             return
         extra_info = MatchStatsGPExtra(
             mid=mid,
-            updateTime=0,
+            nextUpdateTime=0,
             fetchCount=0,
             team1Legacy=None,
             team2Legacy=None
@@ -285,7 +285,7 @@ class DataManager:
             if completed:
                 logger.info(f"update_matchgp {mid} in db")
                 return 0
-            elif time.time() - extra_info.updateTime < 40000 * math.pow(2, extra_info.fetchCount):
+            elif time.time() > extra_info.nextUpdateTime:
                 logger.info(f"update_matchgp {mid} too frequent, skipped")
                 return 0
             else:
@@ -381,13 +381,18 @@ class DataManager:
             except:
                 pass
         await self._update_match_gp_extra(mid, session)
-        await self._set_match_gp_extra(mid, int(time.time()), extra_info.fetchCount + 1, session)
+        await self._set_match_gp_extra(mid,
+                int(time.time() + (random.random() + 1) * 80000 * math.pow(2, extra_info.fetchCount)),
+                extra_info.fetchCount + 1, session)
         _, completed = await self._check_match_gp_fetched_completed(mid, session)
-        if not completed:
+        if already_in_db and not completed:
             logger.warning(f"update_matchgp {mid} incomplete data after fetch")
             return 0
         else:
-            logger.info(f"update_matchgp {mid} success")
+            if not completed:
+                logger.warning(f"update_matchgp {mid} fetch failed to get complete data")
+            else:
+                logger.info(f"update_matchgp {mid} success")
             return 1
 
     async def _insert_detail_info(self, data: dict, session: AsyncSession):
