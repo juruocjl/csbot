@@ -4,11 +4,6 @@ from nonebot.adapters.onebot.v11.message import Message
 from nonebot import require
 from nonebot import logger
 
-require("utils")
-from ..utils import async_session_factory
-from ..utils import get_today_start_timestamp
-require("models")
-from ..models import MemberSteamID, GroupMember, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra
 
 from sqlalchemy import select, func
 from abc import ABC, abstractmethod
@@ -16,8 +11,16 @@ from dataclasses import dataclass
 from typing import Callable, Awaitable
 import time
 import json
-from sqlalchemy import select, func, text, or_, case
+from sqlalchemy import select, select, union_all, literal, func, text, or_, case, desc
+from itertools import groupby
 from collections import defaultdict
+from typing import Any
+
+require("utils")
+from ..utils import async_session_factory
+from ..utils import get_today_start_timestamp
+require("models")
+from ..models import MemberSteamID, GroupMember, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra
 
 from .config import Config
 
@@ -440,6 +443,131 @@ class DataManager:
     async def get_match_gp_extra(self, mid: str) -> MatchStatsGPExtra | None:
         async with async_session_factory() as session:
             return await session.get(MatchStatsGPExtra, mid)
+
+    async def get_all_matches_count(self) -> int:
+        """
+        获取包含群成员的比赛总场次（去重后的 mid 数量）。
+        """
+        async with async_session_factory() as session:
+            # 1. 构建联合表 (CTE)
+            # 为了性能，这里只需要查 mid 和 steamid，不需要查 map, time, team 等详细信息
+            stats_union = union_all(
+                select(MatchStatsPW.mid, MatchStatsPW.steamid),
+                select(MatchStatsGP.mid, MatchStatsGP.steamid)
+            ).cte("stats_union")
+
+            # 2. 构建查询
+            # 逻辑：在联合表中，连接 MemberSteamID 表，统计不重复的 mid 数量
+            stmt = (
+                select(func.count(func.distinct(stats_union.c.mid)))
+                .join(MemberSteamID, stats_union.c.steamid == MemberSteamID.steamid)
+            )
+
+            # 3. 执行查询
+            # scalar() 会返回查询结果的第一行第一列，即 count 的数值
+            result = await session.scalar(stmt)
+            
+            # 如果结果为空（没数据），返回 0
+            return result if result is not None else 0
+
+    async def get_all_matches(self, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        async with async_session_factory() as session:
+            stats_union = union_all(
+                select(
+                    MatchStatsPW.mid, 
+                    MatchStatsPW.steamid, 
+                    MatchStatsPW.timeStamp, 
+                    MatchStatsPW.mapName, 
+                    MatchStatsPW.mode,
+                    MatchStatsPW.team,
+                    MatchStatsPW.winTeam,
+                    MatchStatsPW.score1,
+                    MatchStatsPW.score2,
+                    literal(0).label("isGP")
+                ),
+                select(
+                    MatchStatsGP.mid, 
+                    MatchStatsGP.steamid, 
+                    MatchStatsGP.timeStamp, 
+                    MatchStatsGP.mapName, 
+                    MatchStatsGP.mode,
+                    MatchStatsGP.team,
+                    MatchStatsGP.winTeam,
+                    MatchStatsGP.score1,
+                    MatchStatsGP.score2,
+                    literal(1).label("isGP")
+                )
+            ).cte("stats_union")
+
+            # 2. 分页子查询：获取目标页的 mid 列表
+            # 逻辑：找出最近的 N 场比赛，且这些比赛里必须包含至少一个群成员
+            paged_mids_subq = (
+                select(stats_union.c.mid, stats_union.c.timeStamp)
+                .join(MemberSteamID, stats_union.c.steamid == MemberSteamID.steamid) # 过滤：只看有群友的比赛
+                .group_by(stats_union.c.mid, stats_union.c.timeStamp)
+                .order_by(desc(stats_union.c.timeStamp)) # 按时间倒序
+                .limit(limit)
+                .offset(offset)
+            ).subquery("paged_mids")
+
+            # 3. 主查询：根据 mid 拉取详细数据
+            stmt = (
+                select(
+                    stats_union.c.mid,
+                    stats_union.c.timeStamp,
+                    stats_union.c.mapName,
+                    stats_union.c.mode,
+                    stats_union.c.isGP,
+                    stats_union.c.steamid,
+                    stats_union.c.team,
+                    stats_union.c.winTeam,
+                    stats_union.c.score1,
+                    stats_union.c.score2
+                )
+                .join(paged_mids_subq, stats_union.c.mid == paged_mids_subq.c.mid) # 锁定这几场比赛
+                .join(MemberSteamID, stats_union.c.steamid == MemberSteamID.steamid) # 锁定只显示群友
+                .order_by(desc(paged_mids_subq.c.timeStamp)) # 保持比赛间的时间顺序
+            )
+
+            result = await session.execute(stmt)
+            rows = result.all()
+
+            # 4. Python 侧聚合：按 mid 分组并拆分 team1/team2
+            matches_list = []
+            
+            # groupby 需要数据已排序，SQL 中已经 order_by desc(timestamp)，也就是隐式按 mid 分组了(如果timestamp不重复)
+            # 为了保险，通常建议 key 取 mid
+            for mid, group in groupby(rows, key=lambda x: x.mid):
+                group_rows = list(group)
+                if not group_rows:
+                    continue
+                    
+                first = group_rows[0]
+                
+                match_info = {
+                    "mid": mid,
+                    "timeStamp": first.timeStamp,
+                    "mapName": first.mapName,
+                    "mode": first.mode,
+                    "isGP": first.isGP,
+                    "winTeam": first.winTeam, # int: 1 或 2
+                    "score1": first.score1,
+                    "score2": first.score2,
+                    "team1": [], # 存放 team=1 的 steamid
+                    "team2": []  # 存放 team=2 的 steamid
+                }
+
+                for row in group_rows:
+                    # 这里的 row.team 是 int 类型
+                    if row.team == 1:
+                        match_info["team1"].append(row.steamid)
+                    elif row.team == 2:
+                        match_info["team2"].append(row.steamid)
+                    # 忽略 team 不是 1 或 2 的异常数据
+
+                matches_list.append(match_info)
+
+            return matches_list
 
     async def steamid_in_db(self, steamid: str) -> bool:
         async with async_session_factory() as session:

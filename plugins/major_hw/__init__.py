@@ -17,7 +17,7 @@ from ..utils import async_session_factory
 from ..utils import local_storage
 from ..utils import getcard
 
-from fuzzywuzzy import process
+from thefuzz import process
 from unicodedata import normalize
 import json
 import asyncio

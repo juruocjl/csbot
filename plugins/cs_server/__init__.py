@@ -11,6 +11,7 @@ import time
 import re
 import json
 import psutil
+import asyncio
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -329,19 +330,13 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
         browser = await launch(headless=True, args=['--no-sandbox'])
         page = await browser.newPage()
         
-        # 访问页面
-        await page.goto(f"http://localhost", waitUntil='networkidle2')
-        
-        # 设置 localStorage 中的 token
-        await page.evaluate(f"""
-            localStorage.setItem('token', '{info.token}');
-        """)
-        
-        # 重新加载页面以应用 token
-        await page.goto(f"http://localhost{path}", waitUntil='networkidle2')
-        
-        # 等待页面完全加载（可选：等待特定元素）
-        await page.waitForNavigation(waitUntil='networkidle2')
+        # 使用 cookie 设置 token（替代 localStorage）
+        await page.setCookie({'name': 'token', 'value': info.token, 'url': f'http://localhost', 'path': '/', 'httpOnly': False, 'secure': False})
+
+        # 访问目标页面并等待网络空闲
+        await page.goto(f"http://localhost{path}", waitUntil='networkidle0')
+
+        await asyncio.sleep(0.2)
         
         await page.setViewport({'width': 1000, 'height': 100})
 
@@ -644,6 +639,55 @@ async def get_match_gp_history(
         ] if match_records else []
     )
 
+class AllMatchHistoryItem(BaseModel):
+    matchId: str = Field(..., description="比赛 ID")
+    timeStamp: int = Field(..., description="比赛时间戳")
+    mode: str = Field(..., description="比赛模式")
+    mapName: str = Field(..., description="比赛地图")
+    isGP: bool = Field(..., description="是否为官匹")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    team1Player: list[str] = Field(..., description="队伍 1 玩家 Steam ID 列表")
+    team2Player: list[str] = Field(..., description="队伍 2 玩家 Steam ID 列表")
+    winTeam: int = Field(..., description="获胜队伍")
+
+class AllMatchHistoryResponse(BaseModel):
+    totCount: int = Field(..., description="总比赛数")
+    pageSize: int = Field(..., description="每页大小")
+    matches: list[AllMatchHistoryItem] = Field(..., description="比赛列表")
+
+@app.post("/api/match/historyall",
+    response_model=AllMatchHistoryResponse,
+    summary="获取所有比赛历史",
+    description="所有比赛历史记录（包括官匹和非官匹）。"
+)
+async def get_all_match_history(
+    page: int = Body(..., embed=True, ge=1),
+    _ = Depends(get_current_user)):
+    count = await db_val.get_all_matches_count()
+    res = await db_val.get_all_matches(limit=20, offset=(page - 1) * 20)
+    
+    if not count:
+        raise HTTPException(status_code=404, detail="No match history found")
+
+    return AllMatchHistoryResponse(
+        totCount=count,
+        pageSize=20,
+        matches=[
+            AllMatchHistoryItem(
+                matchId=record['mid'],
+                timeStamp=record['timeStamp'],
+                mode=record['mode'],
+                mapName=record['mapName'],
+                isGP=record['isGP'],
+                team1Score=record['score1'],
+                team2Score=record['score2'],
+                team1Player=record['team1'],
+                team2Player=record['team2'],
+                winTeam=record['winTeam']
+            ) for record in res
+        ]
+    )
 
 class PlayerBaseResponse(BaseModel):
     nickname: str = Field(..., description="玩家昵称")

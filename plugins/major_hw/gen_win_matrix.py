@@ -5,7 +5,7 @@ import sys
 import csv
 from pathlib import Path
 from nonebot import logger
-from fuzzywuzzy import process
+from thefuzz import process
 
 
 # 评分系统权重配置

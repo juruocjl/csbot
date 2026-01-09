@@ -24,7 +24,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageFunctionToolCall
 from typing import Any, cast
 import json
-from fuzzywuzzy import process
+from thefuzz import process, fuzz
 import os
 from datetime import datetime
 from sqlalchemy import select, func, case
@@ -447,7 +447,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
                     add_event("tool", f"获取双排数据失败: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
             elif fname == "fetch_group_rankings":
-                rank_type = process.extractOne(fargs.get("type", ""), valid_rank)
+                rank_type = process.extractOne(fargs.get("type", ""), valid_rank, scorer=fuzz.ratio)
                 if not rank_type:
                     continue
                 rank_type = rank_type[0]
