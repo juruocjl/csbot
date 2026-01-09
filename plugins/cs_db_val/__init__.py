@@ -472,6 +472,11 @@ class DataManager:
 
     async def get_all_matches(self, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         async with async_session_factory() as session:
+            unique_members_subq = (
+                select(MemberSteamID.steamid)
+                .distinct()
+            ).subquery("unique_members")
+
             stats_union = union_all(
                 select(
                     MatchStatsPW.mid, 
@@ -503,7 +508,7 @@ class DataManager:
             # 逻辑：找出最近的 N 场比赛，且这些比赛里必须包含至少一个群成员
             paged_mids_subq = (
                 select(stats_union.c.mid, stats_union.c.timeStamp)
-                .join(MemberSteamID, stats_union.c.steamid == MemberSteamID.steamid) # 过滤：只看有群友的比赛
+                .join(unique_members_subq, stats_union.c.steamid == unique_members_subq.c.steamid) # 过滤：只看有群友的比赛
                 .group_by(stats_union.c.mid, stats_union.c.timeStamp)
                 .order_by(desc(stats_union.c.timeStamp)) # 按时间倒序
                 .limit(limit)
@@ -525,7 +530,7 @@ class DataManager:
                     stats_union.c.score2
                 )
                 .join(paged_mids_subq, stats_union.c.mid == paged_mids_subq.c.mid) # 锁定这几场比赛
-                .join(MemberSteamID, stats_union.c.steamid == MemberSteamID.steamid) # 锁定只显示群友
+                .join(unique_members_subq, stats_union.c.steamid == unique_members_subq.c.steamid) # 锁定只显示群友
                 .order_by(desc(paged_mids_subq.c.timeStamp)) # 保持比赛间的时间顺序
             )
 
