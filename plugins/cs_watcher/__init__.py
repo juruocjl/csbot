@@ -24,6 +24,7 @@ from nonebot_plugin_apscheduler import scheduler
 
 from ..cs_db_val import db as db_val
 from ..cs_db_upd import db as db_upd
+from ..cs_db_upd import LockingError, TooFrequentError
 from ..models import UserPlayStatus
 from ..utils import get_session
 from ..utils import async_session_factory
@@ -109,13 +110,13 @@ class DataManager:
                     logger.info(f"开始更新玩家数据: {steamid}")
                     await db_upd.update_stats(steamid)
                     logger.info(f"玩家数据更新成功: {steamid}")
-                except db_upd.LockingError:
+                except LockingError:
                     is_locking_error = True
                     logger.warning(f"数据库被锁定，保留在队列中: {steamid}")
                     # 重新放回队列，下次继续重试
                     self.update_queue.put_nowait(steamid)
                     await asyncio.sleep(1)
-                except db_upd.TooFrequentError as e:
+                except TooFrequentError as e:
                     logger.warning(f"更新过于频繁，跳过: {steamid}, {e}")
                 except Exception as e:
                     logger.error(f"更新玩家数据失败: {steamid}, {e}")
@@ -174,7 +175,7 @@ async def handle_game_status(bot: Bot, msg: GroupMessageEvent, args: Message = C
         if seg.type == "qq":
             uids.append(str(seg.data["qq"]))
     if not uids:
-        for uid in await db_val.get_group_member(msg.group_id):
+        for uid in await db_val.get_group_member(str(msg.group_id)):
             if steamid := await db_val.get_steamid(uid):
                 uids.append(str(uid))
     try:
