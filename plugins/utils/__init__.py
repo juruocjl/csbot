@@ -36,9 +36,6 @@ config = get_plugin_config(Config)
 
 logger.info("开始加载基本组件...")
 
-temp_dir = Path("temp")
-temp_dir.mkdir(exist_ok=True)
-
 img_dir = Path("imgs")
 img_dir.mkdir(exist_ok=True)
 
