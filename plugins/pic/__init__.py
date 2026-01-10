@@ -126,7 +126,7 @@ async def getpic_function(bot: Bot, message: MessageEvent):
     if not imgpath:
         await getpic.finish("没有图片")
     lastpic = imgpath
-    msg = await getpic.send(MessageSegment.image(imgpath))
+    msg = await getpic.send(MessageSegment.image(open(imgpath, "rb").read()))
     await asyncio.sleep(600)
     await bot.delete_msg(message_id = msg['message_id'])
 @addpic.handle()
@@ -147,7 +147,7 @@ async def getmgz_function(bot: Bot, message: MessageEvent):
     imgpath = Pic2.getpic()
     if not imgpath:
         await getpic.finish("没有图片")
-    msg = await getpic.send(MessageSegment.image(imgpath))
+    msg = await getpic.send(MessageSegment.image(open(imgpath, "rb").read()))
     await asyncio.sleep(600)
     await bot.delete_msg(message_id = msg['message_id'])
 @addmgz.handle()
