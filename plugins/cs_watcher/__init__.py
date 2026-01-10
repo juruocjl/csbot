@@ -2,8 +2,9 @@ from nonebot import get_plugin_config
 from nonebot import require
 from nonebot import on_command
 from nonebot.params import CommandArg
-from nonebot.adapters.onebot.v11 import Message, GroupMessageEvent, Bot
+from nonebot.adapters.onebot.v11 import Message, MessageSegment, GroupMessageEvent, Bot
 from nonebot import get_driver
+from nonebot import get_bot
 from nonebot.plugin import PluginMetadata
 from nonebot import logger
 
@@ -16,6 +17,7 @@ import asyncio
 require("nonebot_plugin_apscheduler")
 require("cs_db_val")
 require("cs_db_upd")
+require("cs_server")
 require("models")
 require("utils")
 
@@ -25,6 +27,8 @@ from nonebot_plugin_apscheduler import scheduler
 from ..cs_db_val import db as db_val
 from ..cs_db_upd import db as db_upd
 from ..cs_db_upd import LockingError, TooFrequentError
+from ..cs_server import db as db_server
+from ..cs_server import get_screenshot
 from ..models import UserPlayStatus
 from ..utils import get_session
 from ..utils import async_session_factory
@@ -108,8 +112,10 @@ class DataManager:
                 is_locking_error = False
                 try:
                     logger.info(f"开始更新玩家数据: {steamid}")
-                    await db_upd.update_stats(steamid)
-                    logger.info(f"玩家数据更新成功: {steamid}")
+                    nickname, pwlist, gplist = await db_upd.update_stats(steamid)
+                    logger.info(f"玩家数据更新成功: {steamid} {nickname}")
+                    if len(pwlist) + len(gplist) < 5:
+                        await sendMatches(pwlist, gplist)
                 except LockingError:
                     is_locking_error = True
                     logger.warning(f"数据库被锁定，保留在队列中: {steamid}")
@@ -128,7 +134,24 @@ class DataManager:
             except Exception as e:
                 logger.error(f"队列处理异常: {e}")
                 await asyncio.sleep(1)
-                
+
+async def sendMatches(pwlist, gplist):
+    bot = get_bot()
+    if isinstance(bot, Bot):
+        for gid in config.cs_group_list:
+            token = await db_server.get_bot_token(str(gid))
+            for mid in pwlist:
+                screenshot = await get_screenshot(f"/match?id={mid}", token)
+                if screenshot:
+                    await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
+            for mid in gplist:
+                screenshot = await get_screenshot(f"/match-gp?id={mid}", token)
+                if screenshot:
+                    await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
+    else:
+        logger.error("无法获取 Bot 实例，无法发送比赛通知")
+        
+
 
 db = DataManager()
 

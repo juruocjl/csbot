@@ -389,8 +389,9 @@ class DataManager:
                 int(time.time() + (random.random() + 1) * 80000 * math.pow(2, extra_info.fetchCount)),
                 extra_info.fetchCount + 1, session)
         _, completed = await self._check_match_gp_fetched_completed(mid, session)
-        if already_in_db and not completed:
-            logger.warning(f"update_matchgp {mid} incomplete data after fetch")
+        if already_in_db:
+            if not completed:
+                logger.warning(f"update_matchgp {mid} incomplete data after fetch")
             return 0
         else:
             if not completed:
@@ -608,7 +609,7 @@ class DataManager:
         else:
             logger.info(f"extra_info no change, skipped for SteamID: {steamid}")
     
-    async def update_stats(self, steamid: str, interval: int=600) -> tuple[str, int, int]:
+    async def update_stats(self, steamid: str, interval: int=600) -> tuple[str, list[str], list[str]]:
         # 尝试获取锁，失败则抛出 LockingError
         try:
             await asyncio.wait_for(self.lock.acquire(), timeout=0.1)
@@ -637,11 +638,12 @@ class DataManager:
 
             LastTime = base_info.lasttime
             newLastTime = LastTime
-            addMatches = 0
-            addMatchesGP = 0
+            addMatchesList: list[str] = []
+            addMatchesGPList: list[str] = []
+
             async def _work(session: AsyncSession) -> None:
                 nonlocal newLastTime
-                nonlocal addMatches
+                nonlocal addMatchesList
                 for SeasonID in [SeasonId, lastSeasonId]:
                     page = 1
                     while True:
@@ -668,14 +670,15 @@ class DataManager:
                         for match in ddata['data']['matchList']:
                             newLastTime = max(newLastTime, match["timeStamp"])
                             if match["timeStamp"] > LastTime:
-                                addMatches += await self._update_match(match["matchId"], match["timeStamp"],SeasonID, session)
+                                if await self._update_match(match["matchId"], match["timeStamp"],SeasonID, session):
+                                    addMatchesList.append(match["matchId"])
                             else:
                                 return
                         if len(ddata['data']['matchList']) == 0:
                             break
                         page += 1
             async def _work_gp(session: AsyncSession) -> None:
-                nonlocal addMatchesGP
+                nonlocal addMatchesGPList
                 url = "https://api.wmpvp.com/api/csgo/home/match/list"  
                 headers = {
                     "appversion": "3.5.4.172",
@@ -696,7 +699,8 @@ class DataManager:
                 await asyncio.sleep(0.2)
                 if ddata['data']['dataPublic']:
                     for match in ddata['data']['matchList']:
-                        addMatchesGP += await self._update_matchgp(match["matchId"], match["timeStamp"], session)
+                        if await self._update_matchgp(match["matchId"], match["timeStamp"], session):
+                            addMatchesGPList.append(match["matchId"])
         
             async with async_session_factory() as session:
                 async with session.begin():
@@ -707,7 +711,7 @@ class DataManager:
                 async with session.begin():
                     await _work_gp(session)
         
-            return base_info.name, addMatches, addMatchesGP
+            return base_info.name, addMatchesList, addMatchesGPList
         finally:
             self.lock.release()
     

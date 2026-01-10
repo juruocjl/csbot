@@ -10,7 +10,6 @@ from nonebot import get_driver
 
 require("utils")
 from ..utils import local_storage
-from ..utils import get_session
 
 require("allmsg")
 from ..allmsg import get_image
@@ -18,7 +17,6 @@ from ..allmsg import get_image
 from .config import Config
 
 import hashlib
-import os
 from pathlib import Path
 import random
 import uuid

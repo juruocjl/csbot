@@ -8,3 +8,4 @@ class Config(BaseModel):
     user_name_cache_expiration: int = 86400  # 用户名缓存过期时间，单位秒
 
     cs_domain: str = "https://cs.example.com"  # CS服务器域名
+    cs_botid: int # 机器人的 qq 号

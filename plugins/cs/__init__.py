@@ -1,26 +1,25 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment, GroupMessageEvent
 from nonebot.params import CommandArg
 from nonebot import on_command
 from nonebot.permission import SUPERUSER
 from nonebot import require
 from nonebot import logger
 
-require("nonebot_plugin_apscheduler")
-from nonebot_plugin_apscheduler import scheduler
-
 require("cs_img")
-from ..cs_img import gen_rank_image2, gen_matches_image, gen_stats_image, gen_teammate_image
+from ..cs_img import gen_matches_image, gen_stats_image, gen_teammate_image
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time,valid_rank
-from ..cs_db_val import NoValueError
 
 require("cs_db_upd")
 from ..cs_db_upd import db as db_upd
 
+require("cs_server")
+from ..cs_server import db as db_server
+from ..cs_server import get_screenshot
 
 from .config import Config
 config = get_plugin_config(Config)
@@ -86,7 +85,7 @@ async def update_function(message: MessageEvent):
             result = await db_upd.update_stats(steamid)
         except Exception as e:
             await update.finish(f"更新失败：{e}")
-        await update.send(f"{result[0]} 成功更新 {result[1]} 场完美数据, {result[2]} 场官匹数据")
+        await update.send(f"{result[0]} 成功更新 {len(result[1])} 场完美数据, {len(result[2])} 场官匹数据")
         baseinfo = await db_val.get_base_info(steamid)
         detailinfo = await db_val.get_detail_info(steamid)
         if baseinfo is None or detailinfo is None:
@@ -124,12 +123,9 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
         await show.finish("请先使用 /绑定 steamid64 绑定或者指定用户")
 
 @rank.handle()
-async def rank_function(message: MessageEvent, args: Message = CommandArg()):
-    uid = message.get_user_id()
-    sid = message.get_session_id()
+async def rank_function(message: GroupMessageEvent, args: Message = CommandArg()):
 
     text = args.extract_plain_text()
-    steamids = await db_val.get_member_steamid(sid)
 
     if text:
         cmd = text.split()
@@ -144,27 +140,12 @@ async def rank_function(message: MessageEvent, args: Message = CommandArg()):
                     time_type = config.default_time
                 if time_type not in config.allowed_time:
                     raise ValueError(f"无效的时间范围，支持的有 {config.allowed_time}")
-                datas = []
-                for steamid in steamids:
-                    try:
-                        val = await config.func(steamid, time_type)
-                        print(val)
-                        datas.append((steamid, val))
-                    except NoValueError:
-                        pass
-                print(datas)
-                datas = sorted(datas, key=lambda x: x[1][0], reverse=config.reversed)
-                if len(datas) == 0:
-                    await rank.finish("没有人类了")
-                max_value = datas[0][1][0] if config.reversed else datas[-1][1][0]
-                min_value = datas[-1][1][0] if config.reversed else datas[0][1][0]
-                if max_value == 0 and rank_type == "胜率":
-                    await rank.finish("啊😰device😱啊这是人类啊😩哦，bro也没杀人😩这局...这局没有人类了😭只有🐍只有🐭，只有沟槽的野榜😭只有...啊！！！😭我在看什么😭我🌿你的😫🖐🏻️🎧")
-                min_value, max_value = config.range_gen.getval(min_value, max_value)
-                print(min_value, max_value)
-                image = None
-                image = await gen_rank_image2(datas, min_value, max_value, f"{time_type} {config.title}", config.outputfmt)
-                await rank.finish(MessageSegment.image(image))
+                token = await db_server.get_bot_token(str(message.group_id))
+                screenshot = await get_screenshot(f"/rank?rankName={rank_type}&timeType={time_type}", token)
+                if screenshot:
+                    await rank.finish(MessageSegment.image(screenshot))
+                else:
+                    await rank.finish("生成排名图片失败，请稍后再试")
             except ValueError as e:
                 await rank.finish(str(e))
 
@@ -222,8 +203,8 @@ async def updateall_function():
     for steamid in await db_val.get_all_steamid():
         try:
             result = await db_upd.update_stats(steamid)
-            cntwm += result[1]
-            cntgp += result[2]
+            cntwm += len(result[1])
+            cntgp += len(result[2])
         except Exception as e:
             logger.error(f"更新{steamid}失败：{e}")
     await updateall.finish(f"更新完成 {cntwm} 场完美数据 {cntgp} 场官匹数据")

@@ -74,6 +74,31 @@ class DataMannager:
                 session.add(auth_session)
                 return auth_session
     
+    async def get_bot_token(self, gid: str) -> str:
+        async with async_session_factory() as session:
+            async with session.begin():
+                stmt = (
+                    select(AuthSession)
+                    .where(AuthSession.group_id == gid)
+                    .where(AuthSession.user_id == str(config.cs_botid))
+                    .where(AuthSession.is_verified == True)
+                )
+                result = await session.execute(stmt)
+                auth_session = result.scalar_one_or_none()
+                if auth_session:
+                    return auth_session.token
+                new_session = AuthSession(
+                    token=secrets.token_hex(32),
+                    code="000000",
+                    user_id=str(config.cs_botid),
+                    group_id=gid,
+                    created_at=int(time.time()),
+                    last_used_at=int(time.time()),
+                    is_verified=True,
+                )
+                session.add(new_session)
+                return new_session.token
+
     async def verify_code(self, code: str, user_id: str, group_id: str) -> bool:
         async with async_session_factory() as session:
             async with session.begin():
@@ -152,6 +177,39 @@ async def get_user_name(uid: str, interval: int = config.user_name_cache_expirat
     result = await db.get_user(uid)
     assert result is not None
     return result.nickname
+
+async def get_screenshot(path: str, token: str) -> bytes | None:
+    browser = None
+    screenshot = None
+    try:
+        # 启动浏览器
+        browser = await launch(headless=True, args=['--no-sandbox'])
+        page = await browser.newPage()
+        
+        # 使用 cookie 设置 token（替代 localStorage）
+        await page.setCookie({'name': 'token', 'value': token, 'url': f'http://localhost', 'path': '/', 'httpOnly': False, 'secure': False})
+
+        # 访问目标页面并等待网络空闲
+        await page.goto(f"http://localhost{path}", waitUntil='networkidle0')
+
+        await asyncio.sleep(0.2)
+        
+        await page.setViewport({'width': 1000, 'height': 100})
+
+        # 获取.main-container的高度
+        height = await page.evaluate('document.querySelector(".content").scrollHeight + 50')
+        
+        # 设置视口大小
+        await page.setViewport({'width': 1000, 'height': int(height)})
+        
+        # 截图
+        screenshot = await page.screenshot({'fullPage': True})
+            
+    finally:
+        # 确保浏览器被关闭
+        if browser:
+            await browser.close()
+    return screenshot
 
 db = DataMannager()
 
@@ -310,10 +368,14 @@ async def get_token_qq(info: AuthSession = Depends(get_current_user)):
         qq=info.user_id
     )
 
+class SendResponse(BaseModel):
+    success: bool = Field(..., description="发送是否成功")
+
 @app.post("/api/auth/send",
+    response_model=SendResponse,
     summary="发送指定页面图片",
     description="向绑定的 QQ 群发送指定页面的图片。")
-async def send_page_image(path: str = Body(..., embed=True), info: AuthSession = Depends(get_current_user)):
+async def send_page_image(path: str = Body(..., embed=True), info: AuthSession = Depends(get_current_user)) -> SendResponse:
     assert info.user_id is not None
     user_info = await db.get_user(info.user_id)
     assert user_info is not None
@@ -324,31 +386,8 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
     assert isinstance(bot, Bot)
     assert info.group_id is not None
     
-    browser = None
-    try:
-        # 启动浏览器
-        browser = await launch(headless=True, args=['--no-sandbox'])
-        page = await browser.newPage()
-        
-        # 使用 cookie 设置 token（替代 localStorage）
-        await page.setCookie({'name': 'token', 'value': info.token, 'url': f'http://localhost', 'path': '/', 'httpOnly': False, 'secure': False})
-
-        # 访问目标页面并等待网络空闲
-        await page.goto(f"http://localhost{path}", waitUntil='networkidle0')
-
-        await asyncio.sleep(0.2)
-        
-        await page.setViewport({'width': 1000, 'height': 100})
-
-        # 获取.main-container的高度
-        height = await page.evaluate('document.querySelector(".content").scrollHeight + 50')
-        
-        # 设置视口大小
-        await page.setViewport({'width': 1000, 'height': int(height)})
-        
-        # 截图
-        screenshot = await page.screenshot({'fullPage': True})
-        
+    screenshot = await get_screenshot(path, info.token)
+    if screenshot:
         # 发送消息
         await bot.send_group_msg(
             group_id=int(info.group_id),
@@ -359,12 +398,9 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
             group_id=int(info.group_id),
             message=MessageSegment.at(info.user_id) + " 分享了 " + (config.cs_domain + path)
         )
-        
-    finally:
-        # 确保浏览器被关闭
-        if browser:
-            await browser.close()
-    return {}
+        return SendResponse(success=True)
+    else:
+        return SendResponse(success=False)
 
 class MatchPWPlayerInfo(BaseModel):
     steamId: str = Field(..., description="玩家的 Steam ID")
@@ -1006,8 +1042,8 @@ async def update_player_data(steamId: str = Body(..., embed=True), _ = Depends(g
         raise HTTPException(status_code=500, detail="获取失败: " + str(e))
     return PlayerUpdateResponse(
         nickname=res[0],
-        matchCount=res[1],
-        matchgpCount=res[2]
+        matchCount=len(res[1]),
+        matchgpCount=len(res[2])
     )
 
 class TimeResponse(BaseModel):
