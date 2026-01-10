@@ -79,19 +79,19 @@ valid_rank: list[str] = []
 
 def get_time_sql(time_type: str) -> str:
     if time_type == "今日":
-        return f"(timeStamp >= {get_today_start_timestamp()})"
+        return f"""("timeStamp" >= {get_today_start_timestamp()})"""
     elif time_type == "昨日":
-        return f"({get_today_start_timestamp() - 24 * 3600} <= timeStamp and timeStamp < {get_today_start_timestamp()})"
+        return f"""({get_today_start_timestamp() - 24 * 3600} <= "timeStamp" and "timeStamp" < {get_today_start_timestamp()})"""
     elif time_type == "本周":
-        return f"({int(time.time()) - 7 * 24 * 3600} <= timeStamp)"
+        return f"""({int(time.time()) - 7 * 24 * 3600} <= "timeStamp")"""
     elif time_type == "本赛季":
-        return f"(seasonId = '{SeasonId}')"
+        return f"""("seasonId" = '{SeasonId}')"""
     elif time_type == "两赛季":
-        return f"(seasonId = '{SeasonId}' or seasonId = '{lastSeasonId}')"
+        return f"""("seasonId" = '{SeasonId}' or "seasonId" = '{lastSeasonId}')"""
     elif time_type == "上赛季":
-        return f"(seasonId = '{lastSeasonId}')"
+        return f"""("seasonId" = '{lastSeasonId}')"""
     elif time_type == "全部":
-        return f"( 1 = 1 )"
+        return f"""( 1 = 1 )"""
     else:
         raise ValueError("err time")
 
