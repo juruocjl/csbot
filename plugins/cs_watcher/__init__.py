@@ -172,7 +172,7 @@ async def handle_game_status(bot: Bot, msg: GroupMessageEvent, args: Message = C
     """处理游戏状态查询命令"""
     uids = []
     for seg in args:
-        if seg.type == "qq":
+        if seg.type == "at":
             uids.append(str(seg.data["qq"]))
     if not uids:
         for uid in await db_val.get_group_member(str(msg.group_id)):
