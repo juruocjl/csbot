@@ -45,9 +45,13 @@ class TooFrequentError(Exception):
     def __init__(self, wait_time: int):
         self.wait_time = wait_time
         super().__init__(f"操作过于频繁，请等待 {wait_time} 秒后再试。")
+class LockingError(Exception):
+    def __init__(self):
+        super().__init__("数据库正在使用中，请稍后再试。")
 
 class DataManager:
-
+    def __init__(self):
+        self.lock = asyncio.Lock()
 
     async def bind(self, uid: str, steamid: str):
         """
@@ -605,98 +609,107 @@ class DataManager:
             logger.info(f"extra_info no change, skipped for SteamID: {steamid}")
     
     async def update_stats(self, steamid: str, interval: int=600) -> tuple[str, int, int]:
+        # 尝试获取锁，失败则抛出 LockingError
         try:
+            await asyncio.wait_for(self.lock.acquire(), timeout=0.1)
+        except asyncio.TimeoutError:
+            raise LockingError()
+        
+        try:
+            try:
+                async with async_session_factory() as session:
+                    async with session.begin():
+                        await self._update_stats_card(steamid, session)
+                    async with session.begin():
+                        await self._update_extra_info(steamid, session)
+            except TooFrequentError as e:
+                pass
+            except RuntimeError as e:
+                logger.warning(f"更新数据失败 {steamid} {e}")
+            base_info = await db_val.get_base_info(steamid)
+            assert base_info is not None
+            if base_info.updateMatchTime + interval > time.time():
+                raise TooFrequentError(int(base_info.updateMatchTime + interval - time.time()))
             async with async_session_factory() as session:
                 async with session.begin():
-                    await self._update_stats_card(steamid, session)
-                async with session.begin():
-                    await self._update_extra_info(steamid, session)
-        except TooFrequentError as e:
-            pass
-        except RuntimeError as e:
-            logger.warning(f"更新数据失败 {steamid} {e}")
-        base_info = await db_val.get_base_info(steamid)
-        assert base_info is not None
-        if base_info.updateMatchTime + interval > time.time():
-            raise TooFrequentError(int(base_info.updateMatchTime + interval - time.time()))
-        async with async_session_factory() as session:
-            async with session.begin():
-                base_info.updateMatchTime = int(time.time())
-                await session.merge(base_info)
+                    base_info.updateMatchTime = int(time.time())
+                    await session.merge(base_info)
 
-        LastTime = base_info.lasttime
-        newLastTime = LastTime
-        addMatches = 0
-        addMatchesGP = 0
-        async def _work(session: AsyncSession) -> None:
-            nonlocal newLastTime
-            nonlocal addMatches
-            for SeasonID in [SeasonId, lastSeasonId]:
-                page = 1
-                while True:
-                    url = "https://api.wmpvp.com/api/csgo/home/match/list"  
-                    headers = {
-                        "appversion": "3.5.4.172",
-                        "token": config.cs_wmtoken
-                    }
-                    payload = {
-                        "csgoSeasonId": SeasonID,
-                        "dataSource": 3,
-                        "mySteamId": config.cs_mysteam_id,
-                        "page": page,
-                        "pageSize": 50,
-                        "pvpType": -1,
-                        "toSteamId": steamid
-                    }
-                    async with get_session().post(url, json=payload, headers=headers) as result:
-                        ddata = await result.json()
-                    if ddata["statusCode"] != 0:
-                        logger.error(f"爬取失败 {steamid} {SeasonID} {page} {ddata}")
-                        raise RuntimeError(ddata["errorMessage"])
-                    await asyncio.sleep(0.2)
+            LastTime = base_info.lasttime
+            newLastTime = LastTime
+            addMatches = 0
+            addMatchesGP = 0
+            async def _work(session: AsyncSession) -> None:
+                nonlocal newLastTime
+                nonlocal addMatches
+                for SeasonID in [SeasonId, lastSeasonId]:
+                    page = 1
+                    while True:
+                        url = "https://api.wmpvp.com/api/csgo/home/match/list"  
+                        headers = {
+                            "appversion": "3.5.4.172",
+                            "token": config.cs_wmtoken
+                        }
+                        payload = {
+                            "csgoSeasonId": SeasonID,
+                            "dataSource": 3,
+                            "mySteamId": config.cs_mysteam_id,
+                            "page": page,
+                            "pageSize": 50,
+                            "pvpType": -1,
+                            "toSteamId": steamid
+                        }
+                        async with get_session().post(url, json=payload, headers=headers) as result:
+                            ddata = await result.json()
+                        if ddata["statusCode"] != 0:
+                            logger.error(f"爬取失败 {steamid} {SeasonID} {page} {ddata}")
+                            raise RuntimeError(ddata["errorMessage"])
+                        await asyncio.sleep(0.2)
+                        for match in ddata['data']['matchList']:
+                            newLastTime = max(newLastTime, match["timeStamp"])
+                            if match["timeStamp"] > LastTime:
+                                addMatches += await self._update_match(match["matchId"], match["timeStamp"],SeasonID, session)
+                            else:
+                                return
+                        if len(ddata['data']['matchList']) == 0:
+                            break
+                        page += 1
+            async def _work_gp(session: AsyncSession) -> None:
+                nonlocal addMatchesGP
+                url = "https://api.wmpvp.com/api/csgo/home/match/list"  
+                headers = {
+                    "appversion": "3.5.4.172",
+                    "token": config.cs_wmtoken
+                }
+                payload = {
+                    "dataSource": 0,
+                    "mySteamId": config.cs_mysteam_id,
+                    "pageSize": 50,
+                    "toSteamId": steamid
+                }
+
+                async with get_session().post(url, json=payload, headers=headers) as result:
+                    ddata = await result.json()
+                if ddata["statusCode"] != 0:
+                    logger.error(f"gp爬取失败 {steamid} {ddata}")
+                    raise RuntimeError(ddata["errorMessage"])
+                await asyncio.sleep(0.2)
+                if ddata['data']['dataPublic']:
                     for match in ddata['data']['matchList']:
-                        newLastTime = max(newLastTime, match["timeStamp"])
-                        if match["timeStamp"] > LastTime:
-                            addMatches += await self._update_match(match["matchId"], match["timeStamp"],SeasonID, session)
-                        else:
-                            return
-                    if len(ddata['data']['matchList']) == 0:
-                        break
-                    page += 1
-        async def _work_gp(session: AsyncSession) -> None:
-            nonlocal addMatchesGP
-            url = "https://api.wmpvp.com/api/csgo/home/match/list"  
-            headers = {
-                "appversion": "3.5.4.172",
-                "token": config.cs_wmtoken
-            }
-            payload = {
-                "dataSource": 0,
-                "mySteamId": config.cs_mysteam_id,
-                "pageSize": 50,
-                "toSteamId": steamid
-            }
+                        addMatchesGP += await self._update_matchgp(match["matchId"], match["timeStamp"], session)
+        
+            async with async_session_factory() as session:
+                async with session.begin():
+                    await _work(session)
+                    base_info.lasttime = newLastTime
+                    await session.merge(base_info)
 
-            async with get_session().post(url, json=payload, headers=headers) as result:
-                ddata = await result.json()
-            if ddata["statusCode"] != 0:
-                logger.error(f"gp爬取失败 {steamid} {ddata}")
-                raise RuntimeError(ddata["errorMessage"])
-            await asyncio.sleep(0.2)
-            if ddata['data']['dataPublic']:
-                for match in ddata['data']['matchList']:
-                    addMatchesGP += await self._update_matchgp(match["matchId"], match["timeStamp"], session)
-    
-        async with async_session_factory() as session:
-            async with session.begin():
-                await _work(session)
-                base_info.lasttime = newLastTime
-                await session.merge(base_info)
-
-            async with session.begin():
-                await _work_gp(session)
-    
-        return base_info.name, addMatches, addMatchesGP
+                async with session.begin():
+                    await _work_gp(session)
+        
+            return base_info.name, addMatches, addMatchesGP
+        finally:
+            self.lock.release()
     
     async def add_member(self, gid: str, uid: str):
         if gid.startswith("group_"):

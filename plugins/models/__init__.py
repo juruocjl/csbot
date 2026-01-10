@@ -406,3 +406,17 @@ class LiveStatus(Base):
 
     liveid: Mapped[str] = mapped_column(String(50), primary_key=True)
     islive: Mapped[int] = mapped_column(Integer)
+
+# 用户游玩状态记录
+class UserPlayStatus(Base):
+    __tablename__ = "user_play_status"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
+
+    steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    
+    timeStamp: Mapped[int] = mapped_column(Integer)
+    isFirst: Mapped[bool] = mapped_column(Boolean)
+
+    gameId: Mapped[int] = mapped_column(Integer)
+    gameName: Mapped[str] = mapped_column(String(100))

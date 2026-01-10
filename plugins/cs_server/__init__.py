@@ -29,7 +29,7 @@ from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time, gp_time, NoValueError
 require("cs_db_upd")
 from ..cs_db_upd import db as db_upd
-from ..cs_db_upd import TooFrequentError
+from ..cs_db_upd import TooFrequentError, LockingError
 
 require("allmsg")
 from ..allmsg import get_msg_status
@@ -62,17 +62,17 @@ class DataMannager:
         token = secrets.token_hex(32)
         code = str(secrets.randbelow(900000) + 100000)  # 生成6位验证码
         async with async_session_factory() as session:
-            auth_session = AuthSession(
-                token=token,
-                code=code,
-                user_id=None,
-                group_id=None,
-                created_at=int(time.time()),
-                is_verified=False,
-            )
-            session.add(auth_session)
-            await session.commit()
-            return auth_session
+            async with session.begin():
+                auth_session = AuthSession(
+                    token=token,
+                    code=code,
+                    user_id=None,
+                    group_id=None,
+                    created_at=int(time.time()),
+                    is_verified=False,
+                )
+                session.add(auth_session)
+                return auth_session
     
     async def verify_code(self, code: str, user_id: str, group_id: str) -> bool:
         async with async_session_factory() as session:
@@ -1000,6 +1000,8 @@ async def update_player_data(steamId: str = Body(..., embed=True), _ = Depends(g
         res = await db_upd.update_stats(steamId)
     except TooFrequentError as e:
         raise HTTPException(status_code=429, detail=str(e))
+    except LockingError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail="获取失败: " + str(e))
     return PlayerUpdateResponse(

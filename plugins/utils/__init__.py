@@ -70,7 +70,11 @@ def output(val, format):
 
 
 
-engine = create_async_engine(config.cs_database)
+engine = create_async_engine(
+    config.cs_database,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 class LocalStorage:
