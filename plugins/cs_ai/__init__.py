@@ -20,7 +20,7 @@ from ..cs_db_val import valid_time,valid_rank
 from ..cs_db_val import NoValueError
 from ..cs_db_val import get_ladder_filter
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageFunctionToolCall
 from typing import Any, cast
 import json
@@ -216,7 +216,7 @@ model_name = config.cs_ai_model
 async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str:
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
-    client = OpenAI(
+    client = AsyncOpenAI(
         api_key=config.cs_ai_api_key,
         base_url=config.cs_ai_url,
     )
@@ -374,7 +374,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
     if config.cs_ai_enable_thinking:
         api_params["extra_body"] = {"thinking": {"type": "enabled", "budget_tokens": 10000}}
     
-    response = client.chat.completions.create(**api_params)
+    response = await client.chat.completions.create(**api_params)
 
     while tool_budget > 0 and response.choices[0].message.tool_calls:
         msg_with_calls = response.choices[0].message
@@ -481,12 +481,11 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
             add_event("system", "工具调用次数已达上限，请基于已有结果作答。")
             # 修改 tool_choice 为 none
             api_params["tool_choice"] = "none"
-            response = client.chat.completions.create(**api_params)
+            response = await client.chat.completions.create(**api_params)
             break
         
         add_event("system", f"你还可以调用 {tool_budget} 次工具，请继续。")
-        response = client.chat.completions.create(**api_params)
-
+        response = await client.chat.completions.create(**api_params)
     # 记录最后一次assistant响应（无tool_calls）到历史
     final_msg = response.choices[0].message
     output = final_msg.content or ""
@@ -585,7 +584,7 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
     sid = message.get_session_id()
     try:
         # 创建聊天完成请求
-        client = OpenAI(
+        client = AsyncOpenAI(
             api_key=config.cs_ai_api_key,
             base_url=config.cs_ai_url,
         )
@@ -595,7 +594,7 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
         msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
         msgs.append({"role": "user", "content": await db_val.work_msg(args)})
         print(msgs)
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=model_name,
             messages=msgs,
         )
