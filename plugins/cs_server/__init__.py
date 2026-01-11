@@ -1,4 +1,4 @@
-from nonebot import get_plugin_config
+from nonebot import get_driver, get_plugin_config
 from nonebot import get_app, get_bot
 from nonebot import on_command
 from nonebot.adapters.onebot.v11 import Message, MessageSegment, GroupMessageEvent, Bot
@@ -19,6 +19,9 @@ from sqlalchemy import select
 from pydantic import BaseModel, Field
 from pyppeteer import launch
 
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
+
 require("utils")
 from ..utils import async_session_factory
 require("models")
@@ -27,6 +30,7 @@ from ..models import MatchStatsPW, MatchStatsGP
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time, gp_time, NoValueError
+from ..cs_db_val import SteamDetailInfo
 require("cs_db_upd")
 from ..cs_db_upd import db as db_upd
 from ..cs_db_upd import TooFrequentError, LockingError
@@ -52,10 +56,69 @@ config = get_plugin_config(Config)
 
 # 全局缓存配置
 from typing import Any
-SEASON_STATS_CACHE: dict[str, tuple[dict[str, tuple[float, float, float]], float]] = {}  # 格式: {seasonId: (global_stats, timestamp)}
+from sqlalchemy import select
+SEASON_STATS_CACHE: dict[str, dict[str, tuple[float, float, float]]] = {}  # 格式: {seasonId: global_stats}
 # global_stats 格式: {field_name: (min, max, avg)}
-CACHE_EXPIRE_TIME: int = 3600  # 缓存过期时间，单位为秒（1小时）
 
+async def _calculate_global_stats(seasonId: str) -> dict[str, tuple[float, float, float]]:
+    """计算整个赛季的全局统计数据"""
+    
+    async with async_session_factory() as session:
+        stmt = select(SteamDetailInfo).where(SteamDetailInfo.seasonId == seasonId)
+        result = await session.execute(stmt)
+        all_details = result.scalars().all()
+    
+    # 定义用于计算统计数据的字段
+    float_fields = [
+        'winRate', 'pwRating', 'rws', 'pwRatingTAvg', 'pwRatingCtAvg', 'kastPerRound',
+        'killsPerRound', 'killsPerWinRound', 'damagePerRound', 'damagePerRoundWin',
+        'roundsWithAKill', 'multiKillRoundsPercentage', 'we', 'pistolRoundRating',
+        'headshotRate', 'killTime', 'smHitRate', 'reactionTime', 'rapidStopRate',
+        'savedTeammatePerRound', 'tradeKillsPerRound', 'tradeKillsPercentage',
+        'assistKillsPercentage', 'damagePerKill', 'firstHurt', 'winAfterOpeningKill',
+        'firstSuccessRate', 'firstKill', 'firstRate', 'itemRate', 'utilityDamagePerRounds',
+        'flashAssistPerRound', 'flashbangFlashRate', 'timeOpponentFlashedPerRound',
+        'v1WinPercentage', 'clutchPointsPerRound', 'lastAlivePercentage',
+        'timeAlivePerRound', 'savesPerRoundLoss', 'sniperFirstKillPercentage',
+        'sniperKillsPercentage', 'sniperKillPerRound', 'roundsWithSniperKillsPercentage',
+        'sniperMultipleKillRoundPercentage'
+    ]
+    
+    # 计算全局统计数据：(min, max, weighted_avg)
+    global_stats: dict[str, tuple[float, float, float]] = {}
+    for field in float_fields:
+        # 获取 (数值, 场次权重) 元组列表
+        data_pairs = [
+            (getattr(d, field), d.cnt) 
+            for d in all_details 
+            if hasattr(d, field) and getattr(d, field) is not None
+        ]
+        
+        if data_pairs:
+            values = [p[0] for p in data_pairs]
+            weights = [p[1] for p in data_pairs]
+            total_weight = sum(weights)
+            
+            # 使用带权平均数：sum(值 * 权重) / sum(权重)
+            avg_val = sum(v * w for v, w in data_pairs) / total_weight if total_weight > 0 else sum(values) / len(values)
+            global_stats[field] = (min(values), max(values), avg_val)
+        else:
+            global_stats[field] = (0.0, 0.0, 0.0)
+    
+    return global_stats
+
+@scheduler.scheduled_job("interval", minutes=30, id="update_season_stats_cache")
+async def update_season_stats_cache():
+    """定时更新赛季统计缓存"""
+    global SEASON_STATS_CACHE
+    for season_id in [config.cs_season_id, ]:
+        SEASON_STATS_CACHE[season_id] = await _calculate_global_stats(season_id)
+
+driver = get_driver()
+
+@driver.on_startup
+async def _():
+    await update_season_stats_cache()
 
 class DataMannager:
     async def generate_token(self) -> AuthSession:
@@ -231,6 +294,7 @@ async def get_match_user_team(players: list[tuple[str, int]]) -> int | None:
 async def get_nickname(steamid: str) -> str:
     base_info = await db_val.get_base_info(steamid)
     return base_info.name if base_info else "未知玩家"
+
 async def get_legacy_score(steamid: str, timeStamp: int) -> float | None:
     extra_info = await db_val.get_extra_info(steamid, timeStamp=timeStamp)
     return extra_info.legacyScore if extra_info else None
@@ -874,26 +938,15 @@ class PlayerDetailResponse(BaseModel):
     description="根据 Steam ID 获取玩家在当前赛季的详细统计信息。"
 )
 async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(get_current_user)):
-    from sqlalchemy import select, func
-    from ..cs_db_val import SteamDetailInfo
-    
     detail_info = await db_val.get_detail_info(steamId)
     base_info = await db_val.get_base_info(steamId)
     if not detail_info:
         raise HTTPException(status_code=404, detail="Player detail info not found")
     assert base_info is not None
-    # 获取或更新全局统计数据缓存
-    current_time = time.time()
-    if detail_info.seasonId in SEASON_STATS_CACHE:
-        global_stats, cached_time = SEASON_STATS_CACHE[detail_info.seasonId]
-        if current_time - cached_time >= CACHE_EXPIRE_TIME:
-            # 缓存已过期，重新计算
-            global_stats = await _calculate_global_stats(detail_info.seasonId)
-            SEASON_STATS_CACHE[detail_info.seasonId] = (global_stats, current_time)
+    if detail_info.seasonId not in SEASON_STATS_CACHE:
+        raise HTTPException(status_code=500, detail="Season stats cache not initialized")
     else:
-        # 无缓存，计算并存储
-        global_stats = await _calculate_global_stats(detail_info.seasonId)
-        SEASON_STATS_CACHE[detail_info.seasonId] = (global_stats, current_time)
+        global_stats = SEASON_STATS_CACHE[detail_info.seasonId]
     
     # 使用全局统计数据计算个人的 PlayerDetailItem
     stats_data = _get_player_stats(detail_info, global_stats)
@@ -980,43 +1033,6 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
             sniperMultipleKillRoundPercentage=stats_data['sniperMultipleKillRoundPercentage']
         )
     )
-
-async def _calculate_global_stats(seasonId: str) -> dict[str, tuple[float, float, float]]:
-    """计算整个赛季的全局统计数据"""
-    from sqlalchemy import select
-    from ..cs_db_val import SteamDetailInfo
-    
-    async with async_session_factory() as session:
-        stmt = select(SteamDetailInfo).where(SteamDetailInfo.seasonId == seasonId)
-        result = await session.execute(stmt)
-        all_details = result.scalars().all()
-    
-    # 定义用于计算统计数据的字段
-    float_fields = [
-        'winRate', 'pwRating', 'rws', 'pwRatingTAvg', 'pwRatingCtAvg', 'kastPerRound',
-        'killsPerRound', 'killsPerWinRound', 'damagePerRound', 'damagePerRoundWin',
-        'roundsWithAKill', 'multiKillRoundsPercentage', 'we', 'pistolRoundRating',
-        'headshotRate', 'killTime', 'smHitRate', 'reactionTime', 'rapidStopRate',
-        'savedTeammatePerRound', 'tradeKillsPerRound', 'tradeKillsPercentage',
-        'assistKillsPercentage', 'damagePerKill', 'firstHurt', 'winAfterOpeningKill',
-        'firstSuccessRate', 'firstKill', 'firstRate', 'itemRate', 'utilityDamagePerRounds',
-        'flashAssistPerRound', 'flashbangFlashRate', 'timeOpponentFlashedPerRound',
-        'v1WinPercentage', 'clutchPointsPerRound', 'lastAlivePercentage',
-        'timeAlivePerRound', 'savesPerRoundLoss', 'sniperFirstKillPercentage',
-        'sniperKillsPercentage', 'sniperKillPerRound', 'roundsWithSniperKillsPercentage',
-        'sniperMultipleKillRoundPercentage'
-    ]
-    
-    # 计算全局统计数据：(min, max, avg)
-    global_stats: dict[str, tuple[float, float, float]] = {}
-    for field in float_fields:
-        values = [getattr(d, field) for d in all_details if hasattr(d, field) and getattr(d, field) is not None]
-        if values:
-            global_stats[field] = (min(values), max(values), sum(values) / len(values))
-        else:
-            global_stats[field] = (0.0, 0.0, 0.0)
-    
-    return global_stats
 
 def _get_player_stats(detail_info, global_stats: dict[str, tuple[float, float, float]]) -> dict[str, PlayerDetailItem]:
     """从全局统计数据中获取个人的 PlayerDetailItem"""
