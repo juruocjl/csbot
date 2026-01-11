@@ -181,7 +181,7 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         if seg.type == "text":
             msglist.append(["text", seg.data["text"]])
         elif seg.type == "reply":
-            msglist.append(["reply", await db.get_id_by_mid(seg.data["id"])])
+            msglist.append(["reply", await db.get_id_by_mid(int(seg.data["id"]))])
         elif seg.type == "at":
             msglist.append(["at", seg.data["qq"]])
         elif seg.type == "face":
