@@ -211,6 +211,30 @@ async def get_screenshot(path: str, token: str) -> bytes | None:
             await browser.close()
     return screenshot
 
+async def get_match_user_team(players: list[tuple[str, int]]) -> int | None:
+    team1_users = False
+    team2_users = False
+    for steamid, team in players:
+        is_user = await db_val.is_user(steamid)
+        if is_user:
+            if team == 1:
+                team1_users = True
+            elif team == 2:
+                team2_users = True
+    if team1_users and not team2_users:
+        return 1
+    elif team2_users and not team1_users:
+        return 2
+    else:
+        return None
+
+async def get_nickname(steamid: str) -> str:
+    base_info = await db_val.get_base_info(steamid)
+    return base_info.name if base_info else "未知玩家"
+async def get_legacy_score(steamid: str, timeStamp: int) -> float | None:
+    extra_info = await db_val.get_extra_info(steamid, timeStamp=timeStamp)
+    return extra_info.legacyScore if extra_info else None
+
 db = DataMannager()
 
 verify = on_command("验证", aliases={"verify"}, priority=10)
@@ -423,6 +447,7 @@ class MatchPWInfo(BaseModel):
     winTeam: int = Field(..., description="获胜队伍 (1 或 2)")
     mode: str = Field(..., description="比赛模式")
     mapName: str = Field(..., description="比赛地图")
+    userTeam: int | None = Field(..., description="群友所属队伍 (1 或 2)")
     team1Score: int = Field(..., description="队伍 1 分数")
     team2Score: int = Field(..., description="队伍 2 分数")
     team1LegacyScore: float | None = Field(..., description="队伍 1 底蕴均分")
@@ -439,12 +464,6 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
     if not match_detail:
         raise HTTPException(status_code=404, detail="Match not found")
     match_extra = await db_val.get_match_extra(matchId)
-    async def get_nickname(player: MatchStatsPW) -> str:
-        base_info = await db_val.get_base_info(player.steamid)
-        return base_info.name if base_info else "未知玩家"
-    async def get_legacy_score(player: MatchStatsPW) -> float | None:
-        extra_info = await db_val.get_extra_info(player.steamid, timeStamp=player.timeStamp)
-        return extra_info.legacyScore if extra_info else None
     return MatchPWInfo(
         matchId=matchId,
         timestamp=match_detail[0].timeStamp,
@@ -452,6 +471,7 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
         winTeam=match_detail[0].winTeam,
         mode=match_detail[0].mode,
         mapName=match_detail[0].mapName,
+        userTeam=await get_match_user_team([(player.steamid, player.team) for player in match_detail]),
         team1Score=match_detail[0].score1,
         team2Score=match_detail[0].score2,
         team1LegacyScore=match_extra.team1Legacy if match_extra else None,
@@ -459,14 +479,14 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
         players=[
             MatchPWPlayerInfo(
                 steamId=player.steamid,
-                nickname=await get_nickname(player),
+                nickname=await get_nickname(player.steamid),
                 team=player.team,
                 rating=player.pwRating,
                 we=player.we,
                 kills=player.kill,
                 deaths=player.death,
                 assists=player.assist,
-                legacyScore=await get_legacy_score(player),
+                legacyScore=await get_legacy_score(player.steamid, player.timeStamp),
                 pvpScore=player.pvpScore,
                 pvpScoreChange=player.pvpScoreChange,
                 pvpStars=player.pvpStars
@@ -542,7 +562,6 @@ async def get_match_history(
         ] if match_records else []
     )
 
-
 class MatchGPPlayerInfo(BaseModel):
     steamId: str = Field(..., description="玩家的 Steam ID")
     nickname: str = Field(..., description="玩家昵称")
@@ -561,6 +580,7 @@ class MatchGPInfo(BaseModel):
     winTeam: int = Field(..., description="获胜队伍 (1 或 2)")
     mode: str = Field(..., description="比赛模式")
     mapName: str = Field(..., description="比赛地图")
+    userTeam: int | None = Field(..., description="群友所属队伍 (1 或 2)")
     team1Score: int = Field(..., description="队伍 1 分数")
     team2Score: int = Field(..., description="队伍 2 分数")
     team1LegacyScore: float | None = Field(..., description="队伍 1 底蕴均分")
@@ -577,18 +597,13 @@ async def get_match_gp_info(matchId: str = Body(..., embed=True), _ = Depends(ge
     if not match_detail:
         raise HTTPException(status_code=404, detail="Match not found")
     match_extra = await db_val.get_match_gp_extra(matchId)
-    async def get_nickname(player: MatchStatsGP) -> str:
-        base_info = await db_val.get_base_info(player.steamid)
-        return base_info.name if base_info else "未知玩家"
-    async def get_legacy_score(player: MatchStatsGP) -> float | None:
-        extra_info = await db_val.get_extra_info(player.steamid, timeStamp=player.timeStamp)
-        return extra_info.legacyScore if extra_info else None
     return MatchGPInfo(
         matchId=matchId,
         timestamp=match_detail[0].timeStamp,
         winTeam=match_detail[0].winTeam,
         mode=match_detail[0].mode,
         mapName=match_detail[0].mapName,
+        userTeam=await get_match_user_team([(player.steamid, player.team) for player in match_detail]),
         team1Score=match_detail[0].score1,
         team2Score=match_detail[0].score2,
         team1LegacyScore=match_extra.team1Legacy if match_extra else None,
@@ -596,14 +611,14 @@ async def get_match_gp_info(matchId: str = Body(..., embed=True), _ = Depends(ge
         players=[
             MatchGPPlayerInfo(
                 steamId=player.steamid,
-                nickname=await get_nickname(player),
+                nickname=await get_nickname(player.steamid),
                 team=player.team,
                 rating=player.rating,
                 adr=player.adpr,
                 kills=player.kill,
                 deaths=player.death,
                 assists=player.assist,
-                legacyScore=await get_legacy_score(player),
+                legacyScore=await get_legacy_score(player.steamid, player.timeStamp),
                 rank=player.rank
             ) for player in match_detail
         ]

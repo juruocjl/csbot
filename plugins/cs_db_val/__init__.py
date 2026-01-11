@@ -143,6 +143,14 @@ class DataManager:
             
             return record.steamid if record else None
 
+    async def is_user(self, steamid: str) -> bool:
+        """是否是群友"""
+        async with async_session_factory() as session:
+            stmt = select(MemberSteamID).where(MemberSteamID.steamid == steamid)
+            result = await session.execute(stmt)
+            record = result.scalar_one_or_none()
+            return record is not None
+
     async def get_base_info(self, steamid: str) -> SteamBaseInfo | None:
         async with async_session_factory() as session:
             return await session.get(SteamBaseInfo, steamid)
