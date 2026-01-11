@@ -146,10 +146,10 @@ class DataManager:
     async def is_user(self, steamid: str) -> bool:
         """是否是群友"""
         async with async_session_factory() as session:
-            stmt = select(MemberSteamID).where(MemberSteamID.steamid == steamid)
+            stmt = select(func.count(MemberSteamID.steamid)).where(MemberSteamID.steamid == steamid)
             result = await session.execute(stmt)
-            record = result.scalar_one_or_none()
-            return record is not None
+            count = result.scalar_one()
+            return count > 0
 
     async def get_base_info(self, steamid: str) -> SteamBaseInfo | None:
         async with async_session_factory() as session:
