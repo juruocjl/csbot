@@ -358,7 +358,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         
         messages.append(msg)
     await add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用10次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
-    await add_event("system", f"可用用户名：{usernames}；可用时间：{valid_time}；可用排名项：{valid_rank}。默认时间为本赛季。")
+    rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
+    await add_event("system", f"可用用户名：{usernames}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
 
