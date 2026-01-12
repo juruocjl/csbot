@@ -45,7 +45,6 @@ avatar_dir.mkdir(exist_ok=True)
 goods_dir = img_dir / "goodsimg"
 goods_dir.mkdir(exist_ok=True)
 
-
 driver = get_driver()
 
 def get_today_start_timestamp(refreshtime = 0):

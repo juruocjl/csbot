@@ -847,7 +847,7 @@ async def get_fish(steamid: str, time_type: str) -> tuple[float, int]:
             select(func.avg(MatchStatsPW.pwRating), func.count(MatchStatsPW.mid))
             .where(*get_ladder_filter(steamid, time_type))
             .where(MatchStatsPW.winTeam == MatchStatsPW.team)
-            .where(func.min(MatchStatsPW.score1, MatchStatsPW.score2) <= 6)
+            .where(func.least(MatchStatsPW.score1, MatchStatsPW.score2) <= 6)
         )
         row = (await session.execute(stmt)).one()
         if row[1] > 0:
@@ -1385,7 +1385,7 @@ async def get_gp_fish(steamid: str, time_type: str) -> tuple[float, int]:
             .where(MatchStatsGP.steamid == steamid)
             .where(MatchStatsGP.winTeam == MatchStatsGP.team)
             # 小分 <= 6
-            .where(func.min(MatchStatsGP.score1, MatchStatsGP.score2) <= 6)
+            .where(func.least(MatchStatsGP.score1, MatchStatsGP.score2) <= 6)
             .where(text(time_sql))
         )
         row = (await session.execute(stmt)).one()

@@ -12,4 +12,4 @@ result.txt
 log
 imgs
 win_matrix.csv
-mysql_data
+mymigrations/versions

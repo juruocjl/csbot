@@ -34,6 +34,8 @@ from ..cs_db_val import SteamDetailInfo
 require("cs_db_upd")
 from ..cs_db_upd import db as db_upd
 from ..cs_db_upd import TooFrequentError, LockingError
+require("cs_ai")
+from ..cs_ai import db as db_ai
 
 require("allmsg")
 from ..allmsg import get_msg_status
@@ -1208,4 +1210,43 @@ async def get_rank_list(
                 count=val[1]
             ) for steamid, val in datas
         ]
+    )
+
+class AIRecordIdsResponse(BaseModel):
+    isEnd: bool = Field(..., description="是否已结束生成")
+    recordIds: list[int] = Field(..., description="此聊天记录编号列表")
+
+@app.post("/api/ai/recordids",
+    response_model=AIRecordIdsResponse,
+    summary="获取AI聊天记录编号列表",
+    description="获取当前认证 Token 所在群组的AI聊天记录编号列表。"
+)
+async def get_ai_record_ids(chatId: str=Body(..., embed=True), _: AuthSession = Depends(get_current_user)):
+    is_end, record_ids = await db_ai.get_chat_records_id(chatId)
+    return AIRecordIdsResponse(
+        isEnd=is_end,
+        recordIds=record_ids
+    )
+
+class AiRecordResponse(BaseModel):
+    timestamp: int = Field(..., description="聊天记录时间戳")
+    role: str = Field(..., description="角色")
+    content: str | None = Field(..., description="聊天内容")
+    tools: str | None = Field(..., description="工具使用情况")
+    reasons: str | None = Field(..., description="思考过程")
+@app.post("/api/ai/record",
+    response_model=AiRecordResponse,
+    summary="获取AI聊天记录内容",
+    description="根据聊天记录编号获取AI聊天记录的详细内容。"
+)
+async def get_ai_record(recordId: int=Body(..., embed=True), _: AuthSession = Depends(get_current_user)):
+    record = await db_ai.get_chat_record(recordId)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return AiRecordResponse(
+        timestamp=record.timestamp,
+        role=record.role,
+        content=record.content,
+        tools=record.tool_calls,
+        reasons=record.reasoning_content
     )

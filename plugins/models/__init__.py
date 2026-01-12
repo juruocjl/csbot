@@ -324,6 +324,19 @@ class AIMemory(Base):
     # 使用 Text 类型，因为 'mem' 看起来可能存储较长的文本或 JSON
     mem: Mapped[str] = mapped_column(Text)
 
+# AI 对话记录
+class AIChatRecord(Base):
+    __tablename__ = "ai_chat_record"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
+    chat_id: Mapped[str] = mapped_column(String(36))
+    is_end: Mapped[bool] = mapped_column(Boolean)
+    timestamp: Mapped[int] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(20))
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_calls: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reasoning_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 # 用户认证会话
 class AuthSession(Base):
     __tablename__ = "auth_sessions"

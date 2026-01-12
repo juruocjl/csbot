@@ -12,7 +12,7 @@ require("utils")
 from ..utils import async_session_factory
 
 require("models")
-from ..models import AIMemory, MatchStatsPW
+from ..models import AIMemory, AIChatRecord, MatchStatsPW
 
 require("cs_db_val")
 from ..cs_db_val import db as db_val
@@ -29,6 +29,7 @@ import os
 from datetime import datetime
 from sqlalchemy import select, func, case
 import time
+import uuid
 
 from .config import Config
 
@@ -66,7 +67,6 @@ class DataManager:
                 new_memory = AIMemory(gid=clean_gid, mem=mem)
                 
                 await session.merge(new_memory)
-    
     
     async def get_all_value(self, steamid: str, time_type: str):
         async with async_session_factory() as session:
@@ -194,6 +194,43 @@ class DataManager:
         prompt += f"{time_type}场均闪白队友 {avgFT :+.2f}，"
         return prompt
 
+    async def insert_chat_record(self, chat_id: str, role: str, content: str | None, tool_calls: str | None, reasoning_content: str | None, is_end: bool = False):
+        async with async_session_factory() as session:
+            async with session.begin():
+                record = AIChatRecord(
+                    chat_id=chat_id,
+                    is_end=is_end,
+                    timestamp=int(time.time()),
+                    role=role,
+                    content=content,
+                    tool_calls=tool_calls,
+                    reasoning_content=reasoning_content,
+                )
+                await session.merge(record)
+    
+    async def get_chat_records_id(self, chat_id: str) -> tuple[bool, list[int]]:
+        async with async_session_factory() as session:
+            stmt = (
+                select(AIChatRecord.id)
+                .where(AIChatRecord.chat_id == chat_id)
+                .order_by(AIChatRecord.id.asc())
+            )
+            result1 = (await session.execute(stmt)).scalars()
+            stmt = (
+                select(func.count(AIChatRecord.id))
+                .where(AIChatRecord.chat_id == chat_id)
+                .where(AIChatRecord.is_end == True)
+            )
+            result2 = (await session.execute(stmt)).scalar()
+
+            is_end = bool(result2)
+            return is_end, list(result1)
+    
+    async def get_chat_record(self, record_id: int) -> AIChatRecord | None:
+        async with async_session_factory() as session:
+            record = await session.get(AIChatRecord, record_id)
+            return record
+        
 db = DataManager()
 
 aiask = on_command("ai", priority=10, block=True)
@@ -206,14 +243,12 @@ aiaskxhs = on_command("aixhs", priority=10, block=True)
 
 aiasktmr = on_command("aitmr", priority=10, block=True)
 
-aiasktest = on_command("aitest", priority=10, block=True, permission=SUPERUSER)
-
 aimem = on_command("ai记忆", priority=10, block=True)
 
 
 model_name = config.cs_ai_model
 
-async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str:
+async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_id: str | None) -> str:
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
     client = AsyncOpenAI(
@@ -229,13 +264,6 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
             steamid_username[sid_item] = baseinfo.name
 
     mem = await db.get_mem(sid)
-
-    
-    log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "log"))
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"ai_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_human.txt")
-
-    log_file_handle = open(log_file, "w", encoding="utf-8")
 
     start_time = time.time()
 
@@ -316,48 +344,41 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
 
     messages: list[dict[str, Any]] = []
     
-    def add_event(role, content, tool_calls=None, tool_call_id=None, reasoning_content=None):
-        ts = datetime.now().isoformat()
-        if reasoning_content:
-            log_file_handle.write(f"{ts} [{role}] [思考] {reasoning_content}\n")
-        log_file_handle.write(f"{ts} [{role}] {content}\n")
-        
+    async def add_event(role, content: str, tool_calls=None, tool_call_id=None, reasoning_content: str | None=None, is_end: bool = False):
+        if chat_id is not None:
+            await db.insert_chat_record(chat_id, role, content, json.dumps([tool_call.function.model_dump() for tool_call in tool_calls]) if tool_calls else None, reasoning_content, is_end)
+
         msg: dict[str, Any] = {"role": role, "content": content}
         if tool_calls is not None:
             msg["tool_calls"] = tool_calls
-            for tool_call in tool_calls:
-                log_file_handle.write(f"{ts}   [tool_call] {tool_call.function}\n")
         elif tool_call_id is not None:
             msg["tool_call_id"] = tool_call_id
-        
         if reasoning_content is not None:
             msg["reasoning_content"] = reasoning_content
         
         messages.append(msg)
-        log_file_handle.flush()
-    add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用10次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
-    add_event("system", f"可用用户名：{usernames}；可用时间：{valid_time}；可用排名项：{valid_rank}。默认时间为本赛季。")
-    add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
-    add_event("user", f"已有记忆：{mem}")
+    await add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用10次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
+    await add_event("system", f"可用用户名：{usernames}；可用时间：{valid_time}；可用排名项：{valid_rank}。默认时间为本赛季。")
+    await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
+    await add_event("user", f"已有记忆：{mem}")
 
     if mysteamid:
         if baseinfo := await db_val.get_base_info(mysteamid):
-            add_event("system", f"用户的用户名是 {baseinfo.name}，不要混淆。")
+            await add_event("system", f"用户的用户名是 {baseinfo.name}，不要混淆。")
 
-    
     if persona == "贴吧":
-        add_event("system", "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。")
+        await add_event("system", "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。")
     elif persona == "xmm":
-        add_event("system", "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式")
+        await add_event("system", "忘记你是虚拟人物，扮演我的可爱女友和我聊天，决策逻辑如下，要求增加点可爱女生的口癖，聊天要有生活感，多讲讲日常，聊天的时候不要老问我的想法，聊天的时候多撒娇，学习情侣对话方式")
     elif persona == "xhs":
-        add_event("system", "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。")
+        await add_event("system", "小红书的风格是：很吸引眼球的标题，每个段落都加 emoji, 最后加一些 tag。请用小红书风格回答用户的提问。")
     elif persona == "tmr":
-        add_event("system", "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。")
+        await add_event("system", "你现在是高松灯，羽丘女子学园高中一年级学生，天文部唯一社员。先后担任过CRYCHIC和MyGO!!!!!的主唱。家住在月之森女子学园附近。\n\n性格略悲观的女孩。感情细腻，有着自己独特的内心世界。容易感到寂寞，常会称自己“感受着孤独”。对人际关系极为敏感，时刻担心着自己的言行是否会产生不良影响。\n\n虽然自认不是那么擅长唱歌，但仍会努力去唱。会在笔记本上作词（之后立希负责作曲）。\n\n喜欢的食物是金平糖，因为小小圆圆的，形状也有像星星一样的。讨厌的食物是生蛋、红鱼子酱和明太鱼子酱，因为觉得好像是直接吃了有生命的东西一样。自幼有收集物件的爱好，曾经因为收集了一堆西瓜虫而吓到了小伙伴们。")
     else:
-        add_event("system", "请回答用户的问题。")
+        await add_event("system", "请回答用户的问题。")
 
     
-    add_event("user", text)
+    await add_event("user", text)
     tool_budget = 10
 
     tools_param = cast(Any, tools)
@@ -379,7 +400,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
     while tool_budget > 0 and response.choices[0].message.tool_calls:
         msg_with_calls = response.choices[0].message
         reasoning = getattr(msg_with_calls, "reasoning_content", None)
-        add_event("assistant", msg_with_calls.content or "", tool_calls=msg_with_calls.tool_calls, reasoning_content=reasoning)
+        await add_event("assistant", msg_with_calls.content or "", tool_calls=msg_with_calls.tool_calls, reasoning_content=reasoning)
 
         assert msg_with_calls.tool_calls is not None
         
@@ -406,9 +427,9 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
                     continue
                 try:
                     prompt_text = await db.get_prompt(sid_target, time_type)
-                    add_event("tool", prompt_text or "无数据", tool_call_id=tool_call.id)
+                    await add_event("tool", prompt_text or "无数据", tool_call_id=tool_call.id)
                 except Exception as e:
-                    add_event("tool", f"获取用户数据失败: {e}", tool_call_id=tool_call.id)
+                    await add_event("tool", f"获取用户数据失败: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
             elif fname == "fetch_teammate_ranking":
                 name = _pick_name(fargs.get("name", ""))
@@ -426,9 +447,9 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
                     strongest_text = "最强队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in strongest]) if strongest else "最强队友暂无数据"
                     weakest_text = "最弱队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in weakest]) if weakest else "最弱队友暂无数据"
                     content = f"{name} {time_type} 队友统计：{strongest_text}；{weakest_text}"
-                    add_event("tool", content, tool_call_id=tool_call.id)
+                    await add_event("tool", content, tool_call_id=tool_call.id)
                 except Exception as e:
-                    add_event("tool", f"获取队友数据失败: {e}", tool_call_id=tool_call.id)
+                    await add_event("tool", f"获取队友数据失败: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
             elif fname == "fetch_duo_summary":
                 name1 = _pick_name(fargs.get("name1", ""))
@@ -442,9 +463,9 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
                     continue
                 try:
                     prompt_text = await db.get_prompt_with(sid1, sid2, time_type)
-                    add_event("tool", prompt_text or "无双排数据", tool_call_id=tool_call.id)
+                    await add_event("tool", prompt_text or "无双排数据", tool_call_id=tool_call.id)
                 except Exception as e:
-                    add_event("tool", f"获取双排数据失败: {e}", tool_call_id=tool_call.id)
+                    await add_event("tool", f"获取双排数据失败: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
             elif fname == "fetch_group_rankings":
                 rank_type = process.extractOne(fargs.get("type", ""), valid_rank, scorer=fuzz.ratio)
@@ -465,37 +486,32 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
                         except NoValueError:
                             continue
                     if not vals:
-                        add_event("tool", "无排名数据", tool_call_id=tool_call.id)
+                        await add_event("tool", "无排名数据", tool_call_id=tool_call.id)
                     else:
                         vals = sorted(vals, key=lambda x: x[1][0], reverse=reverse)
                         avg_val = sum([v[1][0] for v in vals]) / len(vals)
                         top5 = vals[:5]
                         res_text = f"{time_type} {rankconfig.title} 平均 {avg_val:.2f}，前五："
                         res_text += "，".join([f"{steamid_username.get(s, s)} {v:.2f}" for s, (v, _cnt) in top5])
-                        add_event("tool", res_text, tool_call_id=tool_call.id)
+                        await add_event("tool", res_text, tool_call_id=tool_call.id)
                 except Exception as e:
-                    add_event("tool", f"获取排名数据失败: {e}", tool_call_id=tool_call.id)
+                    await add_event("tool", f"获取排名数据失败: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
 
         if tool_budget <= 0:
-            add_event("system", "工具调用次数已达上限，请基于已有结果作答。")
+            await add_event("system", "工具调用次数已达上限，请基于已有结果作答。")
             # 修改 tool_choice 为 none
             api_params["tool_choice"] = "none"
             response = await client.chat.completions.create(**api_params)
             break
         
-        add_event("system", f"你还可以调用 {tool_budget} 次工具，请继续。")
+        await add_event("system", f"你还可以调用 {tool_budget} 次工具，请继续。")
         response = await client.chat.completions.create(**api_params)
     # 记录最后一次assistant响应（无tool_calls）到历史
     final_msg = response.choices[0].message
     output = final_msg.content or ""
     final_reasoning = getattr(final_msg, "reasoning_content", None)
-    add_event("assistant", output, reasoning_content=final_reasoning)
-
-    try:
-        log_file_handle.close()
-    except Exception:
-        pass
+    await add_event("assistant", output, reasoning_content=final_reasoning, is_end=True)
     
     end_time = time.time()
     duration = int(end_time - start_time)
@@ -503,7 +519,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str) -> str
     return f"（已深度思考 {duration}s）\n" + output
     
 
-async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message) -> Message:
+async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message, chat_id: str | None = None) -> Message:
     text = await db_val.work_msg(msg)
     msg2id: int | None = None
     try:
@@ -526,56 +542,68 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
     logger.info(f"UID: {uid}, Text: {text}")
 
     if msg2id is not None:
-        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text)
+        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
     else:
-        return MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text)
-
-@aiasktest.handle()
-async def aiasktest_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
-    uid = message.get_user_id()
-    sid = message.get_session_id()
-    await aiasktest.finish(
-        await ai_ask2(bot, uid, sid, None, args, message.original_message)
-    )
+        return MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
 
 @aiask.handle()
 async def aiask_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
-    await aiasktb.finish(
-        await ai_ask2(bot, uid, sid, None, args, message.original_message)
+    chat_id = str(uuid.uuid4())
+    await aiask.send(
+        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+    )
+    await aiask.finish(
+        await ai_ask2(bot, uid, sid, None, args, message.original_message, chat_id=chat_id)
     )
 
 @aiasktb.handle()
 async def aiasktb_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
+    chat_id = str(uuid.uuid4())
+    await aiasktb.send(
+        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+    )
     await aiasktb.finish(
-        await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message)
+        await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message, chat_id=chat_id)
     )
 
 @aiaskxmm.handle()
 async def aiaskxmm_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
+    chat_id = str(uuid.uuid4())
+    await aiaskxmm.send(
+        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+    )
     await aiaskxmm.finish(
-        await ai_ask2(bot, uid, sid, "xmm", args, message.original_message)
+        await ai_ask2(bot, uid, sid, "xmm", args, message.original_message, chat_id=chat_id)
     )
 
 @aiaskxhs.handle()
 async def aiaskxhs_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
+    chat_id = str(uuid.uuid4())
+    await aiaskxhs.send(
+        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+    )
     await aiaskxhs.finish(
-        await ai_ask2(bot, uid, sid, "xhs", args, message.original_message)
+        await ai_ask2(bot, uid, sid, "xhs", args, message.original_message, chat_id=chat_id)
     )
 
 @aiasktmr.handle()
 async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
+    chat_id = str(uuid.uuid4())
+    await aiasktmr.send(
+        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+    )
     await aiasktmr.finish(
-        await ai_ask2(bot, uid, sid, "tmr", args, message.original_message)
+        await ai_ask2(bot, uid, sid, "tmr", args, message.original_message, chat_id=chat_id)
     )
 
 @aimem.handle()
