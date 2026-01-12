@@ -200,7 +200,7 @@ class DataManager:
         获取所有绑定的 SteamID
         """
         async with async_session_factory() as session:
-            stmt = select(MemberSteamID.steamid)
+            stmt = select(MemberSteamID.steamid).distinct()
             result = await session.execute(stmt)
             return list(result.scalars().all())
     
