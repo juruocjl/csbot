@@ -45,6 +45,8 @@ class MinAdd(RangeGen):
     def __init__(self, val):
         self.val = val
     def getval(self, minvalue, maxvalue):
+        if 0 <= minvalue < maxvalue:
+            return max(minvalue + self.val, 0), maxvalue
         return minvalue + self.val, maxvalue
 class Fix(RangeGen):
     def __init__(self, val):
