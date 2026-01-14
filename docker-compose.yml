@@ -24,8 +24,11 @@ services:
     image: nginx:alpine
     container_name: csbot-nginx
     restart: unless-stopped
+    environment:
+      - WORKER_SECRET=${REAL_WORKER_SECRET}
     ports:
       - "80:80"
+      - "8000:8000"
     volumes:
       - ./assets/default.conf:/etc/nginx/conf.d/default.conf
       - ./imgs/:/usr/share/nginx/imgs/
