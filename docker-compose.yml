@@ -28,7 +28,7 @@ services:
       - WORKER_SECRET=${REAL_WORKER_SECRET}
     ports:
       - "80:80"
-      - "8000:8000"
+      - "2095:2095"
     volumes:
       - ./assets/default.conf:/etc/nginx/templates/default.conf.template
       - ./imgs/:/usr/share/nginx/imgs/
