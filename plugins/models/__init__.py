@@ -24,7 +24,7 @@ class GroupMsg(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
     mid: Mapped[int] = mapped_column(Integer)
     sid: Mapped[str] = mapped_column(String(50))
-    timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
+    timestamp: Mapped[int] = mapped_column(BigInteger, name="timeStamp")
     data: Mapped[bytes] = mapped_column(LargeBinary) # 对应 BLOB 类型
 
 # 图片缓存信息
@@ -72,7 +72,7 @@ class MatchStatsPW(Base):
     we: Mapped[float] = mapped_column(Float)
     
     # --- 基础数据 ---
-    timeStamp: Mapped[int] = mapped_column(Integer)
+    timeStamp: Mapped[int] = mapped_column(BigInteger)
     kill: Mapped[int] = mapped_column(Integer)
     death: Mapped[int] = mapped_column(Integer)
     assist: Mapped[int] = mapped_column(Integer)
@@ -145,7 +145,7 @@ class MatchStatsGP(Base):
     winTeam: Mapped[int] = mapped_column(Integer)
     score1: Mapped[int] = mapped_column(Integer)
     score2: Mapped[int] = mapped_column(Integer)
-    timeStamp: Mapped[int] = mapped_column(Integer)
+    timeStamp: Mapped[int] = mapped_column(BigInteger)
     mode: Mapped[str] = mapped_column(String(100))
     duration: Mapped[int] = mapped_column(Integer)
     
@@ -312,7 +312,7 @@ class SteamExtraInfo(Base):
     __tablename__ = "steam_extra_info"
 
     steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
-    timeStamp: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timeStamp: Mapped[int] = mapped_column(BigInteger, primary_key=True)
 
     legacyScore: Mapped[float] = mapped_column(Float)
 
@@ -331,7 +331,7 @@ class AIChatRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
     chat_id: Mapped[str] = mapped_column(String(36))
     is_end: Mapped[bool] = mapped_column(Boolean)
-    timestamp: Mapped[int] = mapped_column(Integer)
+    timestamp: Mapped[int] = mapped_column(BigInteger)
     role: Mapped[str] = mapped_column(String(20))
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_calls: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -375,7 +375,7 @@ class MemberGoods(Base):
 class GoodsInfo(Base):
     __tablename__ = "goods_info"
     marketHashName: Mapped[str] = mapped_column(String(500), primary_key=True)
-    timeStamp: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timeStamp: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     goodId: Mapped[int] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(500))
     buffSellPrice: Mapped[int] = mapped_column(Integer)
@@ -403,7 +403,7 @@ class FuduPoint(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
     uid: Mapped[str] = mapped_column(String(50))
-    timestamp: Mapped[int] = mapped_column(Integer, name="timeStamp")
+    timestamp: Mapped[int] = mapped_column(BigInteger, name="timeStamp")
     point: Mapped[int] = mapped_column(Integer)
 
 # 本地存储键值对
@@ -428,7 +428,7 @@ class UserPlayStatus(Base):
 
     steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
     
-    timeStamp: Mapped[int] = mapped_column(Integer)
+    timeStamp: Mapped[int] = mapped_column(BigInteger)
     isFirst: Mapped[bool] = mapped_column(Boolean)
 
     gameId: Mapped[int] = mapped_column(Integer)

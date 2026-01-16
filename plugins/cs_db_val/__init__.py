@@ -161,7 +161,7 @@ class DataManager:
         async with async_session_factory() as session:
             return await session.get(SteamDetailInfo, (steamid, seasonid))
 
-    async def _get_extra_info(self, steamid: str, session, timeStamp: int = 2000000000) -> SteamExtraInfo | None:
+    async def _get_extra_info(self, steamid: str, session, timeStamp: int = int(1e10)) -> SteamExtraInfo | None:
         """接受 session 参数的版本，用于事务内调用"""
         stmt = (
             select(SteamExtraInfo)
@@ -184,7 +184,7 @@ class DataManager:
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_extra_info(self, steamid: str, timeStamp: int = 2000000000) -> SteamExtraInfo | None:
+    async def get_extra_info(self, steamid: str, timeStamp: int = int(1e10)) -> SteamExtraInfo | None:
         async with async_session_factory() as session:
             return await self._get_extra_info(steamid, session, timeStamp)
 

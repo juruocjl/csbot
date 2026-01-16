@@ -66,14 +66,14 @@ class DataManager:
     async def get_id_by_mid(self, mid: int) -> int:
         async with async_session_factory() as session:
             stmt = select(GroupMsg.id).where(GroupMsg.mid == mid)\
-                .order_by(desc(GroupMsg.timestamp))\
+                .order_by(GroupMsg.timestamp.desc())\
                 .limit(1)
             
             result = await session.execute(stmt)
             row_id = result.scalar()
             return row_id if row_id is not None else -1
 
-    async def get_all_msg(self, groupid, userid="%", tmrange=(0, 1e10)) -> dict:
+    async def get_all_msg(self, groupid: str, userid: str="%", tmrange: tuple[int, int]=(0, int(1e10))) -> dict:
         async with async_session_factory() as session:
             # 构造 LIKE 字符串: group_{groupid}_{userid}
             like_str = f"group_{groupid}_{userid}"
