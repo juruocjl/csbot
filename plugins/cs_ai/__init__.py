@@ -503,6 +503,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             await add_event("system", "工具调用次数已达上限，请基于已有结果作答。")
             # 修改 tool_choice 为 none
             api_params["tool_choice"] = "none"
+            del api_params["tools"]
             response = await client.chat.completions.create(**api_params)
             break
         
