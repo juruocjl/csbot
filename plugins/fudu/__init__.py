@@ -441,6 +441,7 @@ async def setcard_function(bot: Bot, message: GroupMessageEvent, args: Message =
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
+    admin = False
     if uid == await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}', "0")):
         admin = True
     if not admin:
