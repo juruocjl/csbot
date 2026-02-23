@@ -455,7 +455,7 @@ async def setcard_function(message: GroupMessageEvent):
         await local_storage.set("card_manager", card_manager.model_dump_json())
 
 
-@scheduler.add_job("cron", minute="*/5", id="flush_card")
+@scheduler.scheduled_job("cron", minute="*/5", id="flush_card")
 async def flush_card():
     bot = get_bot()
     assert isinstance(bot, Bot)
