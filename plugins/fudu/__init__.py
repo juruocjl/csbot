@@ -455,7 +455,7 @@ async def setcard_function(message: GroupMessageEvent):
         card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", INIT_CARD_MANAGER))
         card_manager.set_card(gid, uid, text)
         await local_storage.set("card_manager", card_manager.model_dump_json())
-
+    await setcard.finish("设置成功 " + MessageSegment.at(uid) + f" 的昵称为 {text}")
 
 @scheduler.scheduled_job("cron", minute="*/5", id="flush_card")
 async def flush_card():
