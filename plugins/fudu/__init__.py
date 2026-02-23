@@ -409,8 +409,8 @@ class CardSet(BaseModel):
     expire_time: int
 
 class CardManager(BaseModel):
-    def __init__(self):
-        self.nickname_sets: list[CardSet] = []
+
+    nickname_sets: list[CardSet] = []
     
     def flush(self):
         now = int(time.time())
