@@ -431,6 +431,8 @@ class CardManager(BaseModel):
                 return
         self.nickname_sets.append(CardSet(group_id=group_id, user_id=user_id, card=card, expire_time=expire_time))
 
+INIT_CARD_MANAGER = CardManager().model_dump_json()
+
 card_lock = asyncio.Lock()
 
 @setcard.handle()
@@ -450,7 +452,7 @@ async def setcard_function(message: GroupMessageEvent):
     if len(text.encode('utf-8')) > 60:
         await setcard.finish("昵称过长")
     async with card_lock:
-        card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", "[]"))
+        card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", INIT_CARD_MANAGER))
         card_manager.set_card(gid, uid, text)
         await local_storage.set("card_manager", card_manager.model_dump_json())
 
@@ -459,7 +461,7 @@ async def setcard_function(message: GroupMessageEvent):
 async def flush_card():
     bot = get_bot()
     assert isinstance(bot, Bot)
-    card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", "[]"))
+    card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", INIT_CARD_MANAGER))
     card_manager.flush()
     for s in card_manager.nickname_sets:
         if await getcard(bot, s.group_id, s.user_id) != s.card:
