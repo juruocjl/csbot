@@ -4,6 +4,7 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, NoticeEvent, Message,
 from nonebot import logger
 from nonebot import on_command, on_notice, on_message
 from nonebot import require
+from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot import get_bot
 
@@ -127,6 +128,7 @@ async def fuduhelp_function():
 管理员被撤销概率公式：max(0,tanh((本句点数*累计点数/100-50)/500))
 复读自己/使用poke5，第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为50。
 复读时会给第一个发消息的人加一点奖励点数，奖励点数不参与概率计算。骂sb额外增加5点，3条相同会给@对象禁言。
+管理员可以使用/设置昵称 @人 名称 来给群成员设置昵称，管理员被撤销后设置的昵称会失效，点数为 20 点。
 若两条相同消息间隔不超过{config.cs_fudu_delay}s，即使中间有其他消息，也会被认为是复读。
 管理员roll点权重为 (常规点数/(禁言次数+1)+奖励点数+1)*log(1+天梯场次+0.6*官匹场次+0.3*内战场次)
 """)
@@ -406,37 +408,35 @@ class CardSet(BaseModel):
     group_id: str
     user_id: str
     card: str
-    expire_time: int
+    admin_uid: str
 
 class CardManager(BaseModel):
 
     nickname_sets: list[CardSet] = []
     
-    def flush(self):
-        now = int(time.time())
-        self.nickname_sets = [s for s in self.nickname_sets if s.expire_time > now]
+    def flush(self, group_id: str, admin_uid: Optional[str] = None):
+        self.nickname_sets = [s for s in self.nickname_sets if s.group_id != group_id or s.admin_uid == admin_uid]
     
-    def set_card(self, group_id: str, user_id: str, card: str) -> None:
-        self.flush()
+    def set_card(self, group_id: str, user_id: str, card: str, admin_uid: str) -> None:
+        self.flush(group_id, admin_uid)
         
         if card == "":
             self.nickname_sets = [s for s in self.nickname_sets if s.group_id != group_id or s.user_id != user_id]
             return
 
-        expire_time = get_today_start_timestamp(refreshtime=86100) + 86400
         for s in self.nickname_sets:
             if s.group_id == group_id and s.user_id == user_id:
                 s.card = card
-                s.expire_time = expire_time
                 return
-        self.nickname_sets.append(CardSet(group_id=group_id, user_id=user_id, card=card, expire_time=expire_time))
+            
+        self.nickname_sets.append(CardSet(group_id=group_id, user_id=user_id, card=card, admin_uid=admin_uid))
 
 INIT_CARD_MANAGER = CardManager().model_dump_json()
 
 card_lock = asyncio.Lock()
 
 @setcard.handle()
-async def setcard_function(bot: Bot, message: GroupMessageEvent):
+async def setcard_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     assert(sid.startswith("group"))
@@ -445,25 +445,29 @@ async def setcard_function(bot: Bot, message: GroupMessageEvent):
         admin = True
     if not admin:
         await setcard.finish("只有管理员可以设置昵称")
-    text = message.get_message().extract_plain_text().strip()
-    for seg in message.get_message():
+    text = args.extract_plain_text().strip()
+    for seg in args:
         if seg.type == "at":
-            uid = seg.data["qq"]
+            setuid = seg.data["qq"]
     if len(text.encode('utf-8')) > 60:
         await setcard.finish("昵称过长")
     async with card_lock:
         card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", INIT_CARD_MANAGER))
-        card_manager.set_card(gid, uid, text)
+        card_manager.set_card(gid, setuid, text, uid)
         await local_storage.set("card_manager", card_manager.model_dump_json())
-    await bot.set_group_card(group_id=int(gid), user_id=int(uid), card=text)
-    await setcard.finish("设置成功 " + MessageSegment.at(uid) + f" 的昵称为 {text}")
+    await bot.set_group_card(group_id=int(gid), user_id=int(setuid), card=text)
+    await setcard.finish("设置成功 " + MessageSegment.at(setuid) + f" 的昵称为 {text}")
+    await addpoint(gid, setuid, 20)
 
 @scheduler.scheduled_job("cron", minute="*/5", id="flush_card")
 async def flush_card():
     bot = get_bot()
     assert isinstance(bot, Bot)
     card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", INIT_CARD_MANAGER))
-    card_manager.flush()
+    for gid in config.cs_group_list:
+        if await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}', "0")):
+            admin_uid = await local_storage.get(f'adminqq{gid}')
+            card_manager.flush(gid, admin_uid)
     for s in card_manager.nickname_sets:
         if await getcard(bot, s.group_id, s.user_id) != s.card:
             await bot.set_group_card(group_id=int(s.group_id), user_id=int(s.user_id), card=s.card)
