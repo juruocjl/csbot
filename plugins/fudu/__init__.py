@@ -462,6 +462,6 @@ async def flush_card():
     card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", "[]"))
     card_manager.flush()
     for s in card_manager.nickname_sets:
-        if s.card:
+        if await getcard(bot, s.group_id, s.user_id) != s.card:
             await bot.set_group_card(group_id=int(s.group_id), user_id=int(s.user_id), card=s.card)
     
