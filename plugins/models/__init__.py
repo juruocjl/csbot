@@ -405,6 +405,7 @@ class FuduPoint(Base):
     uid: Mapped[str] = mapped_column(String(50))
     timestamp: Mapped[int] = mapped_column(BigInteger, name="timeStamp")
     point: Mapped[int] = mapped_column(Integer)
+    pointType: Mapped[int] = mapped_column(Integer, default=0, server_default="0") # 0: 普通复读点数, 1: 奖励
 
 # 本地存储键值对
 class StorageItem(Base):
