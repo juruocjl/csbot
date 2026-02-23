@@ -243,6 +243,8 @@ async def get_user_name(uid: str, interval: int = config.user_name_cache_expirat
     assert result is not None
     return result.nickname
 
+LOCAL_URL = "http://localhost:1234"
+
 async def get_screenshot(path: str, token: str) -> bytes | None:
     browser = None
     screenshot = None
@@ -252,10 +254,10 @@ async def get_screenshot(path: str, token: str) -> bytes | None:
         page = await browser.newPage()
         
         # 使用 cookie 设置 token（替代 localStorage）
-        await page.setCookie({'name': 'token', 'value': token, 'url': f'http://localhost', 'path': '/', 'httpOnly': False, 'secure': False})
+        await page.setCookie({'name': 'token', 'value': token, 'url': f'{LOCAL_URL}', 'path': '/', 'httpOnly': False, 'secure': False})
 
         # 访问目标页面并等待网络空闲
-        await page.goto(f"http://localhost{path}", waitUntil='networkidle0')
+        await page.goto(f"{LOCAL_URL}{path}", waitUntil='networkidle0')
 
         await asyncio.sleep(0.2)
         
