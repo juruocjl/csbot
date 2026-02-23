@@ -341,7 +341,7 @@ async def calc_roll_point(groupid: str, time_type: str, day:int = 1) -> list[tup
                 except NoValueError:
                     nzcount = 0
                 point = ((sum_point)/ (cnt_ban + 1) + award_point + 1) * (math.log(1 + ttcount + 0.6 * gpcount + 0.3 * nzcount))
-                users.append((userid, f"({sum_point}/{cnt_ban+1}+{award_point}+1)*log({1+ttcount+0.6*gpcount+0.3*nzcount:.2f})", point))
+                users.append((userid, f"({sum_point}/{cnt_ban+1}+{award_point}+1)*log({1+ttcount+0.6*gpcount+0.3*nzcount:.1f})", point))
     return users
 
 async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str, float]]) -> str:
