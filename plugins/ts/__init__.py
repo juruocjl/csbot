@@ -1,9 +1,11 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, Bot
 from nonebot import on_command
 from nonebot.params import CommandArg
 from nonebot import require
+
+import asyncio
 
 require("fudu")
 from ..fudu import addpoint
@@ -215,14 +217,16 @@ getts = on_command("getts", priority=10, block=True)
 tspoke = on_command("poke", priority=10, block=True)
 
 @getts.handle()
-async def getts_function():
+async def getts_function(bot: Bot):
     """
     Prints the channel tree of the virtual server, including all clients.
     """
     with ts3.query.TS3ServerConnection(URI) as ts3conn:
         ts3conn.exec_("use", sid=SID)
         tree = ChannelTreeNode.build_tree(ts3conn, SID)
-        await getts.finish(tree.print())
+        msg = await getts.send(tree.print())
+        await asyncio.sleep(config.ts_delete_delay)
+        await bot.delete_msg(message_id=msg.message_id)
     
 
 @tspoke.handle()

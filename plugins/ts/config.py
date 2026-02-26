@@ -5,3 +5,4 @@ class Config(BaseModel):
     """Plugin Config Here"""
     ts_ip: str
     ts_pswd: str
+    ts_delete_delay: int = 300

@@ -1,7 +1,6 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
-from nonebot.adapters import Bot
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment, Bot
 from nonebot import on_command, on_message
 from nonebot import require
 from nonebot import logger
@@ -44,8 +43,8 @@ def need_delete_message(evt: MessageEvent) -> bool:
 autodelete = on_message(priority=0, block=False, rule=need_delete_message)
 
 @help.handle()
-async def help_function():
-    await help.finish(f"""可用指令：
+async def help_function(bot: Bot):
+    msg = await help.send(f"""可用指令：
 /绑定 steamid64
 /解绑
 /更新数据
@@ -74,6 +73,8 @@ async def help_function():
 可选 (时间)：{require("cs").valid_time}
 在 /查看数据 /记录 /ai* 时你的@消息会被替换成对应的用户名，找不到则会被替换为<未找到用户>
 """)
+    await asyncio.sleep(config.cs_help_delete_delay)
+    await bot.delete_msg(message_id=msg.message_id)
 
 
 @caigou.handle()

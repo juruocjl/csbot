@@ -389,7 +389,9 @@ async def pointrank_function(bot: Bot, message: GroupMessageEvent):
     gid = sid.split('_')[1]
     users = await calc_roll_point(gid, "今日", 0)
     text = await get_roll_point_text(bot, gid, users)
-    await pointrank.finish(text.strip())
+    msg = await pointrank.send(text.strip())
+    await asyncio.sleep(config.cs_fudu_rank_delete_delay)
+    await bot.delete_msg(message_id=msg['message_id'])
 
 @roll.handle()
 async def roll_function(message: GroupMessageEvent):
@@ -468,7 +470,7 @@ async def flush_card():
     for gid in config.cs_group_list:
         if await local_storage.get(f'adminqq{gid}') and int(await local_storage.get(f'adminqqalive{gid}', "0")):
             admin_uid = await local_storage.get(f'adminqq{gid}')
-            card_manager.flush(gid, admin_uid)
+            card_manager.flush(str(gid), admin_uid)
     for s in card_manager.nickname_sets:
         if await getcard(bot, s.group_id, s.user_id) != s.card:
             await bot.set_group_card(group_id=int(s.group_id), user_id=int(s.user_id), card=s.card)
