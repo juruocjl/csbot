@@ -475,8 +475,7 @@ async def mute_group_member(payload: MuteRequest):
         raise HTTPException(status_code=403, detail="Token 无效")
     bot = get_bot()
     assert isinstance(bot, Bot)
-    logger.info("Mute API request group=%s user=%s duration=%s reason=%s",
-                payload.groupId, payload.userId, payload.duration, payload.reason)
+    logger.info(f"Mute API request group={payload.groupId} user={payload.userId} duration={payload.duration} reason={payload.reason}")
     try:
         await bot.set_group_ban(group_id=payload.groupId, user_id=payload.userId, duration=payload.duration)
     except ActionFailed as exc:
