@@ -1,11 +1,12 @@
 from nonebot import get_driver, get_plugin_config
 from nonebot import get_app, get_bot
 from nonebot import on_command
+from nonebot import logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment, GroupMessageEvent, Bot
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot import require
-
+from nonebot.exception import ActionFailed
 import secrets
 import time
 import re
@@ -55,6 +56,8 @@ __plugin_meta__ = PluginMetadata(
 security = HTTPBearer()
 
 config = get_plugin_config(Config)
+if not config.mute_api_token:
+    logger.warning("Mute API disabled: MUTE_API_TOKEN not configured")
 
 # 全局缓存配置
 from typing import Any
@@ -444,6 +447,47 @@ async def get_status(info: AuthSession = Depends(get_current_user)):
         memoryAvailable=available_mem,
         pictureLibrary=tuku,
         messageCount=msgcount
+    )
+
+class MuteRequest(BaseModel):
+    authToken: str = Field(..., description="来自 .env 的管理员认证 token")
+    groupId: int = Field(..., ge=0, description="目标群号")
+    userId: int = Field(..., ge=0, description="需要禁言的 QQ")
+    duration: int = Field(..., ge=0, description="禁言时长，单位秒")
+    reason: str | None = Field(None, description="可选的禁言原因，用于审计")
+
+
+class MuteResponse(BaseModel):
+    success: bool = Field(..., description="禁言是否成功")
+    message: str = Field(..., description="禁言结果说明")
+
+
+@app.post(
+    "/api/mod/mute",
+    response_model=MuteResponse,
+    summary="强制禁言群成员",
+    description="使用 .env 中配置的管理 token 对指定群成员进行禁言。"
+)
+async def mute_group_member(payload: MuteRequest):
+    if not config.mute_api_token:
+        raise HTTPException(status_code=503, detail="Mute API token 未配置")
+    if payload.authToken != config.mute_api_token:
+        raise HTTPException(status_code=403, detail="Token 无效")
+    bot = get_bot()
+    assert isinstance(bot, Bot)
+    logger.info("Mute API request group=%s user=%s duration=%s reason=%s",
+                payload.groupId, payload.userId, payload.duration, payload.reason)
+    try:
+        await bot.set_group_ban(group_id=payload.groupId, user_id=payload.userId, duration=payload.duration)
+    except ActionFailed as exc:
+        detail = exc.info.get("message") if isinstance(exc.info, dict) else str(exc)
+        raise HTTPException(status_code=400, detail=detail or "操作失败")
+    except Exception as exc:
+        logger.error("Mute API failed", exc_info=exc)
+        raise HTTPException(status_code=500, detail=f"禁言失败: {exc}")
+    return MuteResponse(
+        success=True,
+        message=f"已对 {payload.userId} 禁言 {payload.duration} 秒"
     )
 
 class InfoQQResponse(BaseModel):

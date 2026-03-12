@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Config(BaseModel):
@@ -12,3 +12,8 @@ class Config(BaseModel):
 
     cs_domain: str = "https://cs.example.com"  # CS服务器域名
     cs_botid: int # 机器人的 qq 号
+    mute_api_token: str | None = Field(
+        None,
+        description="来自 .env 的管理员认证 token",
+        env="MUTE_API_TOKEN",
+    )
