@@ -353,8 +353,9 @@ async def calc_roll_point(groupid: str, time_type: str, day:int = 1) -> list[tup
 async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str, float]]) -> str:
     text = "得分：\n"
     users.sort(key=lambda x: x[2], reverse=True)
+    sum_point = sum([point for _, _, point in users])
     for uid, expr, point in users:
-        text += f"{await getcard(bot, groupid, str(uid))}\n  > {expr}={point:.2f}\n"
+        text += f"{await getcard(bot, groupid, str(uid))}\n  > {expr}={point:.2f} ({point/sum_point*100:.1f}%)\n"
     return text.strip()
 
 async def roll_admin(groupid: str):
