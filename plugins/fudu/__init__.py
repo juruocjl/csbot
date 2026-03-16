@@ -117,6 +117,8 @@ pointrank = on_command("点数排行", priority=10, block=True)
 
 setcard = on_command("设置昵称", priority=10, block=True)
 
+transferadmin = on_command("转让", priority=10, block=True)
+
 def bancheck(event: NoticeEvent):
     return event.get_event_name().startswith("notice.group_ban.")
 
@@ -129,6 +131,7 @@ async def fuduhelp_function():
 复读自己/使用poke5，第一遍复读1，二遍复读2，之后复读3，禁言点数为禁言时长（单位秒），取消禁言为50。
 复读时会给第一个发消息的人加一点奖励点数，奖励点数不参与概率计算。骂sb额外增加5点，3条相同会给@对象禁言。
 管理员可以使用/设置昵称 @人 名称 来给群成员设置昵称，管理员被撤销后设置的昵称会失效，点数为 20 点。
+管理员可以在竞选后12小时内使用/转让 @人 将管理员身份转让给群成员。
 若两条相同消息间隔不超过{config.cs_fudu_delay}s，即使中间有其他消息，也会被认为是复读。
 管理员roll点权重为 (常规点数/(禁言次数+1)+奖励点数+1)*log(1+天梯场次+0.6*官匹场次+0.3*内战场次)
 """)
@@ -314,7 +317,7 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
     else:
         await addpoint(gid, o_uid, 50)
 
-async def calc_roll_point(groupid: str, time_type: str, day:int = 1) -> list[tuple[int, str, float]]:
+async def calc_roll_point(groupid: str, time_type: str, day:int = 1, banned_uids: Optional[set[int]] = None) -> list[tuple[int, str, float]]:
     adminuid = None
     if await local_storage.get(f'adminqq{groupid}'):
         adminuid = int(await local_storage.get(f'adminqq{groupid}', "0"))
@@ -332,7 +335,7 @@ async def calc_roll_point(groupid: str, time_type: str, day:int = 1) -> list[tup
         award_point = await db.get_award_point(sid, day = day)
         cnt_ban = await db.get_zero_point(sid, day = day)
         userid = int(sid.split('_')[2])
-        if userid != adminuid:
+        if userid != adminuid and (not banned_uids or userid not in banned_uids):
             if steamid := await db_val.get_steamid(str(userid)):
                 try:
                     ttcount = (await ttconfig.func(steamid, time_type))[0]
@@ -370,7 +373,15 @@ async def roll_admin(groupid: str):
     if int(await local_storage.get(f'adminqqalive{groupid}', "0")):
         await bot.set_group_admin(group_id=int(groupid), user_id=int(await local_storage.get(f'adminqq{groupid}', '0')), enable=False)
     
-    users = await calc_roll_point(groupid, time_type, 1)
+    banned_raw = await local_storage.get(f'admin_transfer_banned{groupid}', "[]")
+    try:
+        banned_uid_set = {int(uid) for uid in json.loads(banned_raw)}
+    except Exception:
+        banned_uid_set = set()
+    users = await calc_roll_point(groupid, time_type, 1, banned_uids=banned_uid_set)
+    if not users:
+        await bot.send_group_msg(group_id=int(groupid), message="管理员竞选失败：无可用候选人")
+        return
     text = await get_roll_point_text(bot, groupid, users)
     weights = [point for _, _, point in users]
 
@@ -381,6 +392,7 @@ async def roll_admin(groupid: str):
     await bot.send_group_msg(group_id=int(groupid), message=text)
     await local_storage.set(f'adminqq{groupid}', str(newadmin))
     await local_storage.set(f'adminqqalive{groupid}', '1')
+    await local_storage.set(f'admin_transfer_banned{groupid}', "[]")
     await bot.set_group_admin(group_id=int(groupid), user_id=int(newadmin), enable=True)
 
 @pointrank.handle()
@@ -462,6 +474,63 @@ async def setcard_function(bot: Bot, message: GroupMessageEvent, args: Message =
     await bot.set_group_card(group_id=int(gid), user_id=int(setuid), card=text)
     await setcard.finish("设置成功 " + MessageSegment.at(setuid) + f" 的昵称为 {text}")
     await addpoint(gid, setuid, 20)
+
+@transferadmin.handle()
+async def transferadmin_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    sid = message.get_session_id()
+    assert sid.startswith("group")
+    gid = sid.split('_')[1]
+
+    admin_uid = await local_storage.get(f'adminqq{gid}')
+    admin_alive = int(await local_storage.get(f'adminqqalive{gid}', "0"))
+    if uid != admin_uid or not admin_alive:
+        await transferadmin.finish("只有当前在位管理员可以转让管理员")
+
+    passed = int(time.time()) - get_today_start_timestamp(refreshtime=86100)
+    if passed > 12 * 3600:
+        await transferadmin.finish("仅允许在竞选结束后12小时内转让管理员")
+
+    target_uid: Optional[str] = None
+    for seg in args:
+        if seg.type == "at":
+            target_uid = seg.data["qq"]
+            break
+    if not target_uid:
+        text = args.extract_plain_text().strip()
+        if text.isdigit():
+            target_uid = text
+    if not target_uid:
+        await transferadmin.finish("请@要转让的群成员，或提供QQ号")
+    if target_uid == uid:
+        await transferadmin.finish("你已经是当前管理员")
+
+    try:
+        await bot.get_group_member_info(group_id=int(gid), user_id=int(target_uid))
+    except Exception:
+        await transferadmin.finish("目标不在本群或无法获取成员信息")
+
+    await bot.set_group_admin(group_id=int(gid), user_id=int(uid), enable=False)
+    await bot.set_group_admin(group_id=int(gid), user_id=int(target_uid), enable=True)
+    await local_storage.set(f'adminqq{gid}', str(target_uid))
+    await local_storage.set(f'adminqqalive{gid}', '1')
+    banned_raw = await local_storage.get(f'admin_transfer_banned{gid}', "[]")
+    try:
+        banned_uids = json.loads(banned_raw)
+        if not isinstance(banned_uids, list):
+            banned_uids = []
+    except Exception:
+        banned_uids = []
+    if uid not in banned_uids:
+        banned_uids.append(uid)
+    await local_storage.set(f'admin_transfer_banned{gid}', json.dumps(banned_uids, ensure_ascii=False))
+
+    async with card_lock:
+        card_manager = CardManager.model_validate_json(await local_storage.get("card_manager", INIT_CARD_MANAGER))
+        card_manager.flush(gid, str(target_uid))
+        await local_storage.set("card_manager", card_manager.model_dump_json())
+
+    await transferadmin.finish("管理员已转让给 " + MessageSegment.at(target_uid))
 
 @scheduler.scheduled_job("cron", minute="*/5", id="flush_card")
 async def flush_card():
