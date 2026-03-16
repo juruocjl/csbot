@@ -358,7 +358,8 @@ async def get_roll_point_text(bot: Bot, groupid: str, users: list[tuple[int, str
     users.sort(key=lambda x: x[2], reverse=True)
     sum_point = sum([point for _, _, point in users])
     for uid, expr, point in users:
-        text += f"{await getcard(bot, groupid, str(uid))}\n  > {expr}={point:.2f} ({point/sum_point*100:.1f}%)\n"
+        ratio = point / sum_point * 100 if sum_point > 0 else 0.0
+        text += f"{await getcard(bot, groupid, str(uid))}\n  > {expr}={point:.2f} ({ratio:.1f}%)\n"
     return text.strip()
 
 async def roll_admin(groupid: str):
@@ -384,6 +385,9 @@ async def roll_admin(groupid: str):
         return
     text = await get_roll_point_text(bot, groupid, users)
     weights = [point for _, _, point in users]
+    if sum(weights) <= 0:
+        await bot.send_group_msg(group_id=int(groupid), message="管理员竞选失败：所有候选人的权重为0")
+        return
 
     newadmin, pointmsg, point = random.choices(users, weights=weights, k=1)[0]
     totsum = sum(weights)
