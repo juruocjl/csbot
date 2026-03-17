@@ -404,7 +404,12 @@ async def pointrank_function(bot: Bot, message: GroupMessageEvent):
     sid = message.get_session_id()
     assert(sid.startswith("group"))
     gid = sid.split('_')[1]
-    users = await calc_roll_point(gid, "今日", 0)
+    banned_raw = await local_storage.get(f'admin_transfer_banned{gid}', "[]")
+    try:
+        banned_uid_set = {int(uid) for uid in json.loads(banned_raw)}
+    except Exception:
+        banned_uid_set = set()
+    users = await calc_roll_point(gid, "今日", 0, banned_uids=banned_uid_set)
     text = await get_roll_point_text(bot, gid, users)
     msg = await pointrank.send(text.strip())
     await asyncio.sleep(config.cs_fudu_rank_delete_delay)
