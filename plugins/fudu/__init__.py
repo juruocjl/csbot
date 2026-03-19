@@ -107,6 +107,13 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+
+def can_trigger_group_ban(gid: str) -> bool:
+    try:
+        return int(gid) in config.cs_fudu_ban_group_list
+    except Exception:
+        return False
+
 fudupoint = on_command("复读点数", priority=10, block=True)
 
 fuduhelp = on_command("复读帮助", priority=10, block=True)
@@ -188,8 +195,11 @@ async def addpoint(gid: str, uid: str, nowpoint: int) -> bool:
         if random.random() < prob:
             await db.add_point(sid, 0)
             tm = await db.get_zero_point(sid)
-            await bot.set_group_ban(group_id=int(gid), user_id=int(uid), duration=60 * tm)
-            await bot.send_group_msg(group_id=int(gid), message="恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被禁言{tm}分钟")
+            if can_trigger_group_ban(gid):
+                await bot.set_group_ban(group_id=int(gid), user_id=int(uid), duration=60 * tm)
+                await bot.send_group_msg(group_id=int(gid), message="恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}被禁言{tm}分钟")
+            else:
+                await bot.send_group_msg(group_id=int(gid), message="恭喜" + MessageSegment.at(uid) + f" 以概率{prob:.2f}触发禁言，但本群未开启禁言")
             return True
     return False
 
@@ -294,8 +304,11 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent, mhs: str) -> 
         if issb:
             await db.add_point(f"group_{gid}_{whosb}", 0)
             tm = await db.get_zero_point(f"group_{gid}_{whosb}")
-            await bot.set_group_ban(group_id=int(gid), user_id=int(whosb), duration=60 * tm)
-            await bot.send_group_msg(group_id=int(gid), message="恭喜 sb" + MessageSegment.at(uid) + f"被禁言{tm}分钟")
+            if can_trigger_group_ban(gid):
+                await bot.set_group_ban(group_id=int(gid), user_id=int(whosb), duration=60 * tm)
+                await bot.send_group_msg(group_id=int(gid), message="恭喜 sb" + MessageSegment.at(uid) + f"被禁言{tm}分钟")
+            else:
+                await bot.send_group_msg(group_id=int(gid), message="恭喜 sb" + MessageSegment.at(uid) + "触发禁言，但本群未开启禁言")
 
 
 @admincheck.handle()
@@ -313,7 +326,8 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
     # print(uid, gid, duration, data['sub_type'])
     if duration:
         if await addpoint(gid, o_uid, duration):
-            await bot.set_group_ban(group_id=int(gid), user_id=int(uid), duration=0)
+            if can_trigger_group_ban(gid):
+                await bot.set_group_ban(group_id=int(gid), user_id=int(uid), duration=0)
     else:
         await addpoint(gid, o_uid, 50)
 
