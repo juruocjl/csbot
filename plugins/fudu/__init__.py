@@ -326,8 +326,7 @@ async def admincheck_function(bot: Bot, notice: NoticeEvent):
     # print(uid, gid, duration, data['sub_type'])
     if duration:
         if await addpoint(gid, o_uid, duration):
-            if can_trigger_group_ban(gid):
-                await bot.set_group_ban(group_id=int(gid), user_id=int(uid), duration=0)
+            await bot.set_group_ban(group_id=int(gid), user_id=int(uid), duration=0)
     else:
         await addpoint(gid, o_uid, 50)
 
