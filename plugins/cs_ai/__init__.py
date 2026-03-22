@@ -612,6 +612,13 @@ async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = Com
 async def aimem_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
+
+    text = await db_val.work_msg(args)
+    text = text.strip()
+    if not text:
+        await aimem.finish(
+            MessageSegment.at(uid) + " 请输入要加入记忆的内容。"
+        )
     try:
         # 创建聊天完成请求
         client = AsyncOpenAI(
@@ -621,8 +628,8 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
         msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
         mem = await db.get_mem(sid)
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
-        msgs.append({"role": "assistant", "content": f"请继续给出需要添加进记忆的内容"})
-        msgs.append({"role": "user", "content": await db_val.work_msg(args)})
+        msgs.append({"role": "user", "content": f"这是要加入的内容"})
+        msgs.append({"role": "user", "content": text})
         print(msgs)
         response = await client.chat.completions.create(
             model=model_name,
