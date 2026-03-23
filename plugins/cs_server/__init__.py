@@ -465,7 +465,7 @@ class SteamStatusResponse(BaseModel):
 
 
 @app.post(
-    "/steam/status",
+    "/api/steam/status",
     response_model=SteamStatusResponse,
     summary="获取群内 Steam 在线状态",
     description="从监控接口拉取状态，并按当前 Token 所属群筛选后返回。"
