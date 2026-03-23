@@ -14,20 +14,18 @@ import json
 import aiohttp
 import psutil
 import asyncio
-import tempfile
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from pyppeteer import launch
-from html import escape
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
-from ..utils import async_session_factory, path_to_file_url, screenshot_html_to_png
+from ..utils import async_session_factory
 require("models")
 from ..models import AuthSession, UserInfo
 from ..models import MatchStatsPW, MatchStatsGP
@@ -312,7 +310,7 @@ async def get_legacy_score(steamid: str, timeStamp: int) -> float | None:
 db = DataMannager()
 
 verify = on_command("验证", aliases={"verify"}, priority=10)
-steam_status_cmd = on_command("steam-status", aliases={"steamstatus", "steam状态"}, priority=10, block=True)
+steam_status_cmd = on_command("游戏状态", aliases={"steam-status", "steamstatus", "steam状态", "gamestatus"}, priority=10, block=True)
 
 @verify.handle()
 async def handle_verify(event: GroupMessageEvent, args: Message = CommandArg()):
@@ -458,7 +456,8 @@ class SteamStatusItem(BaseModel):
     game_appid: str = Field(..., description="游戏 AppId，离线时为空")
     game_name: str = Field(..., description="游戏名称，离线时为空")
     party_id: str = Field(..., description="组队 ID")
-    rich_display: str = Field(..., description="游戏状态详情")
+    party_size: str = Field(..., description="组队人数")
+    rich_display: dict[str, str] = Field(..., description="游戏状态详情")
     state: str = Field(..., description="在线状态")
 
 
@@ -511,13 +510,18 @@ async def _get_filtered_steam_status(group_id: str) -> SteamStatusResponse:
         uid = steam_to_uid.get(steam_id)
         if not uid:
             continue
+        rich_display_raw = item.get("rich_display", {})
+        rich_display: dict[str, str] = {}
+        if isinstance(rich_display_raw, dict):
+            rich_display = {str(k): str(v) for k, v in rich_display_raw.items()}
         filtered_data.append(
             SteamStatusItem(
                 uid=uid,
                 game_appid=str(item.get("game_appid", "")),
                 game_name=str(item.get("game_name", "")),
                 party_id=str(item.get("party_id", "")),
-                rich_display=str(item.get("rich_display", "")),
+                party_size=str(item.get("party_size", "")),
+                rich_display=rich_display,
                 state=str(item.get("state", "")),
             )
         )
@@ -526,67 +530,6 @@ async def _get_filtered_steam_status(group_id: str) -> SteamStatusResponse:
         status=str(payload.get("status", "success")),
         data=filtered_data,
     )
-
-
-async def _render_steam_status_image(data: list[SteamStatusItem]) -> bytes:
-    row_html = ""
-    for idx, item in enumerate(data, start=1):
-        state = item.state.lower()
-        state_color = "#16a34a" if state == "online" else "#6b7280"
-        row_html += f"""
-        <tr>
-            <td>{idx}</td>
-            <td>{escape(item.uid)}</td>
-            <td><span style='color:{state_color};font-weight:600'>{escape(item.state)}</span></td>
-            <td>{escape(item.game_name) if item.game_name else '-'}</td>
-            <td>{escape(item.rich_display) if item.rich_display else '-'}</td>
-        </tr>
-        """
-
-    html = f"""
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset='utf-8'/>
-      <style>
-        body {{ font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; background:#f5f7fb; margin:0; padding:20px; }}
-        .card {{ background:#ffffff; border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.08); padding:18px 20px; }}
-        .title {{ font-size:24px; font-weight:700; color:#111827; margin-bottom:10px; }}
-        .subtitle {{ font-size:14px; color:#6b7280; margin-bottom:14px; }}
-        table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
-        th, td {{ border-bottom:1px solid #e5e7eb; padding:10px 8px; text-align:left; word-wrap:break-word; }}
-        th {{ color:#374151; font-size:14px; }}
-        td {{ color:#111827; font-size:13px; }}
-      </style>
-    </head>
-    <body>
-      <div class='card'>
-        <div class='title'>Steam 状态</div>
-        <div class='subtitle'>群内已绑定玩家，共 {len(data)} 人</div>
-        <table>
-          <thead>
-            <tr>
-              <th style='width:5%'>#</th>
-              <th style='width:18%'>UID</th>
-              <th style='width:12%'>状态</th>
-              <th style='width:25%'>游戏</th>
-              <th style='width:40%'>详情</th>
-            </tr>
-          </thead>
-          <tbody>
-            {row_html}
-          </tbody>
-        </table>
-      </div>
-    </body>
-    </html>
-    """
-
-    height = max(220, 170 + 48 * len(data))
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.html') as temp_file:
-        temp_file.write(html)
-        temp_file.flush()
-        return await screenshot_html_to_png(path_to_file_url(temp_file.name), 1100, height)
 
 
 @app.post(
@@ -602,17 +545,11 @@ async def get_steam_status(info: AuthSession = Depends(get_current_user)):
 
 @steam_status_cmd.handle()
 async def handle_steam_status(event: GroupMessageEvent):
-    gid = str(event.group_id)
-    try:
-        result = await _get_filtered_steam_status(gid)
-    except HTTPException as exc:
-        await steam_status_cmd.finish(str(exc.detail))
-
-    if len(result.data) == 0:
-        await steam_status_cmd.finish("暂无群内 Steam 状态数据")
-
-    image = await _render_steam_status_image(result.data)
-    await steam_status_cmd.finish(MessageSegment.image(image))
+    token = await db.get_bot_token(str(event.group_id))
+    screenshot = await get_screenshot("/steam-status", token)
+    if screenshot:
+        await steam_status_cmd.finish(MessageSegment.image(screenshot))
+    await steam_status_cmd.finish("生成 Steam 状态图片失败，请稍后再试")
 
 class MuteRequest(BaseModel):
     authToken: str = Field(..., description="来自 .env 的管理员认证 token")

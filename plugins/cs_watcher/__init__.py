@@ -1,8 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot import require
 from nonebot import on_command
-from nonebot.params import CommandArg
-from nonebot.adapters.onebot.v11 import Message, MessageSegment, GroupMessageEvent, Bot
+from nonebot.adapters.onebot.v11 import Message, MessageSegment, Bot
 from nonebot import get_driver
 from nonebot import get_bot
 from nonebot.plugin import PluginMetadata
@@ -11,7 +10,6 @@ from nonebot import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import time
-from collections import defaultdict
 import asyncio
 
 require("nonebot_plugin_apscheduler")
@@ -32,7 +30,6 @@ from ..cs_server import get_screenshot
 from ..models import UserPlayStatus
 from ..utils import get_session
 from ..utils import async_session_factory
-from ..utils import getcard
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
@@ -188,40 +185,3 @@ driver = get_driver()
 async def startup_queue_processor():
     """在应用启动时启动队列处理循环"""
     asyncio.create_task(db.process_update_queue())
-
-game_status = on_command("gamestatus", aliases={"游戏状态"}, priority=10)
-@game_status.handle()
-async def handle_game_status(bot: Bot, msg: GroupMessageEvent, args: Message = CommandArg()):
-    """处理游戏状态查询命令"""
-    uids = []
-    for seg in args:
-        if seg.type == "at":
-            uids.append(str(seg.data["qq"]))
-    if not uids:
-        for uid in await db_val.get_group_member(str(msg.group_id)):
-            if steamid := await db_val.get_steamid(uid):
-                uids.append(str(uid))
-    try:
-        gamedict: dict[str, list[str]] = defaultdict(list)
-        for uid in uids:
-            if steamid := await db_val.get_steamid(uid):
-                status = await db.get_game_status(steamid)
-                if status and status.gameId != -1:
-                    gamedict[status.gameName].append(uid)
-                else:
-                    # gamedict["未在游戏中"].append(uid)
-                    pass
-            else:
-                gamedict["未绑定Steam"].append(uid)
-    except Exception as e:
-        await game_status.finish(f"查询游戏状态时出错: {e}")
-    result = ""
-    for gamename, members in gamedict.items():
-        result += f"{gamename}\n"
-        for member in members:
-            card = await getcard(bot, str(msg.group_id), member)
-            result += f"  > {card}\n"
-    result = result.strip()
-    if not result:
-        result = "群成员均未在游戏中"
-    await game_status.finish(result)
