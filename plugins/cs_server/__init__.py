@@ -11,6 +11,7 @@ import secrets
 import time
 import re
 import json
+import aiohttp
 import psutil
 import asyncio
 from fastapi import FastAPI, Body, HTTPException, Depends
@@ -447,6 +448,81 @@ async def get_status(info: AuthSession = Depends(get_current_user)):
         memoryAvailable=available_mem,
         pictureLibrary=tuku,
         messageCount=msgcount
+    )
+
+class SteamStatusItem(BaseModel):
+    uid: str = Field(..., description="绑定的 QQ 号")
+    game_appid: str = Field(..., description="游戏 AppId，离线时为空")
+    game_name: str = Field(..., description="游戏名称，离线时为空")
+    party_id: str = Field(..., description="组队 ID")
+    rich_display: str = Field(..., description="游戏状态详情")
+    state: str = Field(..., description="在线状态")
+
+
+class SteamStatusResponse(BaseModel):
+    status: str = Field(..., description="上游接口状态")
+    data: list[SteamStatusItem] = Field(..., description="筛选后的群成员状态")
+
+
+@app.post(
+    "/steam/status",
+    response_model=SteamStatusResponse,
+    summary="获取群内 Steam 在线状态",
+    description="从监控接口拉取状态，并按当前 Token 所属群筛选后返回。"
+)
+async def get_steam_status(info: AuthSession = Depends(get_current_user)):
+    if not config.cs_steam_monitor_url:
+        raise HTTPException(status_code=503, detail="cs_steam_monitor_url 未配置")
+    assert info.group_id is not None
+
+    timeout = aiohttp.ClientTimeout(total=10)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(config.cs_steam_monitor_url) as resp:
+                if resp.status != 200:
+                    raise HTTPException(status_code=502, detail=f"上游状态接口异常: HTTP {resp.status}")
+                payload = await resp.json(content_type=None)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Fetch steam monitor failed", exc_info=exc)
+        raise HTTPException(status_code=502, detail=f"拉取状态失败: {exc}")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="上游返回格式错误")
+    raw_data = payload.get("data", [])
+    if not isinstance(raw_data, list):
+        raise HTTPException(status_code=502, detail="上游 data 字段格式错误")
+
+    group_uids = await db_val.get_group_member(info.group_id)
+    steam_to_uid: dict[str, str] = {}
+    for uid in group_uids:
+        steam_id = await db_val.get_steamid(uid)
+        if steam_id:
+            steam_to_uid[steam_id] = uid
+
+    filtered_data: list[SteamStatusItem] = []
+    for item in raw_data:
+        if not isinstance(item, dict):
+            continue
+        steam_id = str(item.get("steam_id", ""))
+        uid = steam_to_uid.get(steam_id)
+        if not uid:
+            continue
+        filtered_data.append(
+            SteamStatusItem(
+                uid=uid,
+                game_appid=str(item.get("game_appid", "")),
+                game_name=str(item.get("game_name", "")),
+                party_id=str(item.get("party_id", "")),
+                rich_display=str(item.get("rich_display", "")),
+                state=str(item.get("state", "")),
+            )
+        )
+
+    return SteamStatusResponse(
+        status=str(payload.get("status", "success")),
+        data=filtered_data,
     )
 
 class MuteRequest(BaseModel):

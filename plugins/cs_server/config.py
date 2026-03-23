@@ -11,6 +11,7 @@ class Config(BaseModel):
     cs_last_season_id: str
 
     cs_domain: str = "https://cs.example.com"  # CS服务器域名
+    cs_steam_monitor_url: str = ""  # Steam 在线状态监控接口 URL
     cs_botid: int # 机器人的 qq 号
     mute_api_token: str | None = Field(
         None,
