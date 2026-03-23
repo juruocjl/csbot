@@ -14,18 +14,20 @@ import json
 import aiohttp
 import psutil
 import asyncio
+import tempfile
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from pyppeteer import launch
+from html import escape
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
-from ..utils import async_session_factory
+from ..utils import async_session_factory, path_to_file_url, screenshot_html_to_png
 require("models")
 from ..models import AuthSession, UserInfo
 from ..models import MatchStatsPW, MatchStatsGP
@@ -310,6 +312,7 @@ async def get_legacy_score(steamid: str, timeStamp: int) -> float | None:
 db = DataMannager()
 
 verify = on_command("验证", aliases={"verify"}, priority=10)
+steam_status_cmd = on_command("steam-status", aliases={"steamstatus", "steam状态"}, priority=10, block=True)
 
 @verify.handle()
 async def handle_verify(event: GroupMessageEvent, args: Message = CommandArg()):
@@ -464,16 +467,9 @@ class SteamStatusResponse(BaseModel):
     data: list[SteamStatusItem] = Field(..., description="筛选后的群成员状态")
 
 
-@app.post(
-    "/api/steam/status",
-    response_model=SteamStatusResponse,
-    summary="获取群内 Steam 在线状态",
-    description="从监控接口拉取状态，并按当前 Token 所属群筛选后返回。"
-)
-async def get_steam_status(info: AuthSession = Depends(get_current_user)):
+async def _fetch_steam_status_payload() -> dict:
     if not config.cs_steam_monitor_url:
         raise HTTPException(status_code=503, detail="cs_steam_monitor_url 未配置")
-    assert info.group_id is not None
 
     timeout = aiohttp.ClientTimeout(total=10)
     try:
@@ -493,8 +489,14 @@ async def get_steam_status(info: AuthSession = Depends(get_current_user)):
     raw_data = payload.get("data", [])
     if not isinstance(raw_data, list):
         raise HTTPException(status_code=502, detail="上游 data 字段格式错误")
+    return payload
 
-    group_uids = await db_val.get_group_member(info.group_id)
+
+async def _get_filtered_steam_status(group_id: str) -> SteamStatusResponse:
+    payload = await _fetch_steam_status_payload()
+    raw_data = payload.get("data", [])
+
+    group_uids = await db_val.get_group_member(group_id)
     steam_to_uid: dict[str, str] = {}
     for uid in group_uids:
         steam_id = await db_val.get_steamid(uid)
@@ -524,6 +526,93 @@ async def get_steam_status(info: AuthSession = Depends(get_current_user)):
         status=str(payload.get("status", "success")),
         data=filtered_data,
     )
+
+
+async def _render_steam_status_image(data: list[SteamStatusItem]) -> bytes:
+    row_html = ""
+    for idx, item in enumerate(data, start=1):
+        state = item.state.lower()
+        state_color = "#16a34a" if state == "online" else "#6b7280"
+        row_html += f"""
+        <tr>
+            <td>{idx}</td>
+            <td>{escape(item.uid)}</td>
+            <td><span style='color:{state_color};font-weight:600'>{escape(item.state)}</span></td>
+            <td>{escape(item.game_name) if item.game_name else '-'}</td>
+            <td>{escape(item.rich_display) if item.rich_display else '-'}</td>
+        </tr>
+        """
+
+    html = f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset='utf-8'/>
+      <style>
+        body {{ font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; background:#f5f7fb; margin:0; padding:20px; }}
+        .card {{ background:#ffffff; border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.08); padding:18px 20px; }}
+        .title {{ font-size:24px; font-weight:700; color:#111827; margin-bottom:10px; }}
+        .subtitle {{ font-size:14px; color:#6b7280; margin-bottom:14px; }}
+        table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+        th, td {{ border-bottom:1px solid #e5e7eb; padding:10px 8px; text-align:left; word-wrap:break-word; }}
+        th {{ color:#374151; font-size:14px; }}
+        td {{ color:#111827; font-size:13px; }}
+      </style>
+    </head>
+    <body>
+      <div class='card'>
+        <div class='title'>Steam 状态</div>
+        <div class='subtitle'>群内已绑定玩家，共 {len(data)} 人</div>
+        <table>
+          <thead>
+            <tr>
+              <th style='width:5%'>#</th>
+              <th style='width:18%'>UID</th>
+              <th style='width:12%'>状态</th>
+              <th style='width:25%'>游戏</th>
+              <th style='width:40%'>详情</th>
+            </tr>
+          </thead>
+          <tbody>
+            {row_html}
+          </tbody>
+        </table>
+      </div>
+    </body>
+    </html>
+    """
+
+    height = max(220, 170 + 48 * len(data))
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.html') as temp_file:
+        temp_file.write(html)
+        temp_file.flush()
+        return await screenshot_html_to_png(path_to_file_url(temp_file.name), 1100, height)
+
+
+@app.post(
+    "/api/steam/status",
+    response_model=SteamStatusResponse,
+    summary="获取群内 Steam 在线状态",
+    description="从监控接口拉取状态，并按当前 Token 所属群筛选后返回。"
+)
+async def get_steam_status(info: AuthSession = Depends(get_current_user)):
+    assert info.group_id is not None
+    return await _get_filtered_steam_status(info.group_id)
+
+
+@steam_status_cmd.handle()
+async def handle_steam_status(event: GroupMessageEvent):
+    gid = str(event.group_id)
+    try:
+        result = await _get_filtered_steam_status(gid)
+    except HTTPException as exc:
+        await steam_status_cmd.finish(str(exc.detail))
+
+    if len(result.data) == 0:
+        await steam_status_cmd.finish("暂无群内 Steam 状态数据")
+
+    image = await _render_steam_status_image(result.data)
+    await steam_status_cmd.finish(MessageSegment.image(image))
 
 class MuteRequest(BaseModel):
     authToken: str = Field(..., description="来自 .env 的管理员认证 token")
