@@ -249,7 +249,7 @@ async def get_user_name(uid: str, interval: int = config.user_name_cache_expirat
 
 LOCAL_URL = "http://localhost:1234"
 
-async def get_screenshot(path: str, token: str, width:int = 600) -> bytes | None:
+async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | None:
     browser = None
     screenshot = None
     try:
@@ -565,7 +565,7 @@ async def get_steam_status(info: AuthSession = Depends(get_current_user)):
 @steam_status_cmd.handle()
 async def handle_steam_status(event: GroupMessageEvent):
     token = await db.get_bot_token(str(event.group_id))
-    screenshot = await get_screenshot("/steam-status", token)
+    screenshot = await get_screenshot("/steam-status", token, width=600)
     if screenshot:
         await steam_status_cmd.finish(MessageSegment.image(screenshot))
     await steam_status_cmd.finish("生成 Steam 状态图片失败，请稍后再试")
