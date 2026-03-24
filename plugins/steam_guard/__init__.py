@@ -42,8 +42,11 @@ def _is_group_enabled(group_id: int) -> bool:
     return group_id in config.cs_steam_guard_enable_group_list
 
 
-def _build_warn_text(now_count: int) -> str:
-    text = f"你还未完成 Steam 绑定校验，请先绑定 Steam 账号（{now_count}/{config.cs_steam_guard_ban_after}），不绑定会被禁言"
+def _build_warn_text(now_count: int, need_bind: bool) -> str:
+    if need_bind:
+        text = f"你还未完成 Steam 绑定校验，请先绑定 Steam 账号（{now_count}/{config.cs_steam_guard_ban_after}），不绑定会被禁言"
+    else:
+        text = f"你已绑定 Steam，但尚未添加指定用户（{now_count}/{config.cs_steam_guard_ban_after}），不添加会被禁言"
     target_user = str(config.cs_steam_guard_target_user).strip()
     if target_user:
         text += f"，并添加指定用户：{target_user}"
@@ -77,7 +80,7 @@ async def _get_monitor_steamids() -> set[str]:
         return set(_monitor_cache_steamids)
 
 
-async def _warn_or_ban(bot: Bot, event: GroupMessageEvent) -> None:
+async def _warn_or_ban(bot: Bot, event: GroupMessageEvent, need_bind: bool) -> None:
     gid = str(event.group_id)
     uid = event.get_user_id()
 
@@ -95,7 +98,7 @@ async def _warn_or_ban(bot: Bot, event: GroupMessageEvent) -> None:
 
     await bot.send_group_msg(
         group_id=event.group_id,
-        message=MessageSegment.at(uid) + _build_warn_text(now_count),
+        message=MessageSegment.at(uid) + _build_warn_text(now_count, need_bind),
     )
 
     if now_count >= config.cs_steam_guard_ban_after and config.cs_steam_guard_ban_duration > 0:
@@ -119,7 +122,7 @@ async def steam_guard_handle(bot: Bot, event: GroupMessageEvent) -> None:
 
     steam_id = await db_val.get_steamid(uid)
     if not steam_id:
-        await _warn_or_ban(bot, event)
+        await _warn_or_ban(bot, event, need_bind=True)
         return
 
     try:
@@ -129,7 +132,7 @@ async def steam_guard_handle(bot: Bot, event: GroupMessageEvent) -> None:
         return
 
     if steam_id not in monitor_steamids:
-        await _warn_or_ban(bot, event)
+        await _warn_or_ban(bot, event, need_bind=False)
         return
 
     await local_storage.set(f"steam_guard_warn_count_{gid}_{uid}", "0")
