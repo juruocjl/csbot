@@ -249,7 +249,7 @@ async def get_user_name(uid: str, interval: int = config.user_name_cache_expirat
 
 LOCAL_URL = "http://localhost:1234"
 
-async def get_screenshot(path: str, token: str) -> bytes | None:
+async def get_screenshot(path: str, token: str, width:int = 600) -> bytes | None:
     browser = None
     screenshot = None
     try:
@@ -265,13 +265,13 @@ async def get_screenshot(path: str, token: str) -> bytes | None:
 
         await asyncio.sleep(0.2)
         
-        await page.setViewport({'width': 1000, 'height': 100})
+        await page.setViewport({'width': width, 'height': 100})
 
         # 获取.main-container的高度
         height = await page.evaluate('document.querySelector(".content").scrollHeight + 50')
         
         # 设置视口大小
-        await page.setViewport({'width': 1000, 'height': int(height)})
+        await page.setViewport({'width': width, 'height': int(height)})
         
         # 截图
         screenshot = await page.screenshot({'fullPage': True})
