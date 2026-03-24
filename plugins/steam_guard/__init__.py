@@ -108,6 +108,8 @@ async def _warn_or_ban(bot: Bot, event: GroupMessageEvent, need_bind: bool) -> N
                 user_id=int(uid),
                 duration=config.cs_steam_guard_ban_duration,
             )
+            await local_storage.set(warn_count_key, "0")
+            await local_storage.set(last_warn_key, "0")
         except Exception as exc:
             logger.warning(f"steam_guard set_group_ban failed group={gid} uid={uid} err={exc}")
 
