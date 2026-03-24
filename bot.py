@@ -34,6 +34,7 @@ nonebot.load_plugin(Path("plugins") / "cs_watcher")
 nonebot.load_plugin(Path("plugins") / "cs")
 nonebot.load_plugin(Path("plugins") / "ts")
 nonebot.load_plugin(Path("plugins") / "small_funcs")
+nonebot.load_plugin(Path("plugins") / "steam_guard")
 
 nonebot.load_plugin("nonebot_plugin_memes")
 
