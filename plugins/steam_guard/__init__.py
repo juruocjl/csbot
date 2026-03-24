@@ -43,7 +43,7 @@ def _is_group_enabled(group_id: int) -> bool:
 
 
 def _build_warn_text(now_count: int) -> str:
-    text = f"你还未完成 Steam 绑定校验，请先绑定 Steam 账号（{now_count}/{config.cs_steam_guard_ban_after}）"
+    text = f"你还未完成 Steam 绑定校验，请先绑定 Steam 账号（{now_count}/{config.cs_steam_guard_ban_after}），不绑定会被禁言"
     if config.cs_steam_guard_target_user:
         text += f"，并添加指定用户：{config.cs_steam_guard_target_user}"
     return text
