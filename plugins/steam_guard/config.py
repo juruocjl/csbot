@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class Config(BaseModel):
     cs_steam_guard_enable_group_list: list[int] = Field(default_factory=list)
+    cs_steam_guard_steamid_whitelist: list[int] = Field(default_factory=list)
     cs_steam_guard_target_user: int | str = ""
     cs_steam_guard_ban_after: int = 3
     cs_steam_guard_ban_duration: int = 600

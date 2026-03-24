@@ -42,6 +42,10 @@ def _is_group_enabled(group_id: int) -> bool:
     return group_id in config.cs_steam_guard_enable_group_list
 
 
+def _is_whitelisted(uid: str) -> bool:
+    return uid in {str(x) for x in config.cs_steam_guard_steamid_whitelist}
+
+
 def _build_warn_text(now_count: int, need_bind: bool) -> str:
     if need_bind:
         text = f"你还未完成 Steam 绑定校验，请先绑定 Steam 账号（{now_count}/{config.cs_steam_guard_ban_after}），不绑定会被禁言"
@@ -121,6 +125,11 @@ async def steam_guard_handle(bot: Bot, event: GroupMessageEvent) -> None:
 
     uid = event.get_user_id()
     gid = str(event.group_id)
+
+    if _is_whitelisted(uid):
+        await local_storage.set(f"steam_guard_warn_count_{gid}_{uid}", "0")
+        await local_storage.set(f"steam_guard_last_warn_{gid}_{uid}", "0")
+        return
 
     steam_id = await db_val.get_steamid(uid)
     if not steam_id:
