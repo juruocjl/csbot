@@ -27,8 +27,8 @@ from ..cs_db_upd import db as db_upd
 from ..cs_db_upd import LockingError, TooFrequentError
 from ..cs_server import db as db_server
 from ..cs_server import get_screenshot
+from ..cs_server import _fetch_steam_status_payload
 from ..models import UserPlayStatus
-from ..utils import get_session
 from ..utils import async_session_factory
 from .config import Config
 
@@ -46,6 +46,7 @@ class DataManager:
         self.update_queue: asyncio.Queue[str] = asyncio.Queue()
         self.queue_set: set[str] = set()  # 跟踪队列中的 steamid
         self.queue_lock: asyncio.Lock = asyncio.Lock()  # 保护 queue_set 的访问
+        self.last_game_state: dict[str, str] = {}
     
     async def _get_game_status(self, steamid: str, session: AsyncSession) -> UserPlayStatus | None:
         stmt = (
@@ -99,6 +100,12 @@ class DataManager:
             if steamid not in self.queue_set:
                 self.queue_set.add(steamid)
                 self.update_queue.put_nowait(steamid)
+
+    def get_last_game_state(self, steamid: str) -> str:
+        return self.last_game_state.get(steamid, "")
+
+    def set_last_game_state(self, steamid: str, game_state: str) -> None:
+        self.last_game_state[steamid] = game_state
     
     async def process_update_queue(self):
         """持续处理队列中的玩家数据更新"""
@@ -157,24 +164,39 @@ async def cs_watcher_job():
     """定时检查用户的游戏状态"""
     logger.info("执行游戏状态检查任务...")
     steamids = await db_val.get_all_steamid()
-    url = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/"
-    params = {
-        "key": config.cs_steamkey,
-        "steamids": ",".join(steamids),
-    }
-    async with get_session().get(url, params=params, proxy=config.cs_proxy) as resp:
-        data = await resp.json()
-        players = data["response"]["players"]
+    payload = await _fetch_steam_status_payload()
+    raw_data = payload.get("data", [])
+    players_by_steamid: dict[str, dict] = {}
+    if isinstance(raw_data, list):
+        for item in raw_data:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("steamId") or item.get("steam_id") or "")
+            if sid:
+                players_by_steamid[sid] = item
+
     timeStamp = int(time.time())
-    for player in players:
+    for steamid in steamids:
         try:
-            steamid: str = player["steamid"]
-            gameid: int = int(player.get("gameid", "-1"))
-            gamename: str = player.get("gameextrainfo", "")
+            player = players_by_steamid.get(steamid, {})
+
+            gameid_raw = player.get("gameId") or player.get("gameid")
+            gameid: int = int(gameid_raw) if gameid_raw is not None else -1
+            gamename: str = str(player.get("gameName") or player.get("gameextrainfo") or "")
             result = await db.set_game_status(steamid, gameid, gamename, timeStamp)
             if result:
                 logger.info(f"Player {steamid} has ended playing CS:GO.")
                 await db.add_queue(steamid)
+
+            rich_presence = player.get("richPresence") or player.get("rich_presence") or {}
+            game_state = ""
+            if isinstance(rich_presence, dict):
+                game_state = str(rich_presence.get("game:state") or "").lower().strip()
+            last_game_state = db.get_last_game_state(steamid)
+            if game_state == "lobby" and last_game_state != "lobby":
+                logger.info(f"Player {steamid} has entered lobby.")
+                await db.add_queue(steamid)
+            db.set_last_game_state(steamid, game_state)
         except Exception as e:
             logger.error(f"Error processing player data: {e}")
 
