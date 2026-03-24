@@ -72,9 +72,9 @@ async def _get_monitor_steamids() -> set[str]:
             return set()
 
         _monitor_cache_steamids = {
-            str(item.get("steam_id", ""))
+            str(item.get("steamId") or item.get("steam_id") or "")
             for item in raw_data
-            if isinstance(item, dict) and item.get("steam_id")
+            if isinstance(item, dict) and (item.get("steamId") or item.get("steam_id"))
         }
         _monitor_cache_ts = now_ts
         return set(_monitor_cache_steamids)

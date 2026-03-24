@@ -455,9 +455,11 @@ class SteamStatusItem(BaseModel):
     uid: str = Field(..., description="绑定的 QQ 号")
     game_appid: str = Field(..., description="游戏 AppId，离线时为空")
     game_name: str = Field(..., description="游戏名称，离线时为空")
+    gameIcon: str = Field(..., description="游戏图标 URL")
     party_id: str = Field(..., description="组队 ID")
     party_size: str = Field(..., description="组队人数")
-    rich_display: dict[str, str] = Field(..., description="游戏状态详情")
+    richPresenceString: str = Field(..., description="游戏状态文本")
+    rich_presence: dict[str, str] = Field(..., description="游戏状态详情")
     state: str = Field(..., description="在线状态")
 
 
@@ -506,23 +508,40 @@ async def _get_filtered_steam_status(group_id: str) -> SteamStatusResponse:
     for item in raw_data:
         if not isinstance(item, dict):
             continue
-        steam_id = str(item.get("steam_id", ""))
+        steam_id = str(item.get("steamId") or item.get("steam_id") or "")
         uid = steam_to_uid.get(steam_id)
         if not uid:
             continue
-        rich_display_raw = item.get("rich_display", {})
-        rich_display: dict[str, str] = {}
-        if isinstance(rich_display_raw, dict):
-            rich_display = {str(k): str(v) for k, v in rich_display_raw.items()}
+        rich_presence_raw = item.get("richPresence") or item.get("rich_display") or {}
+        rich_presence: dict[str, str] = {}
+        if isinstance(rich_presence_raw, dict):
+            rich_presence = {str(k): str(v) for k, v in rich_presence_raw.items()}
+        elif isinstance(rich_presence_raw, str) and rich_presence_raw:
+            rich_presence = {"text": rich_presence_raw}
+
+        rich_presence_string = str(item.get("richPresenceString") or item.get("rich_display") or "")
+        game_icon = str(item.get("gameSmallIcon") or item.get("game_logo") or "")
+
+        party_raw = item.get("party")
+        if isinstance(party_raw, dict):
+            party_id = str(party_raw.get("groupId") or item.get("party_id") or "")
+            party_size = str(party_raw.get("groupSize") or item.get("party_size") or "")
+        else:
+            party_id = str(item.get("party_id", ""))
+            party_size = str(item.get("party_size", ""))
+
+        state_text = str(item.get("personaStateText") or item.get("state") or "")
         filtered_data.append(
             SteamStatusItem(
                 uid=uid,
-                game_appid=str(item.get("game_appid", "")),
-                game_name=str(item.get("game_name", "")),
-                party_id=str(item.get("party_id", "")),
-                party_size=str(item.get("party_size", "")),
-                rich_display=rich_display,
-                state=str(item.get("state", "")),
+                game_appid=str(item.get("gameId") or item.get("game_appid") or ""),
+                game_name=str(item.get("gameName") or item.get("game_name") or ""),
+                game_icon=game_icon,
+                party_id=party_id,
+                party_size=party_size,
+                rich_presence_string=rich_presence_string,
+                rich_presence=rich_presence,
+                state=state_text,
             )
         )
 
