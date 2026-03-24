@@ -261,7 +261,10 @@ async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | Non
         await page.setCookie({'name': 'token', 'value': token, 'url': f'{LOCAL_URL}', 'path': '/', 'httpOnly': False, 'secure': False})
 
         # 访问目标页面并等待网络空闲
-        await page.goto(f"{LOCAL_URL}{path}?hideSidebar=True", waitUntil='networkidle0')
+        final_path = path
+        if "hideSidebar=" not in final_path:
+            final_path = f"{final_path}&hideSidebar=True" if "?" in final_path else f"{final_path}?hideSidebar=True"
+        await page.goto(f"{LOCAL_URL}{final_path}", waitUntil='networkidle0')
 
         await asyncio.sleep(0.2)
         
