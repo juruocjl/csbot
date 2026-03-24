@@ -455,10 +455,10 @@ class SteamStatusItem(BaseModel):
     uid: str = Field(..., description="绑定的 QQ 号")
     game_appid: str = Field(..., description="游戏 AppId，离线时为空")
     game_name: str = Field(..., description="游戏名称，离线时为空")
-    gameIcon: str = Field(..., description="游戏图标 URL")
+    game_icon: str = Field(..., description="游戏图标 URL")
     party_id: str = Field(..., description="组队 ID")
     party_size: str = Field(..., description="组队人数")
-    richPresenceString: str = Field(..., description="游戏状态文本")
+    rich_presence_string: str = Field(..., description="游戏状态文本")
     rich_presence: dict[str, str] = Field(..., description="游戏状态详情")
     state: str = Field(..., description="在线状态")
 
