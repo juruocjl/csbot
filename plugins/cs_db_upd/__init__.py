@@ -320,6 +320,12 @@ class DataManager:
         base = data['data']['base']
         players = data['data']['players']
         for player in players:
+            def as_int(value, default: int = 0) -> int:
+                return int(value) if value is not None else default
+
+            def as_float(value, default: float = 0.0) -> float:
+                return float(value) if value is not None else default
+
             # 显式赋值，左边是数据库列名，右边是数据来源
             stats_entry = MatchStatsGP(
                 # --- 主键 ---
@@ -337,49 +343,49 @@ class DataManager:
                 duration=base['duration'],
                 
                 # --- 玩家数据 (来自 player) ---
-                kill=player['kill'],
-                handGunKill=player['handGunKill'],
-                entryKill=player['entryKill'],
-                awpKill=player['awpKill'],
-                death=player['death'],
-                entryDeath=player['entryDeath'],
-                assist=player['assist'],
-                headShot=player['headShot'],
-                rating=player['rating'],
+                kill=as_int(player.get('kill')),
+                handGunKill=as_int(player.get('handGunKill')),
+                entryKill=as_int(player.get('entryKill')),
+                awpKill=as_int(player.get('awpKill')),
+                death=as_int(player.get('death')),
+                entryDeath=as_int(player.get('entryDeath')),
+                assist=as_int(player.get('assist')),
+                headShot=as_int(player.get('headShot')),
+                rating=as_float(player.get('rating')),
                 
                 # --- 投掷物 ---
-                itemThrow=player['itemThrow'],
-                flash=player['flash'],
-                flashTeammate=player['flashTeammate'],
-                flashSuccess=player['flashSuccess'],
+                itemThrow=as_int(player.get('itemThrow')),
+                flash=as_int(player.get('flash')),
+                flashTeammate=as_int(player.get('flashTeammate')),
+                flashSuccess=as_int(player.get('flashSuccess')),
                 
                 # --- 多杀 ---
-                twoKill=player['twoKill'],
-                threeKill=player['threeKill'],
-                fourKill=player['fourKill'],
-                fiveKill=player['fiveKill'],
+                twoKill=as_int(player.get('twoKill')),
+                threeKill=as_int(player.get('threeKill')),
+                fourKill=as_int(player.get('fourKill')),
+                fiveKill=as_int(player.get('fiveKill')),
                 
                 # --- 残局 ---
-                vs1=player['vs1'],
-                vs2=player['vs2'],
-                vs3=player['vs3'],
-                vs4=player['vs4'],
-                vs5=player['vs5'],
+                vs1=as_int(player.get('vs1')),
+                vs2=as_int(player.get('vs2')),
+                vs3=as_int(player.get('vs3')),
+                vs4=as_int(player.get('vs4')),
+                vs5=as_int(player.get('vs5')),
                 
                 # --- 进阶数据 ---
-                adpr=player['adpr'],
-                rws=player['rws'],
-                kast=player['kast'],
+                adpr=as_float(player.get('adpr')),
+                rws=as_float(player.get('rws')),
+                kast=as_float(player.get('kast')),
                 
                 # --- 其他 ---
-                rank=player['rank'],
-                throwsCnt=player['throwsCnt'],
-                bombPlanted=player['bombPlanted'],
-                bombDefused=player['bombDefused'],
-                smokeThrows=player['smokeThrows'],
-                grenadeDamage=player['grenadeDamage'],
-                infernoDamage=player['infernoDamage'],
-                mvp=int(player['mvp']) # 类型转换
+                rank=as_int(player.get('rank')),
+                throwsCnt=as_int(player.get('throwsCnt')),
+                bombPlanted=as_int(player.get('bombPlanted')),
+                bombDefused=as_int(player.get('bombDefused')),
+                smokeThrows=as_int(player.get('smokeThrows')),
+                grenadeDamage=as_int(player.get('grenadeDamage')),
+                infernoDamage=as_int(player.get('infernoDamage')),
+                mvp=as_int(player.get('mvp')) # 类型转换
             )
             
             # 执行 Upsert (存在则更新，不存在则插入)
