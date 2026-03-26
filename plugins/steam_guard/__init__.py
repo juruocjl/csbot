@@ -29,7 +29,7 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-steam_guard = on_message(priority=55, block=False)
+steam_guard = on_message(priority=0, block=False)
 
 _monitor_cache_lock = asyncio.Lock()
 _monitor_cache_steamids: set[str] = set()
