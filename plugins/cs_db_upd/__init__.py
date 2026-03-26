@@ -2,6 +2,8 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot import on_command
 from nonebot.permission import SUPERUSER
+from nonebot.adapters.onebot.v11 import Message
+from nonebot.params import CommandArg
 from nonebot import require
 from nonebot import logger
 from nonebot import get_driver
@@ -17,6 +19,7 @@ require("cs_db_val")
 from ..cs_db_val import db as db_val
 
 from sqlalchemy import select, delete, func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 import time
 import json
@@ -382,8 +385,15 @@ class DataManager:
                 try:
                     await self._update_stats_card(player['playerId'], session)
                     await self._update_extra_info(player['playerId'], session)
-                except:
-                    pass
+                except TooFrequentError as exc:
+                    logger.warning(f"skip update_stats_card in update_matchgp: steamid={player['playerId']} reason={exc}")
+                except RuntimeError as exc:
+                    logger.warning(f"skip update_stats_card in update_matchgp: steamid={player['playerId']} reason={exc}")
+                except SQLAlchemyError:
+                    # 数据库事务异常必须上抛，避免在已失效事务上继续执行 SQL
+                    raise
+                except Exception as exc:
+                    logger.warning(f"skip update_stats_card in update_matchgp: steamid={player['playerId']} error={exc}")
         await self._update_match_gp_extra(mid, session)
         await self._set_match_gp_extra(mid,
                 int(time.time() + (random.random() + 1) * 80000 * math.pow(2, extra_info.fetchCount)),
@@ -724,5 +734,72 @@ class DataManager:
                     
                     new_member = GroupMember(gid=clean_gid, uid=uid)
                     await session.merge(new_member)
+
+
+debug_update_stats_card = on_command("update_stats_card", priority=10, block=True, permission=SUPERUSER)
+debug_update_extra_info = on_command("update_extra_info", priority=10, block=True, permission=SUPERUSER)
+debug_update_matchgp = on_command("update_matchgp", priority=10, block=True, permission=SUPERUSER)
+debug_update_match = on_command("update_match", priority=10, block=True, permission=SUPERUSER)
+
+
+def _split_args(args: Message) -> list[str]:
+    return [s for s in args.extract_plain_text().strip().split() if s]
+
+
+@debug_update_stats_card.handle()
+async def handle_debug_update_stats_card(args: Message = CommandArg()):
+    argv = _split_args(args)
+    if len(argv) != 1:
+        await debug_update_stats_card.finish("用法: /update_stats_card <steamid>")
+    steamid = argv[0]
+    async with async_session_factory() as session:
+        async with session.begin():
+            await db._update_stats_card(steamid, session)
+    await debug_update_stats_card.finish(f"update_stats_card 成功: {steamid}")
+
+
+@debug_update_extra_info.handle()
+async def handle_debug_update_extra_info(args: Message = CommandArg()):
+    argv = _split_args(args)
+    if len(argv) != 1:
+        await debug_update_extra_info.finish("用法: /update_extra_info <steamid>")
+    steamid = argv[0]
+    async with async_session_factory() as session:
+        async with session.begin():
+            await db._update_extra_info(steamid, session)
+    await debug_update_extra_info.finish(f"update_extra_info 成功: {steamid}")
+
+
+@debug_update_matchgp.handle()
+async def handle_debug_update_matchgp(args: Message = CommandArg()):
+    argv = _split_args(args)
+    if len(argv) < 1:
+        await debug_update_matchgp.finish("用法: /update_matchgp <matchid> [timestamp]")
+    mid = argv[0]
+    try:
+        timestamp = int(argv[1]) if len(argv) >= 2 else int(time.time())
+    except ValueError:
+        await debug_update_matchgp.finish("timestamp 必须为整数")
+    async with async_session_factory() as session:
+        async with session.begin():
+            changed = await db._update_matchgp(mid, timestamp, session)
+    await debug_update_matchgp.finish(f"update_matchgp 完成: mid={mid}, changed={changed}")
+
+
+@debug_update_match.handle()
+async def handle_debug_update_match(args: Message = CommandArg()):
+    argv = _split_args(args)
+    if len(argv) < 1:
+        await debug_update_match.finish("用法: /update_match <matchid> [timestamp] [season]")
+    mid = argv[0]
+    try:
+        timestamp = int(argv[1]) if len(argv) >= 2 else int(time.time())
+    except ValueError:
+        await debug_update_match.finish("timestamp 必须为整数")
+    season = argv[2] if len(argv) >= 3 else SeasonId
+    async with async_session_factory() as session:
+        async with session.begin():
+            changed = await db._update_match(mid, timestamp, season, session)
+    await debug_update_match.finish(f"update_match 完成: mid={mid}, season={season}, changed={changed}")
   
 db = DataManager()
