@@ -166,6 +166,7 @@ class DataManager:
         await session.merge(extra_info)
 
     async def _update_match(self, mid: str, timeStamp: int, season: str, session: AsyncSession):
+        logger.info(f"_update_match start mid={mid} season={season} timestamp={timeStamp}")
         stmt = select(func.count()).select_from(MatchStatsPW).where(MatchStatsPW.mid == mid)
         
         result = await session.execute(stmt)
@@ -274,14 +275,15 @@ class DataManager:
             try:
                 await self._update_stats_card(player['playerId'], session)
                 await self._update_extra_info(player['playerId'], session)
-            except:
-                pass
+            except Exception as exc:
+                logger.warning(f"_update_match player update skipped mid={mid} player={player['playerId']} error={exc}")
         await self._update_match_extra(mid, session)
         logger.info(f"update_match {mid} success")
         return 1
 
 
     async def _update_matchgp(self, mid: str, timeStamp: int, session: AsyncSession):
+        logger.info(f"_update_matchgp start mid={mid} timestamp={timeStamp}")
         await self._init_match_gp_extra(mid, session)
         extra_info = await session.get(MatchStatsGPExtra, mid)
         assert extra_info is not None
@@ -392,9 +394,10 @@ class DataManager:
                     logger.warning(f"skip update_stats_card in update_matchgp: steamid={player['playerId']} reason={exc}")
                 except SQLAlchemyError:
                     # 数据库事务异常必须上抛，避免在已失效事务上继续执行 SQL
+                    logger.exception(f"sqlalchemy error in update_matchgp mid={mid} player={player['playerId']}")
                     raise
                 except Exception as exc:
-                    logger.warning(f"skip update_stats_card in update_matchgp: steamid={player['playerId']} error={exc}")
+                    logger.exception(f"unexpected error in update_matchgp mid={mid} player={player['playerId']} error={exc}")
         await self._update_match_gp_extra(mid, session)
         await self._set_match_gp_extra(mid,
                 int(time.time() + (random.random() + 1) * 80000 * math.pow(2, extra_info.fetchCount)),
@@ -626,29 +629,38 @@ class DataManager:
             logger.info(f"extra_info no change, skipped for SteamID: {steamid}")
     
     async def update_stats(self, steamid: str, interval: int=600) -> tuple[str, list[str], list[str]]:
+        logger.info(f"update_stats start steamid={steamid} interval={interval}")
         # 尝试获取锁，失败则抛出 LockingError
         try:
             await asyncio.wait_for(self.lock.acquire(), timeout=0.1)
         except asyncio.TimeoutError:
+            logger.warning(f"update_stats lock acquire timeout steamid={steamid}")
             raise LockingError()
         
         try:
             try:
                 async with async_session_factory() as session:
                     async with session.begin():
+                        logger.info(f"update_stats stage=stats_card steamid={steamid}")
                         await self._update_stats_card(steamid, session)
                     async with session.begin():
+                        logger.info(f"update_stats stage=extra_info steamid={steamid}")
                         await self._update_extra_info(steamid, session)
             except TooFrequentError as e:
-                pass
+                logger.info(f"update_stats stage=stats_card skipped too frequent steamid={steamid} wait={e.wait_time}s")
             except RuntimeError as e:
                 logger.warning(f"更新数据失败 {steamid} {e}")
+            except Exception:
+                logger.exception(f"update_stats unexpected error during profile refresh steamid={steamid}")
+                raise
             base_info = await db_val.get_base_info(steamid)
             assert base_info is not None
             if base_info.updateMatchTime + interval > time.time():
+                logger.info(f"update_stats stage=match_list skipped too frequent steamid={steamid}")
                 raise TooFrequentError(int(base_info.updateMatchTime + interval - time.time()))
             async with async_session_factory() as session:
                 async with session.begin():
+                    logger.info(f"update_stats stage=mark_update_time steamid={steamid}")
                     base_info.updateMatchTime = int(time.time())
                     await session.merge(base_info)
 
@@ -661,6 +673,7 @@ class DataManager:
                 nonlocal newLastTime
                 nonlocal addMatchesList
                 for SeasonID in [SeasonId, lastSeasonId]:
+                    logger.info(f"update_stats stage=match_list season={SeasonID} steamid={steamid}")
                     page = 1
                     while True:
                         url = "https://api.wmpvp.com/api/csgo/home/match/list"  
@@ -695,6 +708,7 @@ class DataManager:
                         page += 1
             async def _work_gp(session: AsyncSession) -> None:
                 nonlocal addMatchesGPList
+                logger.info(f"update_stats stage=match_list_gp steamid={steamid}")
                 url = "https://api.wmpvp.com/api/csgo/home/match/list"  
                 headers = {
                     "appversion": "3.5.4.172",
@@ -720,15 +734,18 @@ class DataManager:
         
             async with async_session_factory() as session:
                 async with session.begin():
+                    logger.info(f"update_stats stage=write_match_list steamid={steamid}")
                     await _work(session)
                     base_info.lasttime = newLastTime
                     await session.merge(base_info)
 
                 async with session.begin():
+                    logger.info(f"update_stats stage=write_match_list_gp steamid={steamid}")
                     await _work_gp(session)
-        
+            logger.info(f"update_stats done steamid={steamid} pw_added={len(addMatchesList)} gp_added={len(addMatchesGPList)}")
             return base_info.name, addMatchesList, addMatchesGPList
         finally:
+            logger.info(f"update_stats release_lock steamid={steamid}")
             self.lock.release()
     
     async def add_member(self, gid: str, uid: str):
