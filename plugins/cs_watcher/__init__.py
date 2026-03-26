@@ -7,8 +7,6 @@ from nonebot import get_bot
 from nonebot.plugin import PluginMetadata
 from nonebot import logger
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 import time
 import asyncio
 
@@ -28,8 +26,6 @@ from ..cs_db_upd import LockingError, TooFrequentError
 from ..cs_server import db as db_server
 from ..cs_server import get_screenshot
 from ..cs_server import _fetch_steam_status_payload
-from ..models import UserPlayStatus
-from ..utils import async_session_factory
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
@@ -47,51 +43,17 @@ class DataManager:
         self.queue_set: set[str] = set()  # 跟踪队列中的 steamid
         self.queue_lock: asyncio.Lock = asyncio.Lock()  # 保护 queue_set 的访问
         self.last_game_state: dict[str, str] = {}
-    
-    async def _get_game_status(self, steamid: str, session: AsyncSession) -> UserPlayStatus | None:
-        stmt = (
-            select(UserPlayStatus)
-            .where(UserPlayStatus.steamid == steamid)
-            .order_by(UserPlayStatus.timeStamp.desc())
-            .limit(1)
-        )
-        result = await session.execute(stmt)
-        return result.scalars().first()
-    
-    async def get_game_status(self, steamid: str) -> UserPlayStatus | None:
-        async with async_session_factory() as session:
-            return await self._get_game_status(steamid, session)
+        # steamid -> (gameid, gamename, last_timestamp)
+        self.last_play_status: dict[str, tuple[int, str, int]] = {}
     
     async def set_game_status(self, steamid: str, gameid: int, gamename: str, timeStamp: int) -> bool:
-        async with async_session_factory() as session:
-            async with session.begin():
-                result = await self._get_game_status(steamid, session)
-                if result is None or result.gameId != gameid or result.gameName != gamename:
-                    # 游戏状态改变，创建新记录（isFirst=True 记录开始时间）
-                    new_status = UserPlayStatus(
-                        steamid=steamid,
-                        timeStamp=timeStamp,
-                        isFirst=True,
-                        gameId=gameid,
-                        gameName=gamename,
-                    )
-                    await session.merge(new_status)
-                    if result is not None and result.gameId == 730:
-                        return True
-                elif result.isFirst:
-                    # 第一条记录时，创建第二条记录（isFirst=False 用于更新结束时间）
-                    new_status = UserPlayStatus(
-                        steamid=steamid,
-                        timeStamp=timeStamp,
-                        isFirst=False,
-                        gameId=gameid,
-                        gameName=gamename,
-                    )
-                    await session.merge(new_status)
-                else:
-                    # 非第一条记录时，直接更新时间戳（保持 isFirst=True 的开始时间）
-                    result.timeStamp = timeStamp
-                    await session.merge(result)
+        prev = self.last_play_status.get(steamid)
+        self.last_play_status[steamid] = (gameid, gamename, timeStamp)
+        if prev is None:
+            return False
+        prev_gameid, prev_gamename, _ = prev
+        if prev_gameid != gameid or prev_gamename != gamename:
+            return prev_gameid == 730
         return False
     
     async def add_queue(self, steamid: str):

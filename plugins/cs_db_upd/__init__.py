@@ -27,6 +27,7 @@ import math
 import random
 import asyncio
 from PIL import Image
+from PIL import UnidentifiedImageError
 from io import BytesIO
 
 from .config import Config
@@ -552,12 +553,17 @@ class DataManager:
         if data["statusCode"] != 0:
             raise RuntimeError("爬取失败：" + data["errorMessage"])
         if result_info.avatarlink != data["data"]["avatar"]:
-            async with get_session().get(data["data"]["avatar"]) as resp:
-                image_data = await resp.read()
-            # 缩小图片到128*128
-            img = Image.open(BytesIO(image_data))
-            img_small = img.resize((128, 128), Image.Resampling.LANCZOS)
-            img_small.save(avatar_dir / f"{steamid}.png", "PNG")
+            try:
+                async with get_session().get(data["data"]["avatar"]) as resp:
+                    image_data = await resp.read()
+                # 缩小图片到128*128
+                img = Image.open(BytesIO(image_data))
+                img_small = img.resize((128, 128), Image.Resampling.LANCZOS)
+                img_small.save(avatar_dir / f"{steamid}.png", "PNG")
+            except UnidentifiedImageError:
+                logger.warning(f"头像格式无法识别，跳过头像保存: {steamid} {data['data']['avatar']}")
+            except Exception as exc:
+                logger.warning(f"头像下载或保存失败，跳过头像保存: {steamid}, {exc}")
         result_info.name = data["data"]["name"]
 
         result_info.name = data["data"]["name"]

@@ -9,6 +9,7 @@ from nonebot import logger
 from nonebot import require
 
 import uuid
+import asyncio
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -22,6 +23,7 @@ from ..cs_db_val import NoValueError
 
 require("cs_db_upd")
 from ..cs_db_upd import db as db_upd
+from ..cs_db_upd import LockingError
 
 require("cs_ai")
 from ..cs_ai import ai_ask_main
@@ -106,10 +108,16 @@ async def dayreport_function(message: MessageEvent):
 @send_day_report.handle()
 async def send_day_report_function():
     for steamid in await db_val.get_all_steamid():
-        try:
-            await db_upd.update_stats(steamid)
-        except Exception:
-            pass
+        while True:
+            try:
+                await db_upd.update_stats(steamid)
+                break
+            except LockingError:
+                logger.info(f"db busy, waiting to update daily report player: {steamid}")
+                await asyncio.sleep(1)
+            except Exception as exc:
+                logger.warning(f"daily report update failed, skip player: {steamid}, {exc}")
+                break
     bot = get_bot()
     for groupid in config.cs_group_list:
         steamids = await db_val.get_member_steamid(f"group_{groupid}")
