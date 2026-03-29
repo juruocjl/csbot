@@ -357,7 +357,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             msg["reasoning_content"] = reasoning_content
         
         messages.append(msg)
-    await add_event("system", "你是一个counter strike2助手。可以使用工具获取数据，最多调用10次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
+    tool_budget = 20
+    await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
     await add_event("system", f"可用用户名：{usernames}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
@@ -380,7 +381,6 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
 
     
     await add_event("user", text)
-    tool_budget = 10
 
     tools_param = cast(Any, tools)
     
@@ -407,7 +407,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         
         for tool_call in msg_with_calls.tool_calls:
             if tool_budget <= 0:
-                break
+                await add_event("tool", "工具调用次数已用完", tool_call_id=tool_call.id)
+                continue
             # 仅处理 function 类型的 tool call
             assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
             func = tool_call.function
