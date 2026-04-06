@@ -256,21 +256,22 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         base_url=config.cs_ai_url,
     )
 
-    usernames: list[str] = []
-    steamid_username: dict[str, str] = {}
-    for sid_item in steamids:
-        if baseinfo := await db_val.get_base_info(sid_item):
-            usernames.append(baseinfo.name)
-            steamid_username[sid_item] = baseinfo.name
+    userqqs: list[str] = []
+    steamid_userqq: dict[str, str] = {}
+    for member_uid in await db_val.get_member(sid):
+        if member_steamid := await db_val.get_steamid(member_uid):
+            if member_steamid in steamids:
+                userqqs.append(member_uid)
+                steamid_userqq[member_steamid] = member_uid
 
     mem = await db.get_mem(sid)
 
     start_time = time.time()
 
     def _pick_name(name: str) -> str | None:
-        if not usernames:
+        if not userqqs:
             return None
-        match = process.extractOne(name, usernames)
+        match = process.extractOne(name, userqqs)
         return match[0] if match else None
 
     def _pick_time(time_val: str) -> str:
@@ -360,13 +361,13 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     tool_budget = 20
     await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
-    await add_event("system", f"可用用户名：{usernames}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。")
+    await add_event("system", f"可用QQ号：{userqqs}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
 
     if mysteamid:
         if baseinfo := await db_val.get_base_info(mysteamid):
-            await add_event("system", f"用户的用户名是 {baseinfo.name}，不要混淆。")
+            await add_event("system", f"当前提问者QQ号是 {uid}，对应游戏昵称是 {baseinfo.name}。")
 
     if persona == "贴吧":
         await add_event("system", "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。")
@@ -424,7 +425,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 if not name:
                     continue
                 time_type = _pick_time(fargs.get("time", "本赛季"))
-                sid_target = next((k for k, v in steamid_username.items() if v == name), None)
+                sid_target = next((k for k, v in steamid_userqq.items() if v == name), None)
                 if not sid_target:
                     continue
                 try:
@@ -438,7 +439,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 if not name:
                     continue
                 time_type = _pick_time(fargs.get("time", "本赛季"))
-                sid_target = next((k for k, v in steamid_username.items() if v == name), None)
+                sid_target = next((k for k, v in steamid_userqq.items() if v == name), None)
                 if not sid_target:
                     continue
                 try:
@@ -446,8 +447,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     results = await db_val.get_match_teammate(sid_target, time_type, ["rt2", "_rt2"], top_k=5)
                     strongest = results[0]
                     weakest = results[1]
-                    strongest_text = "最强队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in strongest]) if strongest else "最强队友暂无数据"
-                    weakest_text = "最弱队友前五：" + "，".join([f"{steamid_username.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in weakest]) if weakest else "最弱队友暂无数据"
+                    strongest_text = "最强队友前五：" + "，".join([f"{steamid_userqq.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in strongest]) if strongest else "最强队友暂无数据"
+                    weakest_text = "最弱队友前五：" + "，".join([f"{steamid_userqq.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in weakest]) if weakest else "最弱队友暂无数据"
                     content = f"{name} {time_type} 队友统计：{strongest_text}；{weakest_text}"
                     await add_event("tool", content, tool_call_id=tool_call.id)
                 except Exception as e:
@@ -459,8 +460,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 if not name1 or not name2:
                     continue
                 time_type = _pick_time(fargs.get("time", "本赛季"))
-                sid1 = next((k for k, v in steamid_username.items() if v == name1), None)
-                sid2 = next((k for k, v in steamid_username.items() if v == name2), None)
+                sid1 = next((k for k, v in steamid_userqq.items() if v == name1), None)
+                sid2 = next((k for k, v in steamid_userqq.items() if v == name2), None)
                 if not sid1 or not sid2:
                     continue
                 try:
@@ -494,7 +495,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                         avg_val = sum([v[1][0] for v in vals]) / len(vals)
                         top5 = vals[:5]
                         res_text = f"{time_type} {rankconfig.title} 平均 {avg_val:.2f}，前五："
-                        res_text += "，".join([f"{steamid_username.get(s, s)} {v:.2f}" for s, (v, _cnt) in top5])
+                        res_text += "，".join([f"{steamid_userqq.get(s, s)} {v:.2f}" for s, (v, _cnt) in top5])
                         await add_event("tool", res_text, tool_call_id=tool_call.id)
                 except Exception as e:
                     await add_event("tool", f"获取排名数据失败: {e}", tool_call_id=tool_call.id)
@@ -614,7 +615,17 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
     uid = message.get_user_id()
     sid = message.get_session_id()
 
-    text = await db_val.work_msg(args)
+    parts: list[str] = []
+    for seg in args:
+        if seg.type == "text":
+            parts.append(seg.data["text"])
+        elif seg.type == "at":
+            qq = str(seg.data["qq"])
+            if name := await db_val.get_username(qq):
+                parts.append(f"@{qq}({name})")
+            else:
+                parts.append(f"@{qq}")
+    text = "".join(parts)
     text = text.strip()
     if not text:
         await aimem.finish(
@@ -626,7 +637,7 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
             api_key=config.cs_ai_api_key,
             base_url=config.cs_ai_url,
         )
-        msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。"}]
+        msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。特别注意：涉及成员时必须优先记忆并保留QQ号，不要只记录昵称。"}]
         mem = await db.get_mem(sid)
         msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
         msgs.append({"role": "user", "content": f"这是要加入的内容"})
@@ -648,5 +659,3 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
         MessageSegment.at(uid) + " " +
         result
     )
-
-
