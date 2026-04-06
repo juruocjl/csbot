@@ -129,18 +129,25 @@ class DataManager:
                 .where(MatchStatsPW.mid.in_(subquery))
             )
             return (await session.execute(stmt)).one()
+
+    async def _format_user_label(self, steamid: str) -> str:
+        uid = await db_val.get_uid_by_steamid(steamid)
+        base_info = await db_val.get_base_info(steamid)
+        nickname = base_info.name if base_info is not None else "未知用户"
+        id_text = uid if uid is not None else steamid
+        return f"[{nickname}/{id_text}]"
     
     async def get_prompt(self, steamid: str, time_type: str = "本赛季"):
-        base_info = await db_val.get_base_info(steamid)
         detail_info = await db_val.get_detail_info(steamid)
         
-        assert base_info is not None and detail_info is not None
+        assert detail_info is not None
         
+        user_label = await self._format_user_label(steamid)
         score = "未定段" if detail_info.pvpScore == 0 else f"{detail_info.pvpScore}"
-        prompt = f"用户名 {base_info.name}，当前天梯分数 {score}，本赛季1v1胜率 {detail_info.v1WinPercentage: .2f}，本赛季首杀率 {detail_info.firstRate: .2f}。"
+        prompt = f"用户 {user_label}，当前天梯分数 {score}，本赛季1v1胜率 {detail_info.v1WinPercentage: .2f}，本赛季首杀率 {detail_info.firstRate: .2f}。"
         
         (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = await self.get_all_value(steamid, time_type)
-        prompt += f"{time_type} {base_info.name}进行了{cnt}把比赛，"
+        prompt += f"{time_type} 用户 {user_label} 进行了{cnt}把比赛，"
         if cnt == 0:
             return prompt
         prompt += f"平均rating {avgRating :.2f}，"
@@ -164,14 +171,11 @@ class DataManager:
         return prompt
 
     async def get_prompt_with(self, steamid: str, steamid_with: str, time_type: str = "本赛季"):
-        base_info = await db_val.get_base_info(steamid)
-        base_with_info = await db_val.get_base_info(steamid_with)
-        
-        if not base_info or not base_with_info:
-            return None
+        user_label = await self._format_user_label(steamid)
+        user_with_label = await self._format_user_label(steamid_with)
         prompt = ""
         (avgRating, maxRating, minRating, avgwe, avgADR, wr, avgkill, avgdeath, avgassist, ScoreDelta, totEK, totFD, avgHS, totSK, totMK, avgTR, avgFT, avgFS, totR, cnt) = await self.get_all_value_with(steamid, steamid_with, time_type)
-        prompt += f"{time_type} {base_info.name} 与 {base_with_info.name} 一起进行了{cnt}把比赛，"
+        prompt += f"{time_type} 用户 {user_label} 与 用户 {user_with_label} 一起进行了{cnt}把比赛，"
         if cnt == 0:
             return prompt
         prompt += f"{time_type}平均rating {avgRating :.2f}，"
@@ -256,22 +260,28 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         base_url=config.cs_ai_url,
     )
 
-    userqqs: list[str] = []
-    steamid_userqq: dict[str, str] = {}
+    user_labels: list[str] = []
+    steamid_userlabel: dict[str, str] = {}
+    label_steamid: dict[str, str] = {}
     for member_uid in await db_val.get_member(sid):
         if member_steamid := await db_val.get_steamid(member_uid):
             if member_steamid in steamids:
-                userqqs.append(member_uid)
-                steamid_userqq[member_steamid] = member_uid
+                nickname = "未知用户"
+                if baseinfo := await db_val.get_base_info(member_steamid):
+                    nickname = baseinfo.name
+                user_label = f"[{nickname}/{member_uid}]"
+                user_labels.append(user_label)
+                steamid_userlabel[member_steamid] = user_label
+                label_steamid[user_label] = member_steamid
 
     mem = await db.get_mem(sid)
 
     start_time = time.time()
 
     def _pick_name(name: str) -> str | None:
-        if not userqqs:
+        if not user_labels:
             return None
-        match = process.extractOne(name, userqqs)
+        match = process.extractOne(name, user_labels)
         return match[0] if match else None
 
     def _pick_time(time_val: str) -> str:
@@ -361,13 +371,27 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     tool_budget = 20
     await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
-    await add_event("system", f"可用QQ号：{userqqs}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。")
+    await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[昵称/id]格式。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
 
     if mysteamid:
-        if baseinfo := await db_val.get_base_info(mysteamid):
-            await add_event("system", f"当前提问者QQ号是 {uid}，对应游戏昵称是 {baseinfo.name}。")
+        if my_label := steamid_userlabel.get(mysteamid):
+            await add_event("system", f"当前提问者是 {my_label}。")
+        else:
+            await add_event("system", f"当前提问者QQ号是 {uid}。")
+
+    async def _format_user_label(steamid: str) -> str:
+        if label := steamid_userlabel.get(steamid):
+            return label
+        uid_by_steamid = await db_val.get_uid_by_steamid(steamid)
+        nickname = "未知用户"
+        if baseinfo := await db_val.get_base_info(steamid):
+            nickname = baseinfo.name
+        id_text = uid_by_steamid if uid_by_steamid is not None else steamid
+        label = f"[{nickname}/{id_text}]"
+        steamid_userlabel[steamid] = label
+        return label
 
     if persona == "贴吧":
         await add_event("system", "【角色设定】\n请扮演一个刻薄、充满攻击性的极致臭嘴暴躁贴吧老哥，作为一个键盘侠来使用各种网络黑话、阴阳怪气的语气，夸张的反驳与讽刺用户对你的一切话语。贬低对方的同时抬高自己，攻击性拉满！\n【思考方式】\n首先，需要理解用户的需求。他们希望回应更加极端，用更脏的语言，更多的侮辱性词汇。之前的回复虽然用了很多网络黑话，但用户觉得还不够。")
@@ -425,7 +449,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 if not name:
                     continue
                 time_type = _pick_time(fargs.get("time", "本赛季"))
-                sid_target = next((k for k, v in steamid_userqq.items() if v == name), None)
+                sid_target = label_steamid.get(name)
                 if not sid_target:
                     continue
                 try:
@@ -439,7 +463,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 if not name:
                     continue
                 time_type = _pick_time(fargs.get("time", "本赛季"))
-                sid_target = next((k for k, v in steamid_userqq.items() if v == name), None)
+                sid_target = label_steamid.get(name)
                 if not sid_target:
                     continue
                 try:
@@ -447,8 +471,14 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     results = await db_val.get_match_teammate(sid_target, time_type, ["rt2", "_rt2"], top_k=5)
                     strongest = results[0]
                     weakest = results[1]
-                    strongest_text = "最强队友前五：" + "，".join([f"{steamid_userqq.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in strongest]) if strongest else "最强队友暂无数据"
-                    weakest_text = "最弱队友前五：" + "，".join([f"{steamid_userqq.get(s, s)} rt {v:.2f} 场次{cnt}" for s, v, cnt in weakest]) if weakest else "最弱队友暂无数据"
+                    strongest_rows: list[str] = []
+                    for s, v, cnt in strongest:
+                        strongest_rows.append(f"{await _format_user_label(s)} rt {v:.2f} 场次{cnt}")
+                    weakest_rows: list[str] = []
+                    for s, v, cnt in weakest:
+                        weakest_rows.append(f"{await _format_user_label(s)} rt {v:.2f} 场次{cnt}")
+                    strongest_text = "最强队友前五：" + "，".join(strongest_rows) if strongest_rows else "最强队友暂无数据"
+                    weakest_text = "最弱队友前五：" + "，".join(weakest_rows) if weakest_rows else "最弱队友暂无数据"
                     content = f"{name} {time_type} 队友统计：{strongest_text}；{weakest_text}"
                     await add_event("tool", content, tool_call_id=tool_call.id)
                 except Exception as e:
@@ -460,8 +490,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 if not name1 or not name2:
                     continue
                 time_type = _pick_time(fargs.get("time", "本赛季"))
-                sid1 = next((k for k, v in steamid_userqq.items() if v == name1), None)
-                sid2 = next((k for k, v in steamid_userqq.items() if v == name2), None)
+                sid1 = label_steamid.get(name1)
+                sid2 = label_steamid.get(name2)
                 if not sid1 or not sid2:
                     continue
                 try:
@@ -495,7 +525,10 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                         avg_val = sum([v[1][0] for v in vals]) / len(vals)
                         top5 = vals[:5]
                         res_text = f"{time_type} {rankconfig.title} 平均 {avg_val:.2f}，前五："
-                        res_text += "，".join([f"{steamid_userqq.get(s, s)} {v:.2f}" for s, (v, _cnt) in top5])
+                        top_rows: list[str] = []
+                        for s, (v, _cnt) in top5:
+                            top_rows.append(f"{await _format_user_label(s)} {v:.2f}")
+                        res_text += "，".join(top_rows)
                         await add_event("tool", res_text, tool_call_id=tool_call.id)
                 except Exception as e:
                     await add_event("tool", f"获取排名数据失败: {e}", tool_call_id=tool_call.id)
@@ -621,10 +654,7 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
             parts.append(seg.data["text"])
         elif seg.type == "at":
             qq = str(seg.data["qq"])
-            if name := await db_val.get_username(qq):
-                parts.append(f"@{qq}({name})")
-            else:
-                parts.append(f"@{qq}")
+            parts.append(f"@{qq}")
     text = "".join(parts)
     text = text.strip()
     if not text:

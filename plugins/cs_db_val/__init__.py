@@ -319,6 +319,17 @@ class DataManager:
 
             return result.scalar_one()
 
+    async def get_pvp_score_history(self, steamid: str, time_type: str) -> list[tuple[int, int]]:
+        async with async_session_factory() as session:
+            stmt = (
+                select(MatchStatsPW.timeStamp, MatchStatsPW.pvpScore)
+                .where(*get_ladder_filter(steamid, time_type))
+                .where(MatchStatsPW.pvpScore > 0)
+                .order_by(MatchStatsPW.timeStamp.asc())
+            )
+            rows = (await session.execute(stmt)).all()
+            return [(int(ts), int(score)) for ts, score in rows]
+
     async def get_match_detail(self, mid: str) -> list[MatchStatsPW] | None:
         async with async_session_factory() as session:
             stmt = select(MatchStatsPW).where(MatchStatsPW.mid == mid)
@@ -590,6 +601,12 @@ class DataManager:
             result = await session.execute(stmt)
             record = result.scalar()
             return record is not None
+    
+    async def get_uid_by_steamid(self, steamid: str) -> str | None:
+        async with async_session_factory() as session:
+            stmt = select(MemberSteamID.uid).where(MemberSteamID.steamid == steamid).limit(1)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
 
     async def get_username(self, uid: str) -> str | None:
         if steamid := await self.get_steamid(uid):
