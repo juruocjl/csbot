@@ -26,6 +26,12 @@ config = get_plugin_config(Config)
 
 import re
 import os
+from io import BytesIO
+from datetime import datetime
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 __plugin_meta__ = PluginMetadata(
     name="cs",
@@ -51,13 +57,18 @@ matches = on_command("记录", priority=10, block=True)
 
 matchteammate = on_command("缘分", priority=10, block=True)
 
+scoretrend = on_command("分数变化", priority=10, block=True)
+
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     print("user: %s\nsession: %s\n" % (uid, sid))
     if (steamid := args.extract_plain_text()) and re.match(r'^\d{17}$', steamid):
-        await db_upd.bind(uid, steamid)
+        try:
+            await db_upd.bind(uid, steamid)
+        except ValueError as e:
+            await bind.finish(str(e))
         await bind.finish(f"成功绑定{steamid}。你可以使用 /更新数据 获取战绩。")
     else:
         await bind.finish("请输入steamid64，应该是一个17位整数。你可以使用steamidfinder等工具找到此值。")
@@ -150,6 +161,86 @@ async def rank_function(message: GroupMessageEvent, args: Message = CommandArg()
                 await rank.finish(str(e))
 
     await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可选 [选项]：{valid_rank}\n可用 (时间)：{valid_time}")
+
+@scoretrend.handle()
+async def scoretrend_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    time_type = "本赛季"
+    target_uids: list[str] = []
+    text_tokens: list[str] = []
+
+    for seg in args:
+        if seg.type == "at":
+            target_uids.append(str(seg.data["qq"]))
+        elif seg.type == "text":
+            text_tokens.extend(seg.data["text"].split())
+
+    if text_tokens:
+        if text_tokens[0] in valid_time:
+            time_type = text_tokens[0]
+            text_tokens = text_tokens[1:]
+        if text_tokens:
+            await scoretrend.finish(f"参数错误。用法：/分数变化 (可选时间) @人1 @人2 ...\n可用时间：{valid_time}")
+
+    if not target_uids:
+        target_uids = [uid]
+
+    dedup_uids: list[str] = []
+    seen: set[str] = set()
+    for target_uid in target_uids:
+        if target_uid not in seen:
+            seen.add(target_uid)
+            dedup_uids.append(target_uid)
+
+    series: list[tuple[str, list[datetime], list[int]]] = []
+    skipped: list[str] = []
+    for target_uid in dedup_uids:
+        steamid = await db_val.get_steamid(target_uid)
+        if not steamid:
+            skipped.append(f"{target_uid}(未绑定)")
+            continue
+
+        history = await db_val.get_pvp_score_history(steamid, time_type)
+        if not history:
+            skipped.append(f"{target_uid}(无数据)")
+            continue
+
+        baseinfo = await db_val.get_base_info(steamid)
+        nickname = baseinfo.name if baseinfo is not None else "未知用户"
+        label = f"{nickname}/{target_uid}"
+        xs = [datetime.fromtimestamp(ts) for ts, _ in history]
+        ys = [score for _, score in history]
+        series.append((label, xs, ys))
+
+    if not series:
+        tip = f"这些人没有可用的天梯分数变化数据（时间：{time_type}）。"
+        if skipped:
+            tip += "\n" + "，".join(skipped)
+        await scoretrend.finish(tip)
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    try:
+        for label, xs, ys in series:
+            ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.5, label=label)
+        ax.set_title(f"天梯分数变化（{time_type}）")
+        ax.set_xlabel("时间")
+        ax.set_ylabel("天梯分数（MatchStatsPW.pvpScore）")
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.legend(loc="best", fontsize=9)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+        fig.autofmt_xdate()
+        fig.tight_layout()
+
+        buffer = BytesIO()
+        fig.savefig(buffer, format="png", dpi=160)
+        buffer.seek(0)
+        image_bytes = buffer.getvalue()
+    finally:
+        plt.close(fig)
+
+    if skipped:
+        await scoretrend.send("以下成员已跳过：" + "，".join(skipped))
+    await scoretrend.finish(MessageSegment.image(image_bytes))
         
 @matches.handle()
 async def matches_function(message: MessageEvent, args: Message = CommandArg()):
