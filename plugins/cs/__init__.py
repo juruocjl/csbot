@@ -57,7 +57,10 @@ async def bind_function(message: MessageEvent, args: Message = CommandArg()):
     sid = message.get_session_id()
     print("user: %s\nsession: %s\n" % (uid, sid))
     if (steamid := args.extract_plain_text()) and re.match(r'^\d{17}$', steamid):
-        await db_upd.bind(uid, steamid)
+        try:
+            await db_upd.bind(uid, steamid)
+        except ValueError as e:
+            await bind.finish(str(e))
         await bind.finish(f"成功绑定{steamid}。你可以使用 /更新数据 获取战绩。")
     else:
         await bind.finish("请输入steamid64，应该是一个17位整数。你可以使用steamidfinder等工具找到此值。")

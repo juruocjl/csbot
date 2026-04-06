@@ -64,6 +64,11 @@ class DataManager:
         """
         async with async_session_factory() as session:
             async with session.begin():
+                stmt = select(MemberSteamID).where(MemberSteamID.steamid == steamid)
+                result = await session.execute(stmt)
+                existed = result.scalar_one_or_none()
+                if existed is not None and existed.uid != uid:
+                    raise ValueError("该 SteamID 已被其他账号绑定。")
                 # merge 会自动检查主键 uid
                 # 1. 存在 -> 更新 steamid
                 # 2. 不存在 -> 插入新记录
