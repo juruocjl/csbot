@@ -33,6 +33,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+plt.rcParams["font.sans-serif"] = [
+    "WenQuanYi Micro Hei",
+    "Noto Sans CJK SC",
+    "SimHei",
+    "Arial Unicode MS",
+    "DejaVu Sans",
+]
+plt.rcParams["axes.unicode_minus"] = False
+
 __plugin_meta__ = PluginMetadata(
     name="cs",
     description="",

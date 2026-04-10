@@ -27,6 +27,7 @@ import json
 from thefuzz import process, fuzz
 import os
 from datetime import datetime
+import re
 from sqlalchemy import select, func, case
 import time
 import uuid
@@ -372,6 +373,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
     await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[昵称/id]格式。")
+    await add_event("system", "当你需要在最终回复中提及某个QQ号时，请使用 [at:id] 格式（例如 [at:123456]）。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
 
@@ -557,6 +559,19 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     
 
 async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message, chat_id: str | None = None) -> Message:
+    def _render_at_segments(text: str) -> Message:
+        result = Message()
+        last = 0
+        for match in re.finditer(r"\[at:(\d+)\]", text):
+            start, end = match.span()
+            if start > last:
+                result += text[last:start]
+            result += MessageSegment.at(match.group(1))
+            last = end
+        if last < len(text):
+            result += text[last:]
+        return result
+
     text = await db_val.work_msg(msg)
     msg2id: int | None = None
     try:
@@ -578,10 +593,13 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
         return Message("获取回复消息失败。")
     logger.info(f"UID: {uid}, Text: {text}")
 
+    ai_text = await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
+    ai_message = _render_at_segments(ai_text)
+
     if msg2id is not None:
-        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
+        return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + ai_message
     else:
-        return MessageSegment.at(uid) + " " + await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
+        return MessageSegment.at(uid) + " " + ai_message
 
 @aiask.handle()
 async def aiask_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
