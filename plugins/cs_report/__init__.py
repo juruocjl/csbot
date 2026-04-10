@@ -27,6 +27,7 @@ from ..cs_db_upd import LockingError
 
 require("cs_ai")
 from ..cs_ai import ai_ask_main
+from ..cs_ai import db as ai_db
 
 
 from .config import Config
@@ -120,11 +121,13 @@ async def send_day_report_function():
                 break
     bot = get_bot()
     for groupid in config.cs_group_list:
+        sid = f"group_{groupid}_?"
         steamids = await db_val.get_member_steamid(f"group_{groupid}")
+        daily_report = await get_report("今日", steamids)
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message="== 23:30自动日报 ==\n" + await get_report("今日", steamids)
+            message="== 23:30自动日报 ==\n" + daily_report
         )
         chat_id = str(uuid.uuid4())
         await bot.send_msg(
@@ -132,21 +135,31 @@ async def send_day_report_function():
             group_id=groupid,
             message=Message("日报正在生成中：") + Message(config.cs_domain + f"/ai-chat?chatId={chat_id}")
         )
+        ai_report = await ai_ask_main(
+            "",
+            sid,
+            None,
+            "请结合今日天梯，官匹，内战数据，锐评本群今日的cs情况，不必给出具体的数据，只需要总体的评价，尽可能犀利尖锐。",
+            chat_id=chat_id,
+        )
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message=await ai_ask_main("", f"group_{groupid}_?", None, "请结合今日天梯，官匹，内战数据，锐评本群今日的cs情况，不必给出具体的数据，只需要总体的评价，尽可能犀利尖锐。", chat_id=chat_id)
+            message=ai_report
         )
+        await ai_db.remember_report_knowledge(sid, "日报", daily_report, ai_report)
 
 @scheduler.scheduled_job("cron", day_of_week="sun", hour="23", minute="45", id="weekreport")
 async def send_week_report():
     bot = get_bot()
     for groupid in config.cs_group_list:
+        sid = f"group_{groupid}_?"
         steamids = await db_val.get_member_steamid(f"group_{groupid}")
+        weekly_report = await get_report("本周", steamids)
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message="== 周日23:45自动周报 ==\n" + await get_report("本周", steamids)
+            message="== 周日23:45自动周报 ==\n" + weekly_report
         )
         chat_id = str(uuid.uuid4())
         await bot.send_msg(
@@ -154,8 +167,16 @@ async def send_week_report():
             group_id=groupid,
             message=Message("周报正在生成中：") + Message(config.cs_domain + f"/ai-chat?chatId={chat_id}")
         )
+        ai_report = await ai_ask_main(
+            "",
+            sid,
+            None,
+            "请结合本周天梯，官匹，内战数据，锐评本群本周的cs情况，不必给出具体的数据，只需要总体的评价，尽可能犀利尖锐。",
+            chat_id=chat_id,
+        )
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message=await ai_ask_main("", f"group_{groupid}_?", None, "请结合本周天梯，官匹，内战数据，锐评本群本周的cs情况，不必给出具体的数据，只需要总体的评价，尽可能犀利尖锐。", chat_id=chat_id)
+            message=ai_report
         )
+        await ai_db.remember_report_knowledge(sid, "周报", weekly_report, ai_report)

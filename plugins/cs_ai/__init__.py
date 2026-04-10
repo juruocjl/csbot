@@ -43,12 +43,19 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
+REPORT_KNOWLEDGE_HEADER = "[自动日报周报知识]"
+
+
 class DataManager:
 
     def _process_gid(self, gid: str) -> str:
         if gid.startswith("group_"):
             return gid.split("_")[1]
         raise ValueError("Invalid gid format")
+    
+    def _report_knowledge_gid(self, gid: str) -> str:
+        clean_gid = self._process_gid(gid)
+        return f"{clean_gid}:report_knowledge"
 
     async def get_mem(self, gid: str) -> str:
         clean_gid = self._process_gid(gid)
@@ -68,6 +75,102 @@ class DataManager:
                 new_memory = AIMemory(gid=clean_gid, mem=mem)
                 
                 await session.merge(new_memory)
+
+    def _split_manual_and_auto_memory(self, mem: str) -> tuple[str, list[str]]:
+        if REPORT_KNOWLEDGE_HEADER not in mem:
+            return mem.strip(), []
+        manual, auto = mem.split(REPORT_KNOWLEDGE_HEADER, 1)
+        entries: list[str] = []
+        for line in auto.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("- "):
+                entries.append(line)
+        return manual.strip(), entries
+
+    def _merge_memory_with_auto(self, manual_mem: str, auto_entries: list[str]) -> str:
+        manual_part = manual_mem.strip()
+        if not auto_entries:
+            return manual_part
+        auto_part = "\n".join(auto_entries)
+        if manual_part:
+            merged = f"{manual_part}\n{REPORT_KNOWLEDGE_HEADER}\n{auto_part}"
+        else:
+            merged = f"{REPORT_KNOWLEDGE_HEADER}\n{auto_part}"
+        return merged
+
+    def _compact_text(self, text: str, max_len: int = 180) -> str:
+        compact = " ".join(text.split())
+        if len(compact) <= max_len:
+            return compact
+        return compact[: max_len - 1] + "…"
+
+    async def _summarize_auto_entries_with_llm(self, entries: list[str], max_chars: int = 1800) -> list[str]:
+        if not entries:
+            return []
+        client = AsyncOpenAI(
+            api_key=config.cs_ai_api_key,
+            base_url=config.cs_ai_url,
+        )
+        prompt = "\n".join(entries)
+        response = await client.chat.completions.create(
+            model=config.cs_ai_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你需要压缩CS群日报/周报知识。请输出不超过6条要点，"
+                        "每条必须以'- '开头，保留关键趋势、常见问题、点名对象和结论。"
+                        f"总长度尽量控制在{max_chars}字以内。不要输出除要点外的任何解释。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        content = response.choices[0].message.content or ""
+        rows: list[str] = []
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                rows.append(line)
+        return rows
+
+    async def get_recent_report_knowledge(self, gid: str, limit: int = 4) -> str:
+        report_gid = self._report_knowledge_gid(gid)
+        async with async_session_factory() as session:
+            memory_obj = await session.get(AIMemory, report_gid)
+            mem = memory_obj.mem if memory_obj else ""
+        _manual, entries = self._split_manual_and_auto_memory(mem)
+        if not entries:
+            return ""
+        return "\n".join(entries[:limit])
+
+    async def remember_report_knowledge(self, gid: str, report_type: str, structured_report: str, ai_report: str):
+        now_text = datetime.now().strftime("%Y-%m-%d")
+        report_summary = self._compact_text(structured_report, 150)
+        ai_summary = self._compact_text(ai_report, 180)
+        new_entry = f"- {now_text} {report_type} 结构化榜单: {report_summary} AI点评: {ai_summary}"
+
+        report_gid = self._report_knowledge_gid(gid)
+        async with async_session_factory() as session:
+            memory_obj = await session.get(AIMemory, report_gid)
+            mem = memory_obj.mem if memory_obj else ""
+        manual_mem, entries = self._split_manual_and_auto_memory(mem)
+        entries = [new_entry] + entries
+        entries = entries[:8]
+        merged_mem = self._merge_memory_with_auto(manual_mem, entries)
+        if len(merged_mem) > 2000:
+            try:
+                summarized_entries = await self._summarize_auto_entries_with_llm(entries, max_chars=1800)
+                if summarized_entries:
+                    merged_mem = self._merge_memory_with_auto(manual_mem, summarized_entries)
+            except Exception as e:
+                logger.warning(f"compress report knowledge with llm failed: {e}")
+        async with async_session_factory() as session:
+            async with session.begin():
+                await session.merge(AIMemory(gid=report_gid, mem=merged_mem))
+
     
     async def get_all_value(self, steamid: str, time_type: str):
         async with async_session_factory() as session:
@@ -276,6 +379,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 label_steamid[user_label] = member_steamid
 
     mem = await db.get_mem(sid)
+    recent_report_knowledge = await db.get_recent_report_knowledge(sid, limit=4)
 
     start_time = time.time()
 
@@ -376,6 +480,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，请使用 [at:id] 格式（例如 [at:123456]）。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
+    if recent_report_knowledge:
+        await add_event("system", f"最近自动日报/周报知识（按时间倒序）：\n{recent_report_knowledge}\n请在回答时参考这些近期趋势。")
 
     if mysteamid:
         if my_label := steamid_userlabel.get(mysteamid):
