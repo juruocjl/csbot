@@ -74,9 +74,9 @@ async def help_function(bot: Bot):
 (用户名匹配) 使用语法为 % 匹配任意长度串，_ 匹配长度为 1 串。
 可选 (时间)：{require("cs").valid_time}
 在 /查看数据 /记录 /ai* 时你的@消息会被替换成对应的用户名，找不到则会被替换为<未找到用户>
-""")
+    """)
     await asyncio.sleep(config.cs_help_delete_delay)
-    await bot.delete_msg(message_id=msg.message_id)
+    await bot.delete_msg(message_id=msg["message_id"])
 
 
 @caigou.handle()

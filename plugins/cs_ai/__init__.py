@@ -55,7 +55,7 @@ class DataManager:
     
     def _report_knowledge_gid(self, gid: str) -> str:
         clean_gid = self._process_gid(gid)
-        return f"{clean_gid}:report_knowledge"
+        return f"{clean_gid}:report"
 
     async def get_mem(self, gid: str) -> str:
         clean_gid = self._process_gid(gid)

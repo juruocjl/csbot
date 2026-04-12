@@ -5,6 +5,7 @@ from nonebot import logger
 from nonebot import require
 
 from typing import overload
+import base64
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 import datetime
 import time
@@ -15,6 +16,7 @@ import asyncio
 from pathlib import Path
 from alembic.runtime.migration import MigrationContext
 from alembic.autogenerate import compare_metadata
+from nonebot.adapters.onebot.v11 import MessageSegment
 
 from nonebot.plugin import PluginMetadata
 
@@ -138,6 +140,11 @@ def get_session() -> aiohttp.ClientSession:
 def path_to_file_url(path: str | Path) -> str:
     absolute_path = os.path.abspath(str(path))
     return 'file://' + absolute_path
+
+def local_record_segment(path: str | Path) -> MessageSegment:
+    data = Path(path).read_bytes()
+    encoded = base64.b64encode(data).decode("ascii")
+    return MessageSegment.record(f"base64://{encoded}")
 
 async def screenshot_html_to_png(url: str, width: int, height: int):
     browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])

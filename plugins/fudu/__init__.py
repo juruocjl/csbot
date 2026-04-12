@@ -26,6 +26,7 @@ require("utils")
 from ..utils import local_storage
 from ..utils import async_session_factory
 from ..utils import get_today_start_timestamp, getcard
+from ..utils import local_record_segment
 
 import math
 import random
@@ -281,9 +282,9 @@ async def fuducheck_function(bot: Bot, message: GroupMessageEvent, mhs: str) -> 
     gid = sid.split('_')[1]
     text = msg.extract_plain_text().lower().strip()
     if text == "gsm" or text == "干什么":
-        await bot.send_group_msg(group_id=int(gid), message=Message(MessageSegment.record(Path("assets") / "gsm.mp3")))
+        await bot.send_group_msg(group_id=int(gid), message=Message(local_record_segment(Path("assets") / "gsm.mp3")))
     if text == "mbf" or text == "没办法":
-        await bot.send_group_msg(group_id=int(gid), message=Message(MessageSegment.record(Path("assets") / "mbf.mp3")))
+        await bot.send_group_msg(group_id=int(gid), message=Message(local_record_segment(Path("assets") / "mbf.mp3")))
     need_send = False
     issb, whosb = checksb(msg)
     async with msg_lock:

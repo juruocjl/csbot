@@ -226,7 +226,7 @@ async def getts_function(bot: Bot):
         tree = ChannelTreeNode.build_tree(ts3conn, SID)
         msg = await getts.send(tree.print())
         await asyncio.sleep(config.ts_delete_delay)
-        await bot.delete_msg(message_id=msg.message_id)
+        await bot.delete_msg(message_id=msg["message_id"])
     
 
 @tspoke.handle()

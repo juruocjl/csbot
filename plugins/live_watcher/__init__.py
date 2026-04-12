@@ -62,11 +62,19 @@ async def get_live_status(liveid):
         async with get_session().get("https://api.live.bilibili.com/room/v1/Room/room_init?id="+liveid.split('_')[1], headers=headers) as res:
             await asyncio.sleep(1)
             data = await res.json()
-            islive = int(data['data']['live_status'] == 1)
-            uid = data['data']['uid']
+            room_data = data.get('data') or {}
+            if data.get('code') != 0 or 'live_status' not in room_data or 'uid' not in room_data:
+                logger.warning(f"[live_watcher] invalid bili room response: {liveid} {data}")
+                return None
+            islive = int(room_data['live_status'] == 1)
+            uid = room_data['uid']
             async with get_session().get("https://api.live.bilibili.com/live_user/v1/Master/info?uid="+str(uid), headers=headers) as res:
                 data = await res.json()
-                nickname = data['data']['info']['uname']
+                info = (data.get('data') or {}).get('info') or {}
+                nickname = info.get('uname')
+                if data.get('code') != 0 or not nickname:
+                    logger.warning(f"[live_watcher] invalid bili user response: {liveid} {data}")
+                    return None
                 return islive, nickname
 
 
@@ -76,7 +84,14 @@ async def live_watcher():
     bot = get_bot()
     new_live_state = ""
     for liveid in config.live_watch_list:
-        islive, nickname = await get_live_status(liveid)
+        try:
+            live_status = await get_live_status(liveid)
+        except Exception:
+            logger.exception(f"[live_watcher] failed to fetch live status: {liveid}")
+            continue
+        if live_status is None:
+            continue
+        islive, nickname = live_status
         logger.info(f"[live_watcher] {nickname} {islive}")
         new_live_state += f"{nickname} {islive}\n"
         if islive == 1 and await db.get_live_status(liveid) == 0:
