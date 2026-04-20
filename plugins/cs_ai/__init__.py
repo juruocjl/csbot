@@ -238,8 +238,9 @@ class DataManager:
         uid = await db_val.get_uid_by_steamid(steamid)
         base_info = await db_val.get_base_info(steamid)
         nickname = base_info.name if base_info is not None else "未知用户"
-        id_text = uid if uid is not None else steamid
-        return f"[{nickname}/{id_text}]"
+        if uid is not None:
+            return f"{nickname}([at:{uid}])"
+        return f"{nickname}({steamid})"
     
     async def get_prompt(self, steamid: str, time_type: str = "本赛季"):
         detail_info = await db_val.get_detail_info(steamid)
@@ -373,7 +374,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 nickname = "未知用户"
                 if baseinfo := await db_val.get_base_info(member_steamid):
                     nickname = baseinfo.name
-                user_label = f"[{nickname}/{member_uid}]"
+                user_label = f"{nickname}([at:{member_uid}])"
                 user_labels.append(user_label)
                 steamid_userlabel[member_steamid] = user_label
                 label_steamid[user_label] = member_steamid
@@ -476,8 +477,8 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     tool_budget = 20
     await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
-    await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[昵称/id]格式。")
-    await add_event("system", "当你需要在最终回复中提及某个QQ号时，请使用 [at:id] 格式（例如 [at:123456]）。")
+    await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
+    await add_event("system", "当你需要在最终回复中提及某个QQ号时，请使用 [at:id] 格式（例如 [at:123456]）。不要再使用 [昵称/id] 格式。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
     if recent_report_knowledge:
@@ -497,7 +498,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         if baseinfo := await db_val.get_base_info(steamid):
             nickname = baseinfo.name
         id_text = uid_by_steamid if uid_by_steamid is not None else steamid
-        label = f"[{nickname}/{id_text}]"
+        label = f"{nickname}([at:{id_text}])" if uid_by_steamid is not None else f"{nickname}({id_text})"
         steamid_userlabel[steamid] = label
         return label
 
