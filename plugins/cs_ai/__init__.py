@@ -669,7 +669,9 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
     def _render_at_segments(text: str) -> Message:
         result = Message()
         last = 0
-        for match in re.finditer(r"\[at:(\d+)\]", text):
+        # 支持 [at:123]、[at：123]、[AT: 123] 等格式
+        at_pattern = re.compile(r"\[(?:at|AT)\s*[:：]\s*(\d+)\]")
+        for match in at_pattern.finditer(text):
             start, end = match.span()
             if start > last:
                 result += text[last:start]
