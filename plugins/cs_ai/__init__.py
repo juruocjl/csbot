@@ -44,6 +44,23 @@ __plugin_meta__ = PluginMetadata(
 config = get_plugin_config(Config)
 
 REPORT_KNOWLEDGE_HEADER = "[自动日报周报知识]"
+MARKDOWN_PATTERN = re.compile(
+    r"(^\s{0,3}#{1,6}\s+)|"
+    r"(^\s{0,3}[-*+]\s+)|"
+    r"(^\s{0,3}\d+\.\s+)|"
+    r"(```)|"
+    r"(`[^`\n]+`)|"
+    r"(\[[^\]]+\]\([^)]+\))|"
+    r"(^\s{0,3}>\s+)|"
+    r"(^\s{0,3}---+\s*$)",
+    re.MULTILINE,
+)
+
+
+def _contains_markdown(text: str) -> bool:
+    if not text:
+        return False
+    return bool(MARKDOWN_PATTERN.search(text))
 
 
 class DataManager:
@@ -475,7 +492,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         
         messages.append(msg)
     tool_budget = 20
-    await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。输出不使用markdown，不要包含链接。请合理分配工具调用次数。")
+    await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。严格禁止输出markdown，不要包含链接。每次输出前请自检：若检测到明显markdown格式，必须先重写为纯文本后再输出。请合理分配工具调用次数。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
     await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，请使用 [at:id] 格式（例如 [at:123456]）。不要再使用 [昵称/id] 格式。")
@@ -656,6 +673,33 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     # 记录最后一次assistant响应（无tool_calls）到历史
     final_msg = response.choices[0].message
     output = final_msg.content or ""
+    if _contains_markdown(output):
+        rewrite_messages: list[ChatCompletionMessageParam] = [
+            {
+                "role": "system",
+                "content": "你是文本格式修复器。严格禁止输出markdown。只输出纯文本，不要链接，不要解释。",
+            },
+            {
+                "role": "user",
+                "content": f"请将下面内容改写为纯文本，保留原意：\n{output}",
+            },
+        ]
+        for _ in range(2):
+            rewrite_resp = await client.chat.completions.create(
+                model=model_name,
+                messages=rewrite_messages,
+            )
+            rewritten = rewrite_resp.choices[0].message.content or ""
+            if rewritten and not _contains_markdown(rewritten):
+                output = rewritten
+                break
+            rewrite_messages = [
+                rewrite_messages[0],
+                {
+                    "role": "user",
+                    "content": f"仍检测到markdown，请继续重写为纯文本：\n{rewritten}",
+                },
+            ]
     final_reasoning = getattr(final_msg, "reasoning_content", None)
     await add_event("assistant", output, reasoning_content=final_reasoning, is_end=True)
     
