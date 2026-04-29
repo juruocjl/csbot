@@ -1,6 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+import re
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot import on_command
@@ -47,6 +48,23 @@ weekreport = on_command("周报", priority=10, block=True)
 dayreport = on_command("日报", priority=10, block=True)
 
 send_day_report = on_command("发送日报", priority=10, block=True, permission=SUPERUSER)
+
+
+def render_at_segments(text: str) -> Message:
+    result = Message()
+    last = 0
+    # 支持 [at:123]、[at：123]、[AT: 123] 等格式
+    at_pattern = re.compile(r"\[(?:at|AT)\s*[:：]\s*(\d+)\]")
+    for match in at_pattern.finditer(text):
+        start, end = match.span()
+        if start > last:
+            result += text[last:start]
+        result += MessageSegment.at(match.group(1))
+        last = end
+    if last < len(text):
+        result += text[last:]
+    return result
+
 
 async def get_report_part(rank_type, time_type, steamids, reverse, fmt, n=3, filter = lambda x: True):
     prize_name = "🥇🥈🥉456789"
@@ -145,7 +163,7 @@ async def send_day_report_function():
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message=ai_report
+            message=render_at_segments(ai_report)
         )
         await ai_db.remember_report_knowledge(sid, "日报", daily_report, ai_report)
 
@@ -177,6 +195,6 @@ async def send_week_report():
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message=ai_report
+            message=render_at_segments(ai_report)
         )
         await ai_db.remember_report_knowledge(sid, "周报", weekly_report, ai_report)
