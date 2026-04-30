@@ -305,6 +305,10 @@ async def talk_trend_function(event: GroupMessageEvent, args: Message = CommandA
     if len(target_uids) == 0:
         target_uids.append(event.get_user_id())
 
+    display_names: dict[str, str] = {}
+    for uid in target_uids:
+        display_names[uid] = await getcard(event.bot, str(event.group_id), uid)
+
     uid_histories: list[tuple[str, list[tuple[date, int]]]] = []
     for target_uid in target_uids:
         history = await db.get_user_daily_msg_count(str(event.group_id), target_uid, 30)
@@ -315,10 +319,10 @@ async def talk_trend_function(event: GroupMessageEvent, args: Message = CommandA
         for target_uid, history in uid_histories:
             xs = [day for day, _ in history]
             ys = [count for _, count in history]
-            ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.5, label=target_uid)
+            ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.5, label=display_names[target_uid])
 
         if len(target_uids) == 1:
-            ax.set_title(f"用户 {target_uids[0]} 最近30天发言条数")
+            ax.set_title(f"用户 {display_names[target_uids[0]]} 最近30天发言条数")
         else:
             ax.set_title("多用户最近30天发言条数")
         ax.set_xlabel("日期")
