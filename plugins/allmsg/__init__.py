@@ -1,6 +1,7 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, GroupMessageEvent
+from nonebot.adapters.onebot.v11 import Message, GroupMessageEvent, MessageSegment
+from nonebot.params import CommandArg
 from nonebot import on_command, on_message
 from nonebot import logger
 from nonebot import require
@@ -28,6 +29,11 @@ import random
 import json
 import asyncio
 from io import BytesIO
+from datetime import datetime, timedelta
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,6 +46,15 @@ __plugin_meta__ = PluginMetadata(
 
 
 config = get_plugin_config(Config)
+
+plt.rcParams["font.sans-serif"] = [
+    "WenQuanYi Micro Hei",
+    "Noto Sans CJK SC",
+    "SimHei",
+    "Arial Unicode MS",
+    "DejaVu Sans",
+]
+plt.rcParams["axes.unicode_minus"] = False
 
 
 class DataManager:
@@ -118,6 +133,34 @@ class DataManager:
             count = result.scalar()
             return count if count is not None else 0
 
+    async def get_user_daily_msg_count(self, groupid: str, userid: str, days: int = 30) -> list[tuple[datetime, int]]:
+        async with async_session_factory() as session:
+            sid = f"group_{groupid}_{userid}"
+            now = datetime.now()
+            today = datetime(now.year, now.month, now.day)
+            start_date = today - timedelta(days=days - 1)
+            start_ts = int(start_date.timestamp())
+            end_ts = int((today + timedelta(days=1)).timestamp()) - 1
+
+            stmt = select(GroupMsg.timestamp).where(
+                GroupMsg.sid == sid,
+                GroupMsg.timestamp >= start_ts,
+                GroupMsg.timestamp <= end_ts
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+
+            counter: defaultdict[datetime, int] = defaultdict(int)
+            for ts in rows:
+                day = datetime.fromtimestamp(ts)
+                day_key = datetime(day.year, day.month, day.day)
+                counter[day_key] += 1
+
+            return [
+                (start_date + timedelta(days=i), counter[start_date + timedelta(days=i)])
+                for i in range(days)
+            ]
+
     
 
 full_dir = Path("imgs") / "history" / "full"
@@ -140,6 +183,7 @@ db = DataManager()
 allmsg = on_message(priority=0, block=False)
 
 report = on_command("统计", priority=10, block=True)
+talk_trend = on_command("发言", priority=10, block=True)
 
 async def get_msg_status(groupid) -> str:
     count = await db.get_msg_count(groupid)
@@ -249,6 +293,41 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent) -> None:
         message.original_message
     )
     await myallmsg.run(bot, message, mhs)
+
+@talk_trend.handle()
+async def talk_trend_function(event: GroupMessageEvent, args: Message = CommandArg()):
+    target_uid = event.get_user_id()
+    for seg in args:
+        if seg.type == "at":
+            target_uid = str(seg.data["qq"])
+            break
+
+    history = await db.get_user_daily_msg_count(str(event.group_id), target_uid, 30)
+    xs = [day for day, _ in history]
+    ys = [count for _, count in history]
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    try:
+        ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.5)
+        ax.set_title(f"用户 {target_uid} 最近30天发言条数")
+        ax.set_xlabel("日期")
+        ax.set_ylabel("发言条数")
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+        fig.autofmt_xdate()
+        fig.tight_layout()
+
+        buffer = BytesIO()
+        fig.savefig(buffer, format="png", dpi=160)
+        buffer.seek(0)
+        image = buffer.getvalue()
+    finally:
+        plt.close(fig)
+
+    total = sum(ys)
+    await talk_trend.finish(
+        MessageSegment.at(target_uid) + f" 最近30天总发言 {total} 条。\n" + MessageSegment.image(image)
+    )
 
 @report.handle()
 async def report_function(bot: Bot, message: GroupMessageEvent) -> None:
