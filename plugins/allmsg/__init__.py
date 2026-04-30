@@ -29,7 +29,7 @@ import random
 import json
 import asyncio
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -296,24 +296,37 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent) -> None:
 
 @talk_trend.handle()
 async def talk_trend_function(event: GroupMessageEvent, args: Message = CommandArg()):
-    target_uid = event.get_user_id()
+    target_uids: list[str] = []
     for seg in args:
         if seg.type == "at":
-            target_uid = str(seg.data["qq"])
-            break
+            uid = str(seg.data["qq"])
+            if uid not in target_uids:
+                target_uids.append(uid)
+    if len(target_uids) == 0:
+        target_uids.append(event.get_user_id())
 
-    history = await db.get_user_daily_msg_count(str(event.group_id), target_uid, 30)
-    xs = [day for day, _ in history]
-    ys = [count for _, count in history]
+    uid_histories: list[tuple[str, list[tuple[date, int]]]] = []
+    for target_uid in target_uids:
+        history = await db.get_user_daily_msg_count(str(event.group_id), target_uid, 30)
+        uid_histories.append((target_uid, history))
 
     fig, ax = plt.subplots(figsize=(11, 5.5))
     try:
-        ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.5)
-        ax.set_title(f"用户 {target_uid} 最近30天发言条数")
+        for target_uid, history in uid_histories:
+            xs = [day for day, _ in history]
+            ys = [count for _, count in history]
+            ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.5, label=target_uid)
+
+        if len(target_uids) == 1:
+            ax.set_title(f"用户 {target_uids[0]} 最近30天发言条数")
+        else:
+            ax.set_title("多用户最近30天发言条数")
         ax.set_xlabel("日期")
         ax.set_ylabel("发言条数")
         ax.grid(True, linestyle="--", alpha=0.4)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+        if len(target_uids) > 1:
+            ax.legend(title="用户")
         fig.autofmt_xdate()
         fig.tight_layout()
 
@@ -324,10 +337,7 @@ async def talk_trend_function(event: GroupMessageEvent, args: Message = CommandA
     finally:
         plt.close(fig)
 
-    total = sum(ys)
-    await talk_trend.finish(
-        MessageSegment.at(target_uid) + f" 最近30天总发言 {total} 条。\n" + MessageSegment.image(image)
-    )
+    await talk_trend.finish(MessageSegment.image(image))
 
 @report.handle()
 async def report_function(bot: Bot, message: GroupMessageEvent) -> None:
