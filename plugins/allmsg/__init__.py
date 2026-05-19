@@ -14,7 +14,7 @@ from ..utils import get_session, get_today_start_timestamp
 from ..utils import local_storage
 
 require("models")
-from ..models import GroupMsg, ImgCacheInfo
+from ..models import GroupMsg, ImgCacheInfo, GroupMember
 
 
 from .config import Config
@@ -76,6 +76,13 @@ class DataManager:
                 row.valid = True
                 row.count = (row.count or 0) + 1
                 return True, valid
+
+    async def touch_group_member(self, gid: str, uid: str) -> None:
+        async with async_session_factory() as session:
+            async with session.begin():
+                row = await session.get(GroupMember, {"gid": gid, "uid": uid})
+                if row is None:
+                    session.add(GroupMember(gid=gid, uid=uid))
     
 
     async def get_id_by_mid(self, mid: int) -> int:
@@ -285,6 +292,7 @@ myallmsg = MyDecorator()
 @allmsg.handle()
 async def allmsg_function(bot: Bot, message: GroupMessageEvent) -> None:
     assert(message.get_session_id().startswith("group"))
+    await db.touch_group_member(str(message.group_id), message.get_user_id())
     mhs = await insert_message(
         bot,
         message.message_id,
