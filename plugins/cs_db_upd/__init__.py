@@ -14,7 +14,7 @@ from ..utils import async_session_factory
 from ..utils import get_session
 
 require("models")
-from ..models import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, GroupMember
+from ..models import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 
@@ -759,17 +759,6 @@ class DataManager:
             logger.info(f"update_stats release_lock steamid={steamid}")
             self.lock.release()
     
-    async def add_member(self, gid: str, uid: str):
-        if gid.startswith("group_"):
-            clean_gid = gid.split("_")[1]
-
-            async with async_session_factory() as session:
-                async with session.begin():
-                    
-                    new_member = GroupMember(gid=clean_gid, uid=uid)
-                    await session.merge(new_member)
-
-
 debug_update_stats_card = on_command("update_stats_card", priority=10, block=True, permission=SUPERUSER)
 debug_update_extra_info = on_command("update_extra_info", priority=10, block=True, permission=SUPERUSER)
 debug_update_matchgp = on_command("update_matchgp", priority=10, block=True, permission=SUPERUSER)

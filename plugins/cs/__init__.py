@@ -95,8 +95,6 @@ async def update_function(message: MessageEvent):
     uid = message.get_user_id()
     sid = message.get_session_id()
 
-    await db_upd.add_member(sid, uid)
-
     print("user: %s\nsession: %s\n" % (uid, sid))
     steamid = await db_val.get_steamid(uid)
     if steamid != None:
@@ -120,7 +118,6 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     
-    await db_upd.add_member(sid, uid)
     print("user: %s\nsession: %s\n" % (uid, sid))
     steamid = await db_val.get_steamid(uid)
     if user := await db_val.work_msg(args):
