@@ -109,6 +109,8 @@ def get_name(wuzzyname):
     return alias2full[match]
 
 file_path = "result.txt"
+_simulation_update_task: asyncio.Task | None = None
+_simulation_update_pending = False
 
 
 logger.info(f"{major_stage_name}, {major_teams}")
@@ -306,15 +308,71 @@ async def hwupd_function():
 
 @simupd.handle()
 async def calc_simulate():
+    global _simulation_update_pending
+    bot = get_bot()
+    if _simulation_update_task is not None and not _simulation_update_task.done():
+        _simulation_update_pending = True
+        await simupd.finish("已有模拟正在进行，已加入队列")
+    await _enqueue_major_simulation(bot)
+    await simupd.finish("已开始后台模拟")
+
+
+async def _send_major_groups(bot: Bot, message: str):
+    for groupid in config.cs_group_list:
+        await bot.send_msg(
+            message_type="group",
+            group_id=groupid,
+            message=message,
+        )
+
+
+async def _run_major_simulation_once(bot: Bot):
+    global results
+
+    await _send_major_groups(bot, "开始重新模拟")
+    await asyncio.to_thread(gen_win_matrix, str(teamfile),
+                            json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
+                            newest_first=True)
+    await asyncio.to_thread(simulate, teamfile)
+    await _send_major_groups(bot, "新结果模拟完成")
+
+    results, total_simulations = parse_simulation_results(file_path)
+    logger.info(f"已加载 {total_simulations} 个模拟结果")
+
+    res = await db.get_all_hw(major_stage_name)
+    for member in res:
+        await calc_val(member.uid)
+    await _send_major_groups(bot, f"成功计算 {len(res)} 份作业")
+
+
+async def _run_queued_major_simulation(bot: Bot):
+    global _simulation_update_pending, _simulation_update_task
+
     try:
-        await asyncio.to_thread(gen_win_matrix, str(teamfile),
-                                 json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
-                                 newest_first=True)
-        await asyncio.to_thread(simulate, teamfile)
-    except Exception:
-        logger.exception("major simulation failed")
-        await simupd.finish("结果模拟失败，请查看日志")
-    await simupd.finish("结果模拟完成")
+        while True:
+            _simulation_update_pending = False
+            try:
+                await _run_major_simulation_once(bot)
+            except Exception:
+                logger.exception("major simulation failed")
+                await _send_major_groups(bot, "新结果模拟失败，请查看日志")
+                return
+            if not _simulation_update_pending:
+                return
+            await _send_major_groups(bot, "检测到新赛果，继续用最新结果重新模拟")
+    finally:
+        _simulation_update_task = None
+
+
+async def _enqueue_major_simulation(bot: Bot):
+    global _simulation_update_pending, _simulation_update_task
+
+    if _simulation_update_task is not None and not _simulation_update_task.done():
+        _simulation_update_pending = True
+        await _send_major_groups(bot, "模拟正在进行，已记录新赛果，完成后会用最新结果再算一次")
+        return
+
+    _simulation_update_task = asyncio.create_task(_run_queued_major_simulation(bot))
 
 async def event_update(event_id):
 
@@ -334,49 +392,7 @@ async def event_update(event_id):
                     message=f"成功计算 {len(res)} 份作业"
                 )
         else:
-            for groupid in config.cs_group_list:
-                await bot.send_msg(
-                    message_type="group",
-                    group_id=groupid,
-                    message="开始重新模拟"
-                )
-            
-            try:
-                await asyncio.to_thread(gen_win_matrix, str(teamfile), 
-                                        json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
-                                        newest_first=True)
-                await asyncio.to_thread(simulate, teamfile)
-            except Exception:
-                logger.exception("major simulation failed")
-                for groupid in config.cs_group_list:
-                    await bot.send_msg(
-                        message_type="group",
-                        group_id=groupid,
-                        message="新结果模拟失败，请查看日志"
-                    )
-                return
-
-            for groupid in config.cs_group_list:
-                await bot.send_msg(
-                    message_type="group",
-                    group_id=groupid,
-                    message="新结果模拟完成"
-                )
-            
-            global results
-            results, total_simulations = parse_simulation_results(file_path)
-            logger.info(f"已加载 {total_simulations} 个模拟结果")
-
-            res = await db.get_all_hw(major_stage_name)
-            for member in res:
-                await calc_val(member.uid)
-            
-            for groupid in config.cs_group_list:
-                await bot.send_msg(
-                    message_type="group",
-                    group_id=groupid,
-                    message=f"成功计算 {len(res)} 份作业"
-                )
+            await _enqueue_major_simulation(bot)
 
 major_all_stages = [f"{config.major_name}-{x}" for x in ["stage1", "stage2", "stage3", "playoffs-quad", "playoffs-semi", "playoffs-final"]]
 
