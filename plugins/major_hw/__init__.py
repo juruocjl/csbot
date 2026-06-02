@@ -307,7 +307,8 @@ async def hwupd_function():
 @simupd.handle()
 async def calc_simulate():
     await asyncio.to_thread(gen_win_matrix, str(teamfile),
-                             json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")))
+                             json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
+                             newest_first=True)
     await asyncio.to_thread(simulate, teamfile)
     await simupd.finish("结果模拟完成")
 
@@ -337,7 +338,8 @@ async def event_update(event_id):
                 )
             
             await asyncio.to_thread(gen_win_matrix, str(teamfile), 
-                                    json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")))
+                                    json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
+                                    newest_first=True)
             await asyncio.to_thread(simulate, teamfile)
 
             for groupid in config.cs_group_list:
