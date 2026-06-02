@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import csv
 from dataclasses import dataclass
-from functools import lru_cache, reduce, partial
+from functools import lru_cache, partial
 from multiprocessing import Pool
 from os import cpu_count
 from time import perf_counter_ns
@@ -540,6 +540,13 @@ class Simulation:
         if not tasks:
             return {team: Result.new() for team in self.teams}
 
+        def _merge_results(acc: dict[Team, Result], result: dict[Team, Result]) -> dict[Team, Result]:
+            for team, team_result in result.items():
+                acc[team] += team_result
+            return acc
+
+        merged_results = {team: Result.new() for team in self.teams}
+
         # 创建进度条
         with tqdm.tqdm(
             total=n,
@@ -552,22 +559,15 @@ class Simulation:
             # 创建进程池
             with Pool(k) as pool:
                 # 使用imap处理任务，这样可以实时获取结果
-                results = []
                 batch_func = partial(self.batch, show_progress=False)
                 task_args = [(batch_func, iterations) for iterations in tasks]
                 for iterations, result in pool.imap_unordered(_batch_task, task_args):
-                    results.append(result)
+                    _merge_results(merged_results, result)
                     # 更新进度条
                     pbar.update(iterations)
-                    pbar.set_postfix({'当前组合数': len(result[list(self.teams)[0]].pickem_results)})
+                    pbar.set_postfix({'当前组合数': len(merged_results[list(self.teams)[0]].pickem_results)})
 
-        # 合并所有进程的结果
-        def _f(acc: dict[Team, Result], results: dict[Team, Result]) -> dict[Team, Result]:
-            for team, result in results.items():
-                acc[team] += result
-            return acc
-
-        return reduce(_f, tqdm.tqdm(results))
+        return merged_results
 
 
 def format_results(results: dict[Team, Result], n: int, run_time: float, output_path: Path | str) -> list[str]:
