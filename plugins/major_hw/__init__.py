@@ -306,10 +306,14 @@ async def hwupd_function():
 
 @simupd.handle()
 async def calc_simulate():
-    await asyncio.to_thread(gen_win_matrix, str(teamfile),
-                             json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
-                             newest_first=True)
-    await asyncio.to_thread(simulate, teamfile)
+    try:
+        await asyncio.to_thread(gen_win_matrix, str(teamfile),
+                                 json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
+                                 newest_first=True)
+        await asyncio.to_thread(simulate, teamfile)
+    except Exception:
+        logger.exception("major simulation failed")
+        await simupd.finish("结果模拟失败，请查看日志")
     await simupd.finish("结果模拟完成")
 
 async def event_update(event_id):
@@ -337,10 +341,20 @@ async def event_update(event_id):
                     message="开始重新模拟"
                 )
             
-            await asyncio.to_thread(gen_win_matrix, str(teamfile), 
-                                    json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
-                                    newest_first=True)
-            await asyncio.to_thread(simulate, teamfile)
+            try:
+                await asyncio.to_thread(gen_win_matrix, str(teamfile), 
+                                        json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
+                                        newest_first=True)
+                await asyncio.to_thread(simulate, teamfile)
+            except Exception:
+                logger.exception("major simulation failed")
+                for groupid in config.cs_group_list:
+                    await bot.send_msg(
+                        message_type="group",
+                        group_id=groupid,
+                        message="新结果模拟失败，请查看日志"
+                    )
+                return
 
             for groupid in config.cs_group_list:
                 await bot.send_msg(

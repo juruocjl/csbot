@@ -13,6 +13,8 @@ from nonebot import logger
 from pathlib import Path
 import tqdm
 
+MAX_SIMULATION_CORES = 2
+
 def _batch_task(args: tuple[Callable[[int], dict], int]) -> tuple[int, dict]:
     batch_func, iterations = args
     return iterations, batch_func(iterations)
@@ -599,7 +601,8 @@ def simulate(file_path: Path | str, output_path: Path | str = "result.txt"):
 
     n_iterations = 1000000  # 增加迭代次数以获得更准确的结果
     cpu_c = cpu_count()
-    n_cores = max(1, cpu_c - 1 if cpu_c is not None else 0)  # 保留一个核心给系统使用
+    available_cores = cpu_c - 1 if cpu_c is not None else 1
+    n_cores = max(1, min(MAX_SIMULATION_CORES, available_cores))  # 保留资源给 bot 处理消息
 
     # 运行模拟并打印格式化结果
     start = perf_counter_ns()
