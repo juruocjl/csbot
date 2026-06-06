@@ -54,101 +54,51 @@
     },
     "B8": {
       "seed": 9,
-      "valve": 1582,
-      "hltv": 154,
+      "valve": 1678,
+      "hltv": 221,
       "alias": []
     },
     "BetBoom": {
       "seed": 10,
-      "valve": 1562,
-      "hltv": 110,
+      "valve": 1747,
+      "hltv": 186,
       "alias": ["BetBoom Team", "BB"]
     },
     "GamerLegion": {
       "seed": 11,
-      "valve": 1724,
-      "hltv": 265,
+      "valve": 1654,
+      "hltv": 300,
       "alias": ["GL"]
     },
     "M80": {
       "seed": 12,
-      "valve": 1385,
-      "hltv": 57,
+      "valve": 1498,
+      "hltv": 100,
       "alias": []
     },
     "MIBR": {
       "seed": 13,
-      "valve": 1535,
-      "hltv": 114,
+      "valve": 1586,
+      "hltv": 175,
       "alias": []
     },
     "TYLOO": {
       "seed": 14,
-      "valve": 1395,
-      "hltv": 52,
+      "valve": 1522,
+      "hltv": 113,
       "alias": []
     },
     "BIG": {
       "seed": 15,
-      "valve": 1416,
-      "hltv": 32,
+      "valve": 1440,
+      "hltv": 64,
       "alias": []
     },
     "FlyQuest": {
       "seed": 16,
-      "valve": 1112,
-      "hltv": 12,
+      "valve": 1462,
+      "hltv": 80,
       "alias": []
-    }
-  },
-  "rating_teams": {
-    "HEROIC": {
-      "seed": 3,
-      "valve": 1420,
-      "hltv": 65,
-      "alias": ["Heroic"]
-    },
-    "SINNERS": {
-      "seed": 8,
-      "valve": 1378,
-      "hltv": 58,
-      "alias": []
-    },
-    "NRG": {
-      "seed": 9,
-      "valve": 1247,
-      "hltv": 45,
-      "alias": []
-    },
-    "Sharks": {
-      "seed": 11,
-      "valve": 1354,
-      "hltv": 44,
-      "alias": ["Sharks Esports"]
-    },
-    "Gaimin Gladiators": {
-      "seed": 12,
-      "valve": 1233,
-      "hltv": 24,
-      "alias": ["GG"]
-    },
-    "Liquid": {
-      "seed": 13,
-      "valve": 1304,
-      "hltv": 75,
-      "alias": ["Team Liquid"]
-    },
-    "Lynn Vision": {
-      "seed": 14,
-      "valve": 1443,
-      "hltv": 24,
-      "alias": ["Lynn Vision Gaming", "LVG"]
-    },
-    "THUNDER dOWNUNDER": {
-      "seed": 15,
-      "valve": 1212,
-      "hltv": 14,
-      "alias": ["THUNDERdOWNUNDER", "TDU"]
     }
   }
 }

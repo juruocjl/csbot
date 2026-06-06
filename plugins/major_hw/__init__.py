@@ -326,34 +326,13 @@ async def _send_major_groups(bot: Bot, message: str):
         )
 
 
-async def _load_major_results(event_id: int) -> list[tuple[str, str, str, str]]:
-    return json.loads(await local_storage.get(f"hltvresult{event_id}", default="[]"))
-
-
-async def _load_major_rating_results() -> list[tuple[str, str, str, str]]:
-    event_ids = list(config.major_rating_event_id_list or [config.major_event_id])
-    if config.major_event_id not in event_ids:
-        event_ids.append(config.major_event_id)
-
-    results = []
-    for event_id in reversed(list(dict.fromkeys(event_ids))):
-        results.extend(await _load_major_results(event_id))
-    return results
-
-
 async def _run_major_simulation_once(bot: Bot):
     global results
 
     await _send_major_groups(bot, "开始重新模拟")
-    current_results = await _load_major_results(config.major_event_id)
-    rating_results = await _load_major_rating_results()
-    await asyncio.to_thread(
-        gen_win_matrix,
-        str(teamfile),
-        current_results,
-        newest_first=True,
-        rating_match=rating_results,
-    )
+    await asyncio.to_thread(gen_win_matrix, str(teamfile),
+                            json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
+                            newest_first=True)
     await asyncio.to_thread(simulate, teamfile)
     await _send_major_groups(bot, "新结果模拟完成")
 
