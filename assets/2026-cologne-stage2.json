@@ -1,0 +1,154 @@
+{
+  "systems": {
+    "valve": "lambda x: x",
+    "hltv": "lambda x: x"
+  },
+  "teams": {
+    "FUT": {
+      "seed": 1,
+      "valve": 1694,
+      "hltv": 205,
+      "alias": ["FUT Esports"]
+    },
+    "Spirit": {
+      "seed": 2,
+      "valve": 1990,
+      "hltv": 517,
+      "alias": ["Team Spirit"]
+    },
+    "Astralis": {
+      "seed": 3,
+      "valve": 1721,
+      "hltv": 226,
+      "alias": []
+    },
+    "G2": {
+      "seed": 4,
+      "valve": 1683,
+      "hltv": 205,
+      "alias": ["G2 Esports"]
+    },
+    "Legacy": {
+      "seed": 5,
+      "valve": 1856,
+      "hltv": 311,
+      "alias": []
+    },
+    "paiN": {
+      "seed": 6,
+      "valve": 1549,
+      "hltv": 119,
+      "alias": ["paiN Gaming", "pain"]
+    },
+    "Monte": {
+      "seed": 7,
+      "valve": 1517,
+      "hltv": 87,
+      "alias": []
+    },
+    "9z": {
+      "seed": 8,
+      "valve": 1633,
+      "hltv": 112,
+      "alias": ["9z Team"]
+    },
+    "B8": {
+      "seed": 9,
+      "valve": 1582,
+      "hltv": 154,
+      "alias": []
+    },
+    "BetBoom": {
+      "seed": 10,
+      "valve": 1562,
+      "hltv": 110,
+      "alias": ["BetBoom Team", "BB"]
+    },
+    "GamerLegion": {
+      "seed": 11,
+      "valve": 1724,
+      "hltv": 265,
+      "alias": ["GL"]
+    },
+    "M80": {
+      "seed": 12,
+      "valve": 1385,
+      "hltv": 57,
+      "alias": []
+    },
+    "MIBR": {
+      "seed": 13,
+      "valve": 1535,
+      "hltv": 114,
+      "alias": []
+    },
+    "TYLOO": {
+      "seed": 14,
+      "valve": 1395,
+      "hltv": 52,
+      "alias": []
+    },
+    "BIG": {
+      "seed": 15,
+      "valve": 1416,
+      "hltv": 32,
+      "alias": []
+    },
+    "FlyQuest": {
+      "seed": 16,
+      "valve": 1112,
+      "hltv": 12,
+      "alias": []
+    }
+  },
+  "rating_teams": {
+    "HEROIC": {
+      "seed": 3,
+      "valve": 1420,
+      "hltv": 65,
+      "alias": ["Heroic"]
+    },
+    "SINNERS": {
+      "seed": 8,
+      "valve": 1378,
+      "hltv": 58,
+      "alias": []
+    },
+    "NRG": {
+      "seed": 9,
+      "valve": 1247,
+      "hltv": 45,
+      "alias": []
+    },
+    "Sharks": {
+      "seed": 11,
+      "valve": 1354,
+      "hltv": 44,
+      "alias": ["Sharks Esports"]
+    },
+    "Gaimin Gladiators": {
+      "seed": 12,
+      "valve": 1233,
+      "hltv": 24,
+      "alias": ["GG"]
+    },
+    "Liquid": {
+      "seed": 13,
+      "valve": 1304,
+      "hltv": 75,
+      "alias": ["Team Liquid"]
+    },
+    "Lynn Vision": {
+      "seed": 14,
+      "valve": 1443,
+      "hltv": 24,
+      "alias": ["Lynn Vision Gaming", "LVG"]
+    },
+    "THUNDER dOWNUNDER": {
+      "seed": 15,
+      "valve": 1212,
+      "hltv": 14,
+      "alias": ["THUNDERdOWNUNDER", "TDU"]
+    }
+  }
+}
