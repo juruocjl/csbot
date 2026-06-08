@@ -282,6 +282,31 @@ async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | Non
         
         # 设置视口大小
         await page.setViewport({'width': width, 'height': int(height)})
+
+        # Trigger lazy images and wait for them before taking a full-page screenshot.
+        await page.evaluate("""async () => {
+            const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+            const imgs = Array.from(document.images);
+            imgs.forEach(img => {
+                img.loading = 'eager';
+                img.decoding = 'sync';
+            });
+            window.scrollTo(0, document.body.scrollHeight);
+            await wait(200);
+            window.scrollTo(0, 0);
+            await Promise.race([
+                Promise.all(imgs.map(img => {
+                    if (img.complete) {
+                        return Promise.resolve();
+                    }
+                    return new Promise(resolve => {
+                        img.addEventListener('load', resolve, { once: true });
+                        img.addEventListener('error', resolve, { once: true });
+                    });
+                })),
+                wait(5000),
+            ]);
+        }""")
         
         # 截图
         screenshot = await page.screenshot({'fullPage': True})
