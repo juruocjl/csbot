@@ -1386,6 +1386,7 @@ class MajorHomeworkRankResponse(BaseModel):
     stage: str = Field(..., description="Major stage")
     categories: list[str] = Field(..., description="Pick categories")
     teams: list[str] = Field(..., description="Teams in this stage")
+    resultPicks: dict[str, list[MajorHomeworkPick]] = Field(..., description="Current deterministic results")
     players: list[MajorHomeworkRankItem] = Field(..., description="Homework rankings")
 
 MAJOR_TEAM_LOGOS: dict[str, str] = {
@@ -1408,6 +1409,11 @@ MAJOR_TEAM_LOGOS: dict[str, str] = {
 }
 
 MAJOR_HOMEWORK_CATEGORIES = ["3-0", "3-1/3-2", "0-3"]
+MAJOR_HOMEWORK_CATEGORY_SLOTS = {
+    "3-0": 2,
+    "3-1/3-2": 6,
+    "0-3": 2,
+}
 
 def _major_team_logo(team: str) -> str | None:
     if logo := MAJOR_TEAM_LOGOS.get(team):
@@ -1477,6 +1483,44 @@ def _major_pick(team: str, category: str, records: dict[str, tuple[int, int]]) -
         recordStatus=_major_record_status(wins, losses),
     )
 
+def _major_unknown_pick(category: str) -> MajorHomeworkPick:
+    return MajorHomeworkPick(
+        team="?",
+        category=category,
+        status="pending",
+        logo=None,
+        wins=0,
+        losses=0,
+        recordStatus="pending",
+    )
+
+def _major_team_order(team: str) -> int:
+    try:
+        return major_teams.index(team)
+    except ValueError:
+        return len(major_teams)
+
+def _major_sort_picks(picks: list[MajorHomeworkPick]) -> list[MajorHomeworkPick]:
+    return sorted(picks, key=lambda pick: _major_team_order(pick.team))
+
+def _major_result_picks(records: dict[str, tuple[int, int]]) -> dict[str, list[MajorHomeworkPick]]:
+    grouped = {category: [] for category in MAJOR_HOMEWORK_CATEGORIES}
+    for team in major_teams:
+        wins, losses = records.get(team, (0, 0))
+        if wins >= 3 and losses == 0:
+            grouped["3-0"].append(_major_pick(team, "3-0", records))
+        elif wins >= 3 and losses > 0:
+            grouped["3-1/3-2"].append(_major_pick(team, "3-1/3-2", records))
+        elif losses >= 3 and wins == 0:
+            grouped["0-3"].append(_major_pick(team, "0-3", records))
+
+    for category, picks in grouped.items():
+        picks = _major_sort_picks(picks)[:MAJOR_HOMEWORK_CATEGORY_SLOTS[category]]
+        while len(picks) < MAJOR_HOMEWORK_CATEGORY_SLOTS[category]:
+            picks.append(_major_unknown_pick(category))
+        grouped[category] = picks
+    return grouped
+
 @app.post("/api/rank",
     response_model=RankResponse,
     summary="获取排名列表",
@@ -1536,6 +1580,7 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
 
     games = json.loads(await local_storage.get(f"hltvresult{major_hw_config.major_event_id}", default="[]"))
     records = _major_records(games)
+    result_picks = _major_result_picks(records)
     members = await db_major_hw.get_all_hw(major_stage_name)
     members = sorted(members, key=lambda item: _major_sort_value(item.winrate), reverse=True)
 
@@ -1543,9 +1588,9 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
     for member in members:
         teams = json.loads(member.teams)
         grouped = {
-            "3-0": [_major_pick(team, "3-0", records) for team in teams[:2]],
-            "3-1/3-2": [_major_pick(team, "3-1/3-2", records) for team in teams[2:8]],
-            "0-3": [_major_pick(team, "0-3", records) for team in teams[8:]],
+            "3-0": _major_sort_picks([_major_pick(team, "3-0", records) for team in teams[:2]]),
+            "3-1/3-2": _major_sort_picks([_major_pick(team, "3-1/3-2", records) for team in teams[2:8]]),
+            "0-3": _major_sort_picks([_major_pick(team, "0-3", records) for team in teams[8:]]),
         }
         players.append(MajorHomeworkRankItem(
             uid=member.uid,
@@ -1559,6 +1604,7 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
         stage=major_stage_name,
         categories=MAJOR_HOMEWORK_CATEGORIES,
         teams=major_teams,
+        resultPicks=result_picks,
         players=players,
     )
 
