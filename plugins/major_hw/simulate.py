@@ -14,6 +14,8 @@ from pathlib import Path
 import tqdm
 
 MAX_SIMULATION_CORES = 2
+MAX_EXACT_OUTCOMES = 200000
+SWISS_TOTAL_MATCHES = 33
 
 def _batch_task(args: tuple[Callable[[int], dict], int]) -> tuple[int, dict]:
     batch_func, iterations = args
@@ -211,14 +213,18 @@ class SwissSystem:
                 if self.records[team].wins == 3 or self.records[team].losses == 3:
                     self.remaining.remove(team)
 
-    def simulate_round(self, round_num: int) -> None:
-        """
-        模拟一轮比赛
-        根据当前战绩将队伍分组，并安排对阵
+    def apply_result(self, winner: Team, loser: Team) -> None:
+        is_bo3 = self.records[winner].wins == 2 or self.records[winner].losses == 2
+        self.records[winner].wins += 1
+        self.records[loser].losses += 1
+        self.records[winner].teams_faced.add(loser)
+        self.records[loser].teams_faced.add(winner)
+        if is_bo3:
+            for team in [winner, loser]:
+                if team in self.remaining and (self.records[team].wins == 3 or self.records[team].losses == 3):
+                    self.remaining.remove(team)
 
-        Args:
-            round_num: 当前轮次
-        """
+    def round_matches(self, round_num: int) -> list[tuple[Team, Team]]:
         # 按战绩分组
         groups: dict[int, list[Team]] = {}  # 用字典存储不同战绩的组
         for team in self.remaining:
@@ -352,18 +358,32 @@ class SwissSystem:
         if len(groups.get(0, [])) == len(self.records):
             # 按初始种子排名排序
             teams = sorted(groups[0], key=lambda t: t.seed)
-            for a, b in zip(teams, teams[len(teams) // 2 :]):
-                self.simulate_match(a, b)
-        else:
-            # 每组内按排名匹配
-            for diff in sorted(groups.keys(), reverse=True):
-                matches = try_match_teams(groups[diff], round_num)
-                for team_a, team_b in matches:
-                    self.simulate_match(team_a, team_b)
+            return list(zip(teams, teams[len(teams) // 2 :]))
+
+        matches: list[tuple[Team, Team]] = []
+        for diff in sorted(groups.keys(), reverse=True):
+            matches.extend(try_match_teams(groups[diff], round_num))
+        return matches
+
+    def simulate_round(self, round_num: int) -> None:
+        """
+        模拟一轮比赛
+        根据当前战绩将队伍分组，并安排对阵
+
+        Args:
+            round_num: 当前轮次
+        """
+        for team_a, team_b in self.round_matches(round_num):
+            self.simulate_match(team_a, team_b)
+
+    def next_round_num(self) -> int:
+        if not self.remaining:
+            return 6
+        return max(self.records[team].wins + self.records[team].losses for team in self.remaining) + 1
 
     def simulate_tournament(self) -> None:
         """模拟整个比赛阶段，直到所有队伍都完成比赛"""
-        round_num = 1
+        round_num = self.next_round_num()
         while self.remaining and round_num <= 5:  # 限制最多5轮
             self.simulate_round(round_num)
             round_num += 1
@@ -431,6 +451,12 @@ class Simulation:
             )
             for team_k, team_v in data["teams"].items()
         }
+        self.team_by_name = {team.name: team for team in self.teams}
+        self.alias2full = {}
+        for team_name, team_data in data["teams"].items():
+            self.alias2full[team_name] = team_name
+            for alias in team_data.get("alias", []):
+                self.alias2full[alias] = team_name
         self.win_matrix = load_win_matrix_from_csv(win_matrix_path)
 
         ss = SwissSystem(
@@ -446,7 +472,126 @@ class Simulation:
         ss.simulate_round(3)
         exit(0)"""
 
-    def batch(self, n: int, show_progress: bool = True) -> dict[Team, Result]:
+    def _team_from_name(self, name: str) -> Team:
+        full_name = self.alias2full.get(name, name)
+        return self.team_by_name[full_name]
+
+    def _initial_state(self, finished_matches: list[tuple[str, str, str, str]] | None = None, newest_first: bool = False) -> SwissSystem:
+        ss = SwissSystem(
+            win_matrix=self.win_matrix,
+            records={team: Record.new() for team in self.teams},
+            remaining=set(self.teams),
+        )
+        if not finished_matches:
+            return ss
+
+        matches = list(reversed(finished_matches)) if newest_first else list(finished_matches)
+        for winner_raw, loser_raw, _, _ in matches:
+            winner = self._team_from_name(winner_raw)
+            loser = self._team_from_name(loser_raw)
+            ss.apply_result(winner, loser)
+        return ss
+
+    @staticmethod
+    def _clone_state(ss: SwissSystem) -> SwissSystem:
+        return SwissSystem(
+            win_matrix=ss.win_matrix,
+            records={
+                team: Record(
+                    wins=record.wins,
+                    losses=record.losses,
+                    teams_faced=set(record.teams_faced),
+                )
+                for team, record in ss.records.items()
+            },
+            remaining=set(ss.remaining),
+        )
+
+    @staticmethod
+    def _next_round_num(ss: SwissSystem) -> int:
+        return ss.next_round_num()
+
+    @staticmethod
+    def _record_pickem_result(ss: SwissSystem, all_combinations: dict[str, int]) -> None:
+        three_zero_teams = []
+        advanced_teams = []
+        zero_three_teams = []
+
+        for team, record in ss.records.items():
+            if record.wins == 3:
+                if record.losses == 0:
+                    three_zero_teams.append(team.name)
+                else:
+                    advanced_teams.append(team.name)
+            elif record.losses == 3 and record.wins == 0:
+                zero_three_teams.append(team.name)
+
+        sim_result = {
+            '3-0': sorted(three_zero_teams),
+            '3-1/3-2': sorted(advanced_teams),
+            '0-3': sorted(zero_three_teams)
+        }
+        key = f"3-0: {', '.join(sim_result['3-0'])} | 3-1/3-2: {', '.join(sim_result['3-1/3-2'])} | 0-3: {', '.join(sim_result['0-3'])}"
+        all_combinations[key] = all_combinations.get(key, 0) + 1
+
+    def exact(self, finished_matches: list[tuple[str, str, str, str]] | None = None, newest_first: bool = False, max_outcomes: int = MAX_EXACT_OUTCOMES) -> tuple[dict[Team, Result], int] | None:
+        all_combinations: dict[str, int] = {}
+        leaf_count = 0
+        initial_state = self._initial_state(finished_matches, newest_first)
+
+        class TooManyExactOutcomes(Exception):
+            pass
+
+        def enumerate_round(ss: SwissSystem) -> None:
+            nonlocal leaf_count
+            round_num = self._next_round_num(ss)
+            if not ss.remaining or round_num > 5:
+                leaf_count += 1
+                if leaf_count > max_outcomes:
+                    raise TooManyExactOutcomes
+                self._record_pickem_result(ss, all_combinations)
+                return
+
+            matches = ss.round_matches(round_num)
+            if not matches:
+                leaf_count += 1
+                if leaf_count > max_outcomes:
+                    raise TooManyExactOutcomes
+                self._record_pickem_result(ss, all_combinations)
+                return
+
+            def enumerate_match(index: int, current: SwissSystem) -> None:
+                if index >= len(matches):
+                    enumerate_round(current)
+                    return
+                team_a, team_b = matches[index]
+                a_wins = self._clone_state(current)
+                a_wins.apply_result(team_a, team_b)
+                enumerate_match(index + 1, a_wins)
+
+                b_wins = self._clone_state(current)
+                b_wins.apply_result(team_b, team_a)
+                enumerate_match(index + 1, b_wins)
+
+            enumerate_match(0, ss)
+
+        try:
+            enumerate_round(initial_state)
+        except TooManyExactOutcomes:
+            return None
+
+        results = {team: Result.new() for team in self.teams}
+        if self.teams:
+            results[list(self.teams)[0]].pickem_results = all_combinations
+        return results, leaf_count
+
+    def batch(
+        self,
+        n: int,
+        show_progress: bool = True,
+        finished_matches: list[tuple[str, str, str, str]] | None = None,
+        newest_first: bool = False,
+    ) -> dict[Team, Result]:
         """
         运行n次模拟
         """
@@ -470,11 +615,7 @@ class Simulation:
 
         try:
             for _ in range(n):
-                ss = SwissSystem(
-                    win_matrix=self.win_matrix,
-                    records={team: Record.new() for team in self.teams},
-                    remaining=set(self.teams),
-                )
+                ss = self._initial_state(finished_matches, newest_first)
 
                 ss.simulate_tournament()
 
@@ -518,12 +659,18 @@ class Simulation:
 
         return results
 
-    def run(self, n: int, k: int) -> dict[Team, Result]:
+    def run(
+        self,
+        n: int,
+        k: int,
+        finished_matches: list[tuple[str, str, str, str]] | None = None,
+        newest_first: bool = False,
+    ) -> dict[Team, Result]:
         """
         使用k个进程运行n次模拟
         """
         if k <= 1:
-            return self.batch(n, show_progress=True)
+            return self.batch(n, show_progress=True, finished_matches=finished_matches, newest_first=newest_first)
 
         def _run_batch_chunk(iterations: int) -> tuple[int, dict[Team, Result]]:
             return iterations, self.batch(iterations, show_progress=False)
@@ -561,7 +708,12 @@ class Simulation:
             # 创建进程池
             with Pool(k) as pool:
                 # 使用imap处理任务，这样可以实时获取结果
-                batch_func = partial(self.batch, show_progress=False)
+                batch_func = partial(
+                    self.batch,
+                    show_progress=False,
+                    finished_matches=finished_matches,
+                    newest_first=newest_first,
+                )
                 task_args = [(batch_func, iterations) for iterations in tasks]
                 for iterations, result in pool.imap_unordered(_batch_task, task_args):
                     _merge_results(merged_results, result)
@@ -572,7 +724,7 @@ class Simulation:
         return merged_results
 
 
-def format_results(results: dict[Team, Result], n: int, run_time: float, output_path: Path | str) -> list[str]:
+def format_results(results: dict[Team, Result], n: int, run_time: float, output_path: Path | str, mode: str = "模拟") -> list[str]:
     """
     格式化模拟结果
 
@@ -584,7 +736,7 @@ def format_results(results: dict[Team, Result], n: int, run_time: float, output_
     Returns:
         list[str]: 格式化的结果字符串列表
     """
-    out = [f"已进行 {n:,} 次瑞士轮模拟"]
+    out = [f"已进行 {n:,} 次瑞士轮{mode}"]
 
     # 输出组合统计
     all_combinations = list(results.values())[0].pickem_results
@@ -597,7 +749,12 @@ def format_results(results: dict[Team, Result], n: int, run_time: float, output_
     return out
 
 
-def simulate(file_path: Path | str, output_path: Path | str = "result.txt"):
+def simulate(
+    file_path: Path | str,
+    output_path: Path | str = "result.txt",
+    finished_matches: list[tuple[str, str, str, str]] | None = None,
+    newest_first: bool = False,
+):
 
     n_iterations = 1000000  # 增加迭代次数以获得更准确的结果
     cpu_c = cpu_count()
@@ -606,6 +763,31 @@ def simulate(file_path: Path | str, output_path: Path | str = "result.txt"):
 
     # 运行模拟并打印格式化结果
     start = perf_counter_ns()
-    results = Simulation(file_path).run(n_iterations, n_cores)
+    simulation = Simulation(file_path)
+    finished_count = len(finished_matches or [])
+    remaining_matches = max(0, SWISS_TOTAL_MATCHES - finished_count)
+    exact_outcomes = 2 ** remaining_matches
+    exact_result = None
+    if exact_outcomes <= MAX_EXACT_OUTCOMES:
+        logger.info(f"剩余 {remaining_matches} 场，尝试精确遍历 {exact_outcomes:,} 个分支")
+        exact_result = simulation.exact(
+            finished_matches=finished_matches,
+            newest_first=newest_first,
+            max_outcomes=MAX_EXACT_OUTCOMES,
+        )
+
+    mode = "模拟"
+    if exact_result is not None:
+        results, n_iterations = exact_result
+        mode = "精确遍历"
+    else:
+        if exact_outcomes > MAX_EXACT_OUTCOMES:
+            logger.info(f"剩余 {remaining_matches} 场，分支 {exact_outcomes:,} 超过上限 {MAX_EXACT_OUTCOMES:,}，使用随机模拟")
+        results = simulation.run(
+            n_iterations,
+            n_cores,
+            finished_matches=finished_matches,
+            newest_first=newest_first,
+        )
     run_time = (perf_counter_ns() - start) / 1_000_000_000
-    logger.info("\n".join(format_results(results, n_iterations, run_time, output_path)))
+    logger.info("\n".join(format_results(results, n_iterations, run_time, output_path, mode=mode)))

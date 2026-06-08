@@ -363,10 +363,11 @@ async def _run_major_simulation_once(bot: Bot):
     global results
 
     await _send_major_groups(bot, "开始重新模拟")
+    finished_matches = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
     await asyncio.to_thread(gen_win_matrix, str(teamfile),
-                            json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")),
+                            finished_matches,
                             newest_first=True)
-    await asyncio.to_thread(simulate, teamfile)
+    await asyncio.to_thread(simulate, teamfile, "result.txt", finished_matches, True)
     await _send_major_groups(bot, "新结果模拟完成")
 
     results, total_simulations = parse_simulation_results(file_path)
