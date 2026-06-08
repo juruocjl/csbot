@@ -280,6 +280,10 @@ async def hwsee_function(message: MessageEvent):
 @hwrank.handle()
 async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     gid = message.get_session_id().split('_')[1]
+    screenshot = await _get_major_rank_screenshot(gid)
+    if screenshot:
+        await hwrank.finish(MessageSegment.image(screenshot))
+
     res = await db.get_all_hw(major_stage_name)
     res = sorted(res, key=lambda x: x.winrate, reverse=True)
     text = f"{major_stage_name} 作业排行"
@@ -326,6 +330,35 @@ async def _send_major_groups(bot: Bot, message: str):
         )
 
 
+async def _get_major_rank_screenshot(group_id: str | int) -> bytes | None:
+    try:
+        from ..cs_server import db as server_db
+        from ..cs_server import get_screenshot
+
+        token = await server_db.get_bot_token(str(group_id))
+        return await get_screenshot("/major-homework", token, width=760)
+    except Exception:
+        logger.exception("failed to create major homework ranking screenshot")
+        return None
+
+
+async def _send_major_rank_groups(bot: Bot, title: str):
+    for groupid in config.cs_group_list:
+        screenshot = await _get_major_rank_screenshot(groupid)
+        if screenshot:
+            await bot.send_msg(
+                message_type="group",
+                group_id=groupid,
+                message=Message([MessageSegment.text(title + "\n"), MessageSegment.image(screenshot)]),
+            )
+        else:
+            await bot.send_msg(
+                message_type="group",
+                group_id=groupid,
+                message=title + "\n生成作业排名截图失败，请稍后使用 /作业排名 重试",
+            )
+
+
 async def _run_major_simulation_once(bot: Bot):
     global results
 
@@ -342,7 +375,7 @@ async def _run_major_simulation_once(bot: Bot):
     res = await db.get_all_hw(major_stage_name)
     for member in res:
         await calc_val(member.uid)
-    await _send_major_groups(bot, f"成功计算 {len(res)} 份作业")
+    await _send_major_rank_groups(bot, f"成功计算 {len(res)} 份作业，当前作业排名")
 
 
 async def _run_queued_major_simulation(bot: Bot):
