@@ -11,6 +11,7 @@ import secrets
 import time
 import re
 import json
+import math
 import aiohttp
 import psutil
 import asyncio
@@ -25,7 +26,7 @@ require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
-from ..utils import async_session_factory
+from ..utils import async_session_factory, local_storage
 require("models")
 from ..models import AuthSession, UserInfo
 from ..models import MatchStatsPW, MatchStatsGP
@@ -38,6 +39,12 @@ from ..cs_db_upd import db as db_upd
 from ..cs_db_upd import TooFrequentError, LockingError
 require("cs_ai")
 from ..cs_ai import db as db_ai
+
+require("major_hw")
+from ..major_hw import config as major_hw_config
+from ..major_hw import db as db_major_hw
+from ..major_hw import get_name as get_major_team_name
+from ..major_hw import major_teams, major_stage_name
 
 require("allmsg")
 from ..allmsg import get_msg_status
@@ -1334,6 +1341,117 @@ class RankResponse(BaseModel):
     maxValue: float = Field(..., description="最大值")
     players: list[RankItem] = Field(..., description="排名玩家列表")
 
+class MajorHomeworkPick(BaseModel):
+    team: str = Field(..., description="Team name")
+    category: str = Field(..., description="Pick category")
+    status: str = Field(..., description="correct, wrong, or pending")
+    logo: str | None = Field(None, description="Team logo URL")
+    wins: int = Field(..., description="Current wins")
+    losses: int = Field(..., description="Current losses")
+    recordStatus: str = Field(..., description="Current team record state")
+
+class MajorHomeworkRankItem(BaseModel):
+    uid: str = Field(..., description="QQ user id")
+    avatar: str = Field(..., description="QQ avatar URL")
+    probability: float | None = Field(None, description="Probability of passing the homework")
+    expected: float | None = Field(None, description="Expected correct picks")
+    picks: dict[str, list[MajorHomeworkPick]] = Field(..., description="Grouped picks")
+
+class MajorHomeworkRankResponse(BaseModel):
+    stage: str = Field(..., description="Major stage")
+    categories: list[str] = Field(..., description="Pick categories")
+    teams: list[str] = Field(..., description="Teams in this stage")
+    players: list[MajorHomeworkRankItem] = Field(..., description="Homework rankings")
+
+MAJOR_TEAM_LOGOS: dict[str, str] = {
+    "FUT": "fut.png",
+    "Spirit": "spir.png",
+    "Astralis": "astr.png",
+    "G2": "g2.png",
+    "Legacy": "lega.png",
+    "paiN": "pain.png",
+    "Monte": "monte.png",
+    "9z": "9z.png",
+    "B8": "b8.png",
+    "BetBoom": "betb.png",
+    "GamerLegion": "gl.png",
+    "M80": "m80.png",
+    "MIBR": "mibr.png",
+    "TYLOO": "tylo.png",
+    "BIG": "big.png",
+    "FlyQuest": "fly.png",
+}
+
+MAJOR_HOMEWORK_CATEGORIES = ["3-0", "3-1/3-2", "0-3"]
+
+def _major_team_logo(team: str) -> str | None:
+    if logo := MAJOR_TEAM_LOGOS.get(team):
+        return f"/team-icons/2026-cologne/{logo}"
+    return None
+
+def _major_safe_float(value: float) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return value
+
+def _major_sort_value(value: float) -> float:
+    safe_value = _major_safe_float(value)
+    return safe_value if safe_value is not None else -1.0
+
+def _major_records(games: list) -> dict[str, tuple[int, int]]:
+    records: dict[str, list[int]] = {team: [0, 0] for team in major_teams}
+    for game in games:
+        if not isinstance(game, (list, tuple)) or len(game) < 2:
+            continue
+        winner, loser = game[0], game[1]
+        if not isinstance(winner, str) or not isinstance(loser, str):
+            continue
+        winner = get_major_team_name(winner)
+        loser = get_major_team_name(loser)
+        records.setdefault(winner, [0, 0])[0] += 1
+        records.setdefault(loser, [0, 0])[1] += 1
+    return {team: (record[0], record[1]) for team, record in records.items()}
+
+def _major_record_status(wins: int, losses: int) -> str:
+    if wins >= 3:
+        return "3-0" if losses == 0 else "advanced"
+    if losses >= 3:
+        return "0-3" if wins == 0 else "eliminated"
+    return "pending"
+
+def _major_pick_status(category: str, wins: int, losses: int) -> str:
+    if category == "3-0":
+        if wins >= 3 and losses == 0:
+            return "correct"
+        if losses > 0 or (wins >= 3 and losses > 0):
+            return "wrong"
+        return "pending"
+    if category == "3-1/3-2":
+        if wins >= 3 and losses > 0:
+            return "correct"
+        if losses >= 3 or (wins >= 3 and losses == 0):
+            return "wrong"
+        return "pending"
+    if category == "0-3":
+        if losses >= 3 and wins == 0:
+            return "correct"
+        if wins > 0 or (losses >= 3 and wins > 0):
+            return "wrong"
+        return "pending"
+    return "pending"
+
+def _major_pick(team: str, category: str, records: dict[str, tuple[int, int]]) -> MajorHomeworkPick:
+    wins, losses = records.get(team, (0, 0))
+    return MajorHomeworkPick(
+        team=team,
+        category=category,
+        status=_major_pick_status(category, wins, losses),
+        logo=_major_team_logo(team),
+        wins=wins,
+        losses=losses,
+        recordStatus=_major_record_status(wins, losses),
+    )
+
 @app.post("/api/rank",
     response_model=RankResponse,
     summary="获取排名列表",
@@ -1379,6 +1497,44 @@ async def get_rank_list(
                 count=val[1]
             ) for steamid, val in datas
         ]
+    )
+
+@app.post(
+    "/api/major/homework/rank",
+    response_model=MajorHomeworkRankResponse,
+    summary="Get Major homework ranking",
+    description="Return current Major homework picks with deterministic result states.",
+)
+async def get_major_homework_rank(_ = Depends(get_current_user)):
+    if major_hw_config.major_stage == "playoffs":
+        raise HTTPException(status_code=400, detail="Playoffs homework ranking is not supported on web yet")
+
+    games = json.loads(await local_storage.get(f"hltvresult{major_hw_config.major_event_id}", default="[]"))
+    records = _major_records(games)
+    members = await db_major_hw.get_all_hw(major_stage_name)
+    members = sorted(members, key=lambda item: _major_sort_value(item.winrate), reverse=True)
+
+    players: list[MajorHomeworkRankItem] = []
+    for member in members:
+        teams = json.loads(member.teams)
+        grouped = {
+            "3-0": [_major_pick(team, "3-0", records) for team in teams[:2]],
+            "3-1/3-2": [_major_pick(team, "3-1/3-2", records) for team in teams[2:8]],
+            "0-3": [_major_pick(team, "0-3", records) for team in teams[8:]],
+        }
+        players.append(MajorHomeworkRankItem(
+            uid=member.uid,
+            avatar=f"https://q1.qlogo.cn/g?b=qq&nk={member.uid}&s=100",
+            probability=_major_safe_float(member.winrate),
+            expected=_major_safe_float(member.expval),
+            picks=grouped,
+        ))
+
+    return MajorHomeworkRankResponse(
+        stage=major_stage_name,
+        categories=MAJOR_HOMEWORK_CATEGORIES,
+        teams=major_teams,
+        players=players,
     )
 
 class AIRecordIdsResponse(BaseModel):
