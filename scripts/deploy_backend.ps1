@@ -39,6 +39,21 @@ function Invoke-Remote {
     }
 }
 
+function Invoke-RemoteAllowFailure {
+    param([string]$Command)
+
+    $sshArgs = @(
+        "-F", $SshConfig,
+        "-i", $IdentityFile,
+        "-o", "UserKnownHostsFile=$KnownHosts",
+        "-o", "BatchMode=yes",
+        $Remote,
+        $Command
+    )
+    & ssh @sshArgs
+    return $LASTEXITCODE
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 Write-Host "== csbot backend deploy =="
@@ -81,21 +96,11 @@ if ($SkipRestart) {
 }
 
 Write-Host "== restart $ScreenName =="
-$restart = @"
-screen -S $ScreenName -X quit 2>/dev/null || true
-sleep 2
-pgrep -f '[b]ot.py' | xargs -r kill -9
-screen -wipe >/dev/null 2>&1 || true
-cd $RemoteDir
-screen -dmS $ScreenName bash -lc 'cd $RemoteDir && ENVIRONMENT=prod $UvPath run python bot.py > /tmp/csbot-start.log 2>&1'
-sleep 10
-echo SCREEN_LIST
-screen -ls
-echo PIDS
-pgrep -af '[b]ot.py' || true
-echo LOG_TAIL
-tail -80 /tmp/csbot-start.log
-"@
-Invoke-Remote $restart
+Invoke-RemoteAllowFailure "screen -S $ScreenName -X quit 2>/dev/null || true" | Out-Null
+Start-Sleep -Seconds 2
+Invoke-Remote "pgrep -f '[b]ot.py' | xargs -r kill -9; screen -wipe >/dev/null 2>&1 || true"
+Invoke-Remote "cd $RemoteDir && screen -dmS $ScreenName bash -lc 'cd $RemoteDir && ENVIRONMENT=prod $UvPath run python bot.py > /tmp/csbot-start.log 2>&1'"
+Start-Sleep -Seconds 10
+Invoke-Remote "echo SCREEN_LIST; screen -ls; echo PIDS; pgrep -af '[b]ot.py' || true; echo LOG_TAIL; tail -80 /tmp/csbot-start.log"
 
 Write-Host "== done =="
