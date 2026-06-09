@@ -87,7 +87,7 @@ class Result:
     three_zero: int
     advanced: int
     zero_three: int
-    pickem_results: dict[str, int]
+    pickem_results: dict[str, float]
 
     @staticmethod
     def new() -> Result:
@@ -170,20 +170,8 @@ class SwissSystem:
         模拟单场比赛
         """
         # print(team_a, "vs", team_b)
-        # 判断是否为BO3
-        is_bo3 = self.records[team_a].wins == 2 or self.records[team_a].losses == 2
-
-        # 计算单图胜率（来自预计算矩阵）
-        try:
-            p = self.win_matrix[team_a.name][team_b.name]
-        except KeyError:
-            try:
-                reverse_p = self.win_matrix[team_b.name][team_a.name]
-            except KeyError as exc:
-                raise KeyError(
-                    f"胜率矩阵中缺少 {team_a.name} vs {team_b.name} 的数据，请检查 win_matrix.csv。"
-                ) from exc
-            p = 1 - reverse_p
+        p = self.map_win_probability(team_a, team_b)
+        is_bo3 = self.is_bo3_match(team_a)
 
         # 生成随机数
         if is_bo3:
@@ -213,8 +201,29 @@ class SwissSystem:
                 if self.records[team].wins == 3 or self.records[team].losses == 3:
                     self.remaining.remove(team)
 
+    def is_bo3_match(self, team: Team) -> bool:
+        return self.records[team].wins == 2 or self.records[team].losses == 2
+
+    def map_win_probability(self, team_a: Team, team_b: Team) -> float:
+        try:
+            return self.win_matrix[team_a.name][team_b.name]
+        except KeyError:
+            try:
+                reverse_p = self.win_matrix[team_b.name][team_a.name]
+            except KeyError as exc:
+                raise KeyError(
+                    f"胜率矩阵中缺少 {team_a.name} vs {team_b.name} 的数据，请检查 win_matrix.csv。"
+                ) from exc
+            return 1 - reverse_p
+
+    def match_win_probability(self, team_a: Team, team_b: Team) -> float:
+        p = self.map_win_probability(team_a, team_b)
+        if self.is_bo3_match(team_a):
+            return p * p * (3 - 2 * p)
+        return p
+
     def apply_result(self, winner: Team, loser: Team) -> None:
-        is_bo3 = self.records[winner].wins == 2 or self.records[winner].losses == 2
+        is_bo3 = self.is_bo3_match(winner)
         self.records[winner].wins += 1
         self.records[loser].losses += 1
         self.records[winner].teams_faced.add(loser)
@@ -512,7 +521,7 @@ class Simulation:
         return ss.next_round_num()
 
     @staticmethod
-    def _record_pickem_result(ss: SwissSystem, all_combinations: dict[str, int]) -> None:
+    def _record_pickem_result(ss: SwissSystem, all_combinations: dict[str, float], weight: float = 1.0) -> None:
         three_zero_teams = []
         advanced_teams = []
         zero_three_teams = []
@@ -532,24 +541,24 @@ class Simulation:
             '0-3': sorted(zero_three_teams)
         }
         key = f"3-0: {', '.join(sim_result['3-0'])} | 3-1/3-2: {', '.join(sim_result['3-1/3-2'])} | 0-3: {', '.join(sim_result['0-3'])}"
-        all_combinations[key] = all_combinations.get(key, 0) + 1
+        all_combinations[key] = all_combinations.get(key, 0.0) + weight
 
     def exact(self, finished_matches: list[tuple[str, str, str, str]] | None = None, newest_first: bool = False, max_outcomes: int = MAX_EXACT_OUTCOMES) -> tuple[dict[Team, Result], int] | None:
-        all_combinations: dict[str, int] = {}
+        all_combinations: dict[str, float] = {}
         leaf_count = 0
         initial_state = self._initial_state(finished_matches, newest_first)
 
         class TooManyExactOutcomes(Exception):
             pass
 
-        def enumerate_round(ss: SwissSystem) -> None:
+        def enumerate_round(ss: SwissSystem, weight: float) -> None:
             nonlocal leaf_count
             round_num = self._next_round_num(ss)
             if not ss.remaining or round_num > 5:
                 leaf_count += 1
                 if leaf_count > max_outcomes:
                     raise TooManyExactOutcomes
-                self._record_pickem_result(ss, all_combinations)
+                self._record_pickem_result(ss, all_combinations, weight)
                 return
 
             matches = ss.round_matches(round_num)
@@ -557,26 +566,28 @@ class Simulation:
                 leaf_count += 1
                 if leaf_count > max_outcomes:
                     raise TooManyExactOutcomes
-                self._record_pickem_result(ss, all_combinations)
+                self._record_pickem_result(ss, all_combinations, weight)
                 return
 
-            def enumerate_match(index: int, current: SwissSystem) -> None:
+            def enumerate_match(index: int, current: SwissSystem, current_weight: float) -> None:
                 if index >= len(matches):
-                    enumerate_round(current)
+                    enumerate_round(current, current_weight)
                     return
                 team_a, team_b = matches[index]
+                team_a_win_p = current.match_win_probability(team_a, team_b)
+
                 a_wins = self._clone_state(current)
                 a_wins.apply_result(team_a, team_b)
-                enumerate_match(index + 1, a_wins)
+                enumerate_match(index + 1, a_wins, current_weight * team_a_win_p)
 
                 b_wins = self._clone_state(current)
                 b_wins.apply_result(team_b, team_a)
-                enumerate_match(index + 1, b_wins)
+                enumerate_match(index + 1, b_wins, current_weight * (1 - team_a_win_p))
 
-            enumerate_match(0, ss)
+            enumerate_match(0, ss, weight)
 
         try:
-            enumerate_round(initial_state)
+            enumerate_round(initial_state, 1.0)
         except TooManyExactOutcomes:
             return None
 
@@ -724,7 +735,14 @@ class Simulation:
         return merged_results
 
 
-def format_results(results: dict[Team, Result], n: int, run_time: float, output_path: Path | str, mode: str = "模拟") -> list[str]:
+def format_results(
+    results: dict[Team, Result],
+    n: int,
+    run_time: float,
+    output_path: Path | str,
+    mode: str = "模拟",
+    denominator: float | None = None,
+) -> list[str]:
     """
     格式化模拟结果
 
@@ -737,13 +755,20 @@ def format_results(results: dict[Team, Result], n: int, run_time: float, output_
         list[str]: 格式化的结果字符串列表
     """
     out = [f"已进行 {n:,} 次瑞士轮{mode}"]
+    total_weight = float(n) if denominator is None else denominator
+
+    def format_weight(value: float) -> str:
+        if abs(value - round(value)) < 1e-9:
+            return str(int(round(value)))
+        return f"{value:.12g}"
 
     # 输出组合统计
     all_combinations = list(results.values())[0].pickem_results
     sorted_combinations = sorted(all_combinations.items(), key=lambda x: x[1], reverse=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         for combination, count in sorted_combinations:
-            f.write(f"{combination}: {count}/{n} ({count/n*100:.4f}%)\n")
+            percentage = count / total_weight * 100 if total_weight else 0.0
+            f.write(f"{combination}: {format_weight(count)}/{format_weight(total_weight)} ({percentage:.4f}%)\n")
 
     out.append(f"\n运行耗时: {run_time:.4f} 秒")
     return out
@@ -779,7 +804,7 @@ def simulate(
     mode = "模拟"
     if exact_result is not None:
         results, n_iterations = exact_result
-        mode = "精确遍历"
+        mode = "加权精确遍历"
     else:
         if exact_outcomes > MAX_EXACT_OUTCOMES:
             logger.info(f"剩余 {remaining_matches} 场，分支 {exact_outcomes:,} 超过上限 {MAX_EXACT_OUTCOMES:,}，使用随机模拟")
@@ -790,4 +815,6 @@ def simulate(
             newest_first=newest_first,
         )
     run_time = (perf_counter_ns() - start) / 1_000_000_000
-    logger.info("\n".join(format_results(results, n_iterations, run_time, output_path, mode=mode)))
+    all_combinations = list(results.values())[0].pickem_results
+    denominator = sum(all_combinations.values()) if exact_result is not None else None
+    logger.info("\n".join(format_results(results, n_iterations, run_time, output_path, mode=mode, denominator=denominator)))
