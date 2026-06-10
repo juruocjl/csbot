@@ -136,10 +136,17 @@ class SwissSystem:
     records: dict[Team, Record]
     remaining: set[Team]
 
-    def __init__(self, win_matrix: dict[str, dict[str, float]], records: dict[Team, Record], remaining: set[Team]):
+    def __init__(
+        self,
+        win_matrix: dict[str, dict[str, float]],
+        records: dict[Team, Record],
+        remaining: set[Team],
+        force_bo3: bool = False,
+    ):
         self.win_matrix = win_matrix
         self.records = records
         self.remaining = remaining
+        self.force_bo3 = force_bo3
 
     def seeding(self, team: Team) -> tuple[int, int, int]:
         """
@@ -202,7 +209,7 @@ class SwissSystem:
                     self.remaining.remove(team)
 
     def is_bo3_match(self, team: Team) -> bool:
-        return self.records[team].wins == 2 or self.records[team].losses == 2
+        return self.force_bo3 or self.records[team].wins == 2 or self.records[team].losses == 2
 
     def map_win_probability(self, team_a: Team, team_b: Team) -> float:
         try:
@@ -467,11 +474,13 @@ class Simulation:
             for alias in team_data.get("alias", []):
                 self.alias2full[alias] = team_name
         self.win_matrix = load_win_matrix_from_csv(win_matrix_path)
+        self.force_bo3 = data.get("match_format") == "bo3" or bool(data.get("all_bo3", False))
 
         ss = SwissSystem(
             win_matrix=self.win_matrix,
             records={team: Record.new() for team in self.teams},
             remaining=set(self.teams),
+            force_bo3=self.force_bo3,
         )
         """print("Round1")
         ss.simulate_round(1)
@@ -490,6 +499,7 @@ class Simulation:
             win_matrix=self.win_matrix,
             records={team: Record.new() for team in self.teams},
             remaining=set(self.teams),
+            force_bo3=self.force_bo3,
         )
         if not finished_matches:
             return ss
@@ -514,6 +524,7 @@ class Simulation:
                 for team, record in ss.records.items()
             },
             remaining=set(ss.remaining),
+            force_bo3=ss.force_bo3,
         )
 
     @staticmethod

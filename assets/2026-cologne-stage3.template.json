@@ -1,0 +1,89 @@
+{
+  "systems": {
+    "valve": "lambda x: x",
+    "hltv": "lambda x: x"
+  },
+  "match_format": "bo3",
+  "teams": {
+    "Vitality": {
+      "seed": 1,
+      "valve": 2003,
+      "hltv": 991,
+      "alias": ["VIT", "Team Vitality"]
+    },
+    "The MongolZ": {
+      "seed": 2,
+      "valve": 1745,
+      "hltv": 260,
+      "alias": ["MongolZ", "Mongolz"]
+    },
+    "Falcons": {
+      "seed": 3,
+      "valve": 1955,
+      "hltv": 509,
+      "alias": ["Team Falcons", "FLC"]
+    },
+    "MOUZ": {
+      "seed": 4,
+      "valve": 1864,
+      "hltv": 301,
+      "alias": []
+    },
+    "FURIA": {
+      "seed": 5,
+      "valve": 1697,
+      "hltv": 393,
+      "alias": []
+    },
+    "Natus Vincere": {
+      "seed": 6,
+      "valve": 1939,
+      "hltv": 712,
+      "alias": ["NAVI", "NaVi", "navi"]
+    },
+    "Aurora": {
+      "seed": 7,
+      "valve": 1721,
+      "hltv": 354,
+      "alias": ["Aurora Gaming"]
+    },
+    "PARIVISION": {
+      "seed": 8,
+      "valve": 1659,
+      "hltv": 259,
+      "alias": ["PARI"]
+    },
+    "FUT": {
+      "seed": 9,
+      "alias": ["FUT Esports"]
+    },
+    "BetBoom": {
+      "seed": 10,
+      "alias": ["BetBoom Team", "BB"]
+    },
+    "G2": {
+      "seed": 11,
+      "alias": ["G2 Esports"]
+    },
+    "Legacy": {
+      "seed": 12,
+      "alias": []
+    },
+    "B8": {
+      "seed": 13,
+      "alias": []
+    },
+    "Spirit": {
+      "seed": 14,
+      "alias": ["Team Spirit"]
+    },
+    "Monte": {
+      "seed": 15,
+      "alias": []
+    },
+    "9z": {
+      "seed": 16,
+      "alias": ["9z Team"]
+    }
+  }
+}

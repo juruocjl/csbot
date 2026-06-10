@@ -1390,6 +1390,14 @@ class MajorHomeworkRankResponse(BaseModel):
     players: list[MajorHomeworkRankItem] = Field(..., description="Homework rankings")
 
 MAJOR_TEAM_LOGOS: dict[str, str] = {
+    "Vitality": "vita.png",
+    "The MongolZ": "mong.png",
+    "Falcons": "falc.png",
+    "MOUZ": "mouz.png",
+    "FURIA": "furi.png",
+    "Natus Vincere": "navi.png",
+    "Aurora": "auro.png",
+    "PARIVISION": "pv.png",
     "FUT": "fut.png",
     "Spirit": "spir.png",
     "Astralis": "astr.png",
