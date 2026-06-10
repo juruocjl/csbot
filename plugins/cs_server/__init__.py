@@ -28,7 +28,7 @@ from nonebot_plugin_apscheduler import scheduler
 require("utils")
 from ..utils import async_session_factory, local_storage
 require("models")
-from ..models import AuthSession, UserInfo
+from ..models import AuthSession, MajorHWSnapshot, UserInfo
 from ..models import MatchStatsPW, MatchStatsGP
 require("cs_db_val")
 from ..cs_db_val import db as db_val
@@ -1389,6 +1389,21 @@ class MajorHomeworkRankResponse(BaseModel):
     resultPicks: dict[str, list[MajorHomeworkPick]] = Field(..., description="Current deterministic results")
     players: list[MajorHomeworkRankItem] = Field(..., description="Homework rankings")
 
+class MajorHomeworkHistoryPoint(BaseModel):
+    matchCount: int = Field(..., description="Finished match count when this snapshot was generated")
+    createdAt: int = Field(..., description="Snapshot unix timestamp")
+    probability: float | None = Field(None, description="Probability of passing the homework")
+    expected: float | None = Field(None, description="Expected correct picks")
+
+class MajorHomeworkHistoryItem(BaseModel):
+    uid: str = Field(..., description="QQ user id")
+    avatar: str = Field(..., description="QQ avatar URL")
+    points: list[MajorHomeworkHistoryPoint] = Field(..., description="History points")
+
+class MajorHomeworkHistoryResponse(BaseModel):
+    stage: str = Field(..., description="Major stage")
+    players: list[MajorHomeworkHistoryItem] = Field(..., description="Homework history by player")
+
 MAJOR_TEAM_LOGOS: dict[str, str] = {
     "Vitality": "vita.png",
     "The MongolZ": "mong.png",
@@ -1614,6 +1629,43 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
         teams=major_teams,
         resultPicks=result_picks,
         players=players,
+    )
+
+@app.post(
+    "/api/major/homework/history",
+    response_model=MajorHomeworkHistoryResponse,
+    summary="Get Major homework probability history",
+    description="Return saved homework probabilities keyed by finished match count.",
+)
+async def get_major_homework_history(_ = Depends(get_current_user)):
+    async with async_session_factory() as session:
+        stmt = (
+            select(MajorHWSnapshot)
+            .where(MajorHWSnapshot.stage == major_stage_name)
+            .order_by(MajorHWSnapshot.uid, MajorHWSnapshot.match_count)
+        )
+        result = await session.execute(stmt)
+        snapshots = list(result.scalars().all())
+
+    grouped: dict[str, list[MajorHomeworkHistoryPoint]] = {}
+    for snapshot in snapshots:
+        grouped.setdefault(snapshot.uid, []).append(MajorHomeworkHistoryPoint(
+            matchCount=snapshot.match_count,
+            createdAt=snapshot.created_at,
+            probability=_major_safe_float(snapshot.winrate),
+            expected=_major_safe_float(snapshot.expval),
+        ))
+
+    return MajorHomeworkHistoryResponse(
+        stage=major_stage_name,
+        players=[
+            MajorHomeworkHistoryItem(
+                uid=uid,
+                avatar=f"https://q1.qlogo.cn/g?b=qq&nk={uid}&s=100",
+                points=points,
+            )
+            for uid, points in grouped.items()
+        ],
     )
 
 class AIRecordIdsResponse(BaseModel):

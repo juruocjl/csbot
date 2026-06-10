@@ -10,7 +10,7 @@ from nonebot import require
 from nonebot import logger
 
 require("models")
-from ..models import MajorHW
+from ..models import MajorHW, MajorHWSnapshot, MajorSimulationSnapshot
 
 require("utils")
 from ..utils import async_session_factory
@@ -21,6 +21,8 @@ from thefuzz import process
 from unicodedata import normalize
 import json
 import asyncio
+import gzip
+import time
 from pathlib import Path
 from sqlalchemy import update, select
 
@@ -83,6 +85,41 @@ class DataManager:
             stmt = select(MajorHW).where(MajorHW.stage == stage)
             result = await session.execute(stmt)
             return list(result.scalars().all())
+
+    async def save_simulation_snapshot(
+        self,
+        stage: str,
+        event_id: int,
+        match_count: int,
+        latest_match_id: str | None,
+        total_weight: float,
+        result_path: str | Path,
+        homework_rows: list[tuple[str, float, float]],
+    ) -> None:
+        created_at = int(time.time())
+        raw_result = Path(result_path).read_bytes()
+        compressed_result = gzip.compress(raw_result, compresslevel=6)
+        async with async_session_factory() as session:
+            async with session.begin():
+                await session.merge(MajorSimulationSnapshot(
+                    stage=stage,
+                    match_count=match_count,
+                    event_id=event_id,
+                    latest_match_id=latest_match_id,
+                    created_at=created_at,
+                    total_weight=total_weight,
+                    result_size=len(raw_result),
+                    result_gzip=compressed_result,
+                ))
+                for uid, winrate, expval in homework_rows:
+                    await session.merge(MajorHWSnapshot(
+                        stage=stage,
+                        match_count=match_count,
+                        uid=uid,
+                        created_at=created_at,
+                        winrate=winrate,
+                        expval=expval,
+                    ))
 
 db = DataManager()
 
@@ -374,8 +411,28 @@ async def _run_major_simulation_once(bot: Bot):
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 
     res = await db.get_all_hw(major_stage_name)
+    homework_rows: list[tuple[str, float, float]] = []
     for member in res:
-        await calc_val(member.uid)
+        calc_result = await calc_val(member.uid)
+        if calc_result is not None:
+            prob_ge5, expected_value = calc_result
+            homework_rows.append((member.uid, prob_ge5, expected_value))
+    latest_match_id = None
+    if finished_matches and len(finished_matches[0]) >= 4:
+        latest_match_id = str(finished_matches[0][3])
+    await db.save_simulation_snapshot(
+        stage=major_stage_name,
+        event_id=config.major_event_id,
+        match_count=len(finished_matches),
+        latest_match_id=latest_match_id,
+        total_weight=total_simulations,
+        result_path=file_path,
+        homework_rows=homework_rows,
+    )
+    logger.info(
+        f"已保存 {major_stage_name} 第 {len(finished_matches)} 场后的模拟快照，"
+        f"作业快照 {len(homework_rows)} 条"
+    )
     await _send_major_rank_groups(bot, f"成功计算 {len(res)} 份作业，当前作业排名")
 
 

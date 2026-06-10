@@ -397,6 +397,32 @@ class MajorHW(Base):
     winrate: Mapped[float] = mapped_column(Float)
     expval: Mapped[float] = mapped_column(Float)
 
+# Major模拟结果快照
+class MajorSimulationSnapshot(Base):
+    __tablename__ = "major_simulation_snapshots"
+
+    stage: Mapped[str] = mapped_column(String(50), primary_key=True)
+    match_count: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    event_id: Mapped[int] = mapped_column(Integer)
+    latest_match_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    total_weight: Mapped[float] = mapped_column(Float)
+    result_size: Mapped[int] = mapped_column(Integer)
+    result_gzip: Mapped[bytes] = mapped_column(LargeBinary)
+
+# Major作业概率快照
+class MajorHWSnapshot(Base):
+    __tablename__ = "major_hw_snapshots"
+
+    stage: Mapped[str] = mapped_column(String(50), primary_key=True)
+    match_count: Mapped[int] = mapped_column(Integer, primary_key=True)
+    uid: Mapped[str] = mapped_column(String(20), primary_key=True)
+
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    winrate: Mapped[float] = mapped_column(Float)
+    expval: Mapped[float] = mapped_column(Float)
+
 # 复读点数记录
 class FuduPoint(Base):
     __tablename__ = "fudu_points"
