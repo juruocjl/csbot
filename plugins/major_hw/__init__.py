@@ -149,11 +149,12 @@ _simulation_update_pending = False
 
 
 logger.info(f"{major_stage_name}, {major_teams}")
+results = {}
+total_simulations = 0.0
 try:
     results, total_simulations = parse_simulation_results(file_path)
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 except:
-    results = {}
     logger.error("未能加载模拟结果")
 
 
@@ -161,6 +162,21 @@ def homework_teams_hash(teams_json: str) -> str:
     teams = json.loads(teams_json)
     normalized = json.dumps(teams, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+async def save_current_homework_snapshot(uid: str, teams_json: str, winrate: float, expval: float) -> None:
+    finished_matches = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
+    latest_match_id = None
+    if finished_matches and len(finished_matches[0]) >= 4:
+        latest_match_id = str(finished_matches[0][3])
+    await db.save_simulation_snapshot(
+        stage=major_stage_name,
+        event_id=config.major_event_id,
+        match_count=len(finished_matches),
+        latest_match_id=latest_match_id,
+        total_weight=total_simulations,
+        homework_rows=[(uid, homework_teams_hash(teams_json), winrate, expval)],
+    )
 
 
 hwhelp = on_command("作业帮助", priority=10, block=True)
@@ -286,11 +302,13 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
     else:
         if len(teams) != 10 or len(set(teams)) != 10:
             await hwadd.finish("请输入十只不同队伍")
-        await db.add_hw(uid, major_stage_name, json.dumps(teams))
+        teams_json = json.dumps(teams)
+        await db.add_hw(uid, major_stage_name, teams_json)
         await hwadd.send("成功添加预测，开始计算概率")
         calc_result = await calc_val(uid)
         assert calc_result is not None
         prob_ge5, expected_value = calc_result
+        await save_current_homework_snapshot(uid, teams_json, prob_ge5, expected_value)
         await hwadd.finish(f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}")
 
 @hwsee.handle()
