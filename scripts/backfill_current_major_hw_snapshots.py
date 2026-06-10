@@ -40,14 +40,14 @@ async def main() -> None:
 
     created_at = int(time.time())
     async with async_session_factory() as session:
-        stmt = select(MajorHW).where(MajorHW.stage == stage)
-        result = await session.execute(stmt)
-        members = list(result.scalars().all())
-
-        existing_snapshot = await session.get(MajorSimulationSnapshot, (stage, match_count))
-        total_weight = existing_snapshot.total_weight if existing_snapshot else 0.0
-
         async with session.begin():
+            stmt = select(MajorHW).where(MajorHW.stage == stage)
+            result = await session.execute(stmt)
+            members = list(result.scalars().all())
+
+            existing_snapshot = await session.get(MajorSimulationSnapshot, (stage, match_count))
+            total_weight = existing_snapshot.total_weight if existing_snapshot else 0.0
+
             await session.merge(MajorSimulationSnapshot(
                 stage=stage,
                 match_count=match_count,
