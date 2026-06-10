@@ -46,7 +46,6 @@ async def main() -> None:
         match_count=len(finished_matches),
         latest_match_id=latest_match_id,
         total_weight=total_weight,
-        result_path=major_hw.file_path,
         homework_rows=homework_rows,
     )
     print(

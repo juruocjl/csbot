@@ -21,7 +21,6 @@ from thefuzz import process
 from unicodedata import normalize
 import json
 import asyncio
-import gzip
 import time
 from pathlib import Path
 from sqlalchemy import update, select
@@ -93,12 +92,9 @@ class DataManager:
         match_count: int,
         latest_match_id: str | None,
         total_weight: float,
-        result_path: str | Path,
         homework_rows: list[tuple[str, float, float]],
     ) -> None:
         created_at = int(time.time())
-        raw_result = Path(result_path).read_bytes()
-        compressed_result = gzip.compress(raw_result, compresslevel=6)
         async with async_session_factory() as session:
             async with session.begin():
                 await session.merge(MajorSimulationSnapshot(
@@ -108,8 +104,8 @@ class DataManager:
                     latest_match_id=latest_match_id,
                     created_at=created_at,
                     total_weight=total_weight,
-                    result_size=len(raw_result),
-                    result_gzip=compressed_result,
+                    result_size=0,
+                    result_gzip=b"",
                 ))
                 for uid, winrate, expval in homework_rows:
                     await session.merge(MajorHWSnapshot(
@@ -426,7 +422,6 @@ async def _run_major_simulation_once(bot: Bot):
         match_count=len(finished_matches),
         latest_match_id=latest_match_id,
         total_weight=total_simulations,
-        result_path=file_path,
         homework_rows=homework_rows,
     )
     logger.info(

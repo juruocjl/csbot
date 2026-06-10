@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache, partial
 from multiprocessing import Pool
 from os import cpu_count
+import os
 from time import perf_counter_ns
 from typing import TYPE_CHECKING, Callable
 import numpy as np
@@ -13,8 +14,9 @@ from nonebot import logger
 from pathlib import Path
 import tqdm
 
-MAX_SIMULATION_CORES = 2
-MAX_EXACT_OUTCOMES = 200000
+MAX_SIMULATION_CORES = int(os.getenv("MAJOR_SIMULATION_CORES", "1"))
+MAX_EXACT_OUTCOMES = int(os.getenv("MAJOR_EXACT_OUTCOMES", "200000"))
+DEFAULT_SIMULATION_ITERATIONS = int(os.getenv("MAJOR_SIMULATION_ITERATIONS", "200000"))
 SWISS_TOTAL_MATCHES = 33
 
 def _batch_task(args: tuple[Callable[[int], dict], int]) -> tuple[int, dict]:
@@ -792,7 +794,7 @@ def simulate(
     newest_first: bool = False,
 ):
 
-    n_iterations = 1000000  # 增加迭代次数以获得更准确的结果
+    n_iterations = DEFAULT_SIMULATION_ITERATIONS
     cpu_c = cpu_count()
     available_cores = cpu_c - 1 if cpu_c is not None else 1
     n_cores = max(1, min(MAX_SIMULATION_CORES, available_cores))  # 保留资源给 bot 处理消息
