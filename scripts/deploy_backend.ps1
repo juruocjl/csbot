@@ -2,6 +2,8 @@ param(
     [string]$Branch = "main",
     [string]$Remote = "ubuntu@cgserver",
     [string]$RemoteDir = "/home/ubuntu/csbot",
+    [string]$FrontendDir = "/home/ubuntu/csbot/dist",
+    [string]$FrontendBranch = "build-output",
     [string]$ScreenName = "csbot",
     [string]$UvPath = "/home/ubuntu/.local/bin/uv",
     [string]$SshConfig = "$HOME\.ssh\config",
@@ -9,6 +11,7 @@ param(
     [string]$KnownHosts = "$HOME\.ssh\known_hosts",
     [switch]$SkipPush,
     [switch]$SkipPull,
+    [switch]$SkipFrontend,
     [switch]$SkipRestart
 )
 
@@ -88,6 +91,11 @@ if (-not $SkipPush) {
 if (-not $SkipPull) {
     Write-Host "== remote git pull =="
     Invoke-Remote "cd $RemoteDir && git pull --ff-only origin $Branch && git rev-parse --short HEAD"
+}
+
+if (-not $SkipFrontend) {
+    Write-Host "== frontend build-output pull =="
+    Invoke-Remote "if [ -d $FrontendDir/.git ]; then cd $FrontendDir && git pull --ff-only origin $FrontendBranch && git rev-parse --short HEAD; else echo 'frontend git dir not found: $FrontendDir'; fi"
 }
 
 if ($SkipRestart) {
