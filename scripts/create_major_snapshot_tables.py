@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import nonebot
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 
@@ -23,6 +24,26 @@ async def main() -> None:
     async with engine.begin() as connection:
         await connection.run_sync(MajorSimulationSnapshot.__table__.create, checkfirst=True)
         await connection.run_sync(MajorHWSnapshot.__table__.create, checkfirst=True)
+        await connection.execute(text(
+            "ALTER TABLE major_hw_snapshots "
+            "ADD COLUMN IF NOT EXISTS teams_hash VARCHAR(64) NOT NULL DEFAULT ''"
+        ))
+        await connection.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'major_hw_snapshots'::regclass
+                      AND conname = 'major_hw_snapshots_pkey'
+                ) THEN
+                    ALTER TABLE major_hw_snapshots DROP CONSTRAINT major_hw_snapshots_pkey;
+                END IF;
+                ALTER TABLE major_hw_snapshots
+                    ADD CONSTRAINT major_hw_snapshots_pkey
+                    PRIMARY KEY (stage, match_count, uid, teams_hash);
+            END $$;
+        """))
     await engine.dispose()
     print("major snapshot tables are ready")
 

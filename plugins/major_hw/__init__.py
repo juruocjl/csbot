@@ -21,6 +21,7 @@ from thefuzz import process
 from unicodedata import normalize
 import json
 import asyncio
+import hashlib
 import time
 from pathlib import Path
 from sqlalchemy import update, select
@@ -92,7 +93,7 @@ class DataManager:
         match_count: int,
         latest_match_id: str | None,
         total_weight: float,
-        homework_rows: list[tuple[str, float, float]],
+        homework_rows: list[tuple[str, str, float, float]],
     ) -> None:
         created_at = int(time.time())
         async with async_session_factory() as session:
@@ -107,11 +108,12 @@ class DataManager:
                     result_size=0,
                     result_gzip=b"",
                 ))
-                for uid, winrate, expval in homework_rows:
+                for uid, teams_hash, winrate, expval in homework_rows:
                     await session.merge(MajorHWSnapshot(
                         stage=stage,
                         match_count=match_count,
                         uid=uid,
+                        teams_hash=teams_hash,
                         created_at=created_at,
                         winrate=winrate,
                         expval=expval,
@@ -153,6 +155,12 @@ try:
 except:
     results = {}
     logger.error("未能加载模拟结果")
+
+
+def homework_teams_hash(teams_json: str) -> str:
+    teams = json.loads(teams_json)
+    normalized = json.dumps(teams, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 hwhelp = on_command("作业帮助", priority=10, block=True)
@@ -407,12 +415,12 @@ async def _run_major_simulation_once(bot: Bot):
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 
     res = await db.get_all_hw(major_stage_name)
-    homework_rows: list[tuple[str, float, float]] = []
+    homework_rows: list[tuple[str, str, float, float]] = []
     for member in res:
         calc_result = await calc_val(member.uid)
         if calc_result is not None:
             prob_ge5, expected_value = calc_result
-            homework_rows.append((member.uid, prob_ge5, expected_value))
+            homework_rows.append((member.uid, homework_teams_hash(member.teams), prob_ge5, expected_value))
     latest_match_id = None
     if finished_matches and len(finished_matches[0]) >= 4:
         latest_match_id = str(finished_matches[0][3])

@@ -28,13 +28,13 @@ async def main() -> None:
     results, total_weight = parse_simulation_results(major_hw.file_path)
     major_hw.results = results
 
-    homework_rows: list[tuple[str, float, float]] = []
+    homework_rows: list[tuple[str, str, float, float]] = []
     members = await major_hw.db.get_all_hw(major_hw.major_stage_name)
     for member in members:
         calc_result = await major_hw.calc_val(member.uid)
         if calc_result is not None:
             winrate, expval = calc_result
-            homework_rows.append((member.uid, winrate, expval))
+            homework_rows.append((member.uid, major_hw.homework_teams_hash(member.teams), winrate, expval))
 
     latest_match_id = None
     if finished_matches and len(finished_matches[0]) >= 4:
