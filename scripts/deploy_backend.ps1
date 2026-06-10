@@ -93,12 +93,12 @@ if (-not $SkipPush) {
 
 if (-not $SkipPull) {
     Write-Host "== remote git pull =="
-    Invoke-Remote "cd $RemoteDir && git -c http.proxy= -c https.proxy= pull --ff-only origin $Branch && git rev-parse --short HEAD"
+    Invoke-Remote "cd $RemoteDir && (git pull --ff-only origin $Branch || { echo 'normal git pull failed; retrying without proxy'; git -c http.proxy= -c https.proxy= pull --ff-only origin $Branch; }) && git rev-parse --short HEAD"
 }
 
 if (-not $SkipFrontend) {
     Write-Host "== frontend build-output pull =="
-    Invoke-Remote "if [ -d $FrontendDir/.git ]; then cd $FrontendDir && git -c http.proxy= -c https.proxy= pull --ff-only origin $FrontendBranch && git rev-parse --short HEAD; else echo 'frontend git dir not found: $FrontendDir'; fi"
+    Invoke-Remote "if [ -d $FrontendDir/.git ]; then cd $FrontendDir && (git pull --ff-only origin $FrontendBranch || { echo 'normal frontend git pull failed; retrying without proxy'; git -c http.proxy= -c https.proxy= pull --ff-only origin $FrontendBranch; }) && git rev-parse --short HEAD; else echo 'frontend git dir not found: $FrontendDir'; fi"
 }
 
 if ($SkipRestart) {
