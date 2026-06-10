@@ -26,11 +26,22 @@ async def main() -> None:
         await connection.run_sync(MajorHWSnapshot.__table__.create, checkfirst=True)
         await connection.execute(text(
             "ALTER TABLE major_hw_snapshots "
-            "ADD COLUMN IF NOT EXISTS teams_hash VARCHAR(64) NOT NULL DEFAULT ''"
+            "ADD COLUMN IF NOT EXISTS homework_text TEXT NOT NULL DEFAULT ''"
         ))
         await connection.execute(text("""
             DO $$
             BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'major_hw_snapshots'
+                      AND column_name = 'teams_hash'
+                ) THEN
+                    UPDATE major_hw_snapshots
+                    SET homework_text = teams_hash
+                    WHERE homework_text = '';
+                END IF;
+
                 IF EXISTS (
                     SELECT 1
                     FROM pg_constraint
@@ -41,9 +52,12 @@ async def main() -> None:
                 END IF;
                 ALTER TABLE major_hw_snapshots
                     ADD CONSTRAINT major_hw_snapshots_pkey
-                    PRIMARY KEY (stage, match_count, uid, teams_hash);
+                    PRIMARY KEY (stage, match_count, uid, homework_text);
             END $$;
         """))
+        await connection.execute(text(
+            "ALTER TABLE major_hw_snapshots DROP COLUMN IF EXISTS teams_hash"
+        ))
     await engine.dispose()
     print("major snapshot tables are ready")
 

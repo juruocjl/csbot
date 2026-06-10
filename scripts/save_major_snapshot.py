@@ -34,7 +34,7 @@ async def main() -> None:
         calc_result = await major_hw.calc_val(member.uid)
         if calc_result is not None:
             winrate, expval = calc_result
-            homework_rows.append((member.uid, major_hw.homework_teams_hash(member.teams), winrate, expval))
+            homework_rows.append((member.uid, major_hw.homework_teams_text(member.teams), winrate, expval))
 
     latest_match_id = None
     if finished_matches and len(finished_matches[0]) >= 4:

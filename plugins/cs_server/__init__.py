@@ -1392,7 +1392,7 @@ class MajorHomeworkRankResponse(BaseModel):
 class MajorHomeworkHistoryPoint(BaseModel):
     matchCount: int = Field(..., description="Finished match count when this snapshot was generated")
     createdAt: int = Field(..., description="Snapshot unix timestamp")
-    homeworkHash: str = Field(..., description="Stable hash of the homework picks at this snapshot")
+    homeworkText: str = Field(..., description="Canonical homework picks at this snapshot")
     probability: float | None = Field(None, description="Probability of passing the homework")
     expected: float | None = Field(None, description="Expected correct picks")
 
@@ -1643,7 +1643,7 @@ async def get_major_homework_history(_ = Depends(get_current_user)):
         stmt = (
             select(MajorHWSnapshot)
             .where(MajorHWSnapshot.stage == major_stage_name)
-            .order_by(MajorHWSnapshot.uid, MajorHWSnapshot.teams_hash, MajorHWSnapshot.match_count)
+            .order_by(MajorHWSnapshot.uid, MajorHWSnapshot.homework_text, MajorHWSnapshot.match_count)
         )
         result = await session.execute(stmt)
         snapshots = list(result.scalars().all())
@@ -1653,7 +1653,7 @@ async def get_major_homework_history(_ = Depends(get_current_user)):
         grouped.setdefault(snapshot.uid, []).append(MajorHomeworkHistoryPoint(
             matchCount=snapshot.match_count,
             createdAt=snapshot.created_at,
-            homeworkHash=snapshot.teams_hash,
+            homeworkText=snapshot.homework_text,
             probability=_major_safe_float(snapshot.winrate),
             expected=_major_safe_float(snapshot.expval),
         ))

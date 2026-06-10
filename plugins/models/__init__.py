@@ -418,7 +418,7 @@ class MajorHWSnapshot(Base):
     stage: Mapped[str] = mapped_column(String(50), primary_key=True)
     match_count: Mapped[int] = mapped_column(Integer, primary_key=True)
     uid: Mapped[str] = mapped_column(String(20), primary_key=True)
-    teams_hash: Mapped[str] = mapped_column(String(64), primary_key=True, server_default="")
+    homework_text: Mapped[str] = mapped_column(Text, primary_key=True, server_default="")
 
     created_at: Mapped[int] = mapped_column(BigInteger)
     winrate: Mapped[float] = mapped_column(Float)

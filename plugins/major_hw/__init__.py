@@ -21,7 +21,6 @@ from thefuzz import process
 from unicodedata import normalize
 import json
 import asyncio
-import hashlib
 import time
 from pathlib import Path
 from sqlalchemy import update, select
@@ -108,12 +107,12 @@ class DataManager:
                     result_size=0,
                     result_gzip=b"",
                 ))
-                for uid, teams_hash, winrate, expval in homework_rows:
+                for uid, homework_text, winrate, expval in homework_rows:
                     await session.merge(MajorHWSnapshot(
                         stage=stage,
                         match_count=match_count,
                         uid=uid,
-                        teams_hash=teams_hash,
+                        homework_text=homework_text,
                         created_at=created_at,
                         winrate=winrate,
                         expval=expval,
@@ -158,10 +157,17 @@ except:
     logger.error("未能加载模拟结果")
 
 
-def homework_teams_hash(teams_json: str) -> str:
+def homework_teams_text(teams_json: str) -> str:
     teams = json.loads(teams_json)
-    normalized = json.dumps(teams, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    if len(teams) == 10:
+        normalized = {
+            "3-0": sorted(teams[:2]),
+            "3-1/3-2": sorted(teams[2:8]),
+            "0-3": sorted(teams[8:]),
+        }
+    else:
+        normalized = teams
+    return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
 async def save_current_homework_snapshot(uid: str, teams_json: str, winrate: float, expval: float) -> None:
@@ -175,7 +181,7 @@ async def save_current_homework_snapshot(uid: str, teams_json: str, winrate: flo
         match_count=len(finished_matches),
         latest_match_id=latest_match_id,
         total_weight=total_simulations,
-        homework_rows=[(uid, homework_teams_hash(teams_json), winrate, expval)],
+        homework_rows=[(uid, homework_teams_text(teams_json), winrate, expval)],
     )
 
 
@@ -438,7 +444,7 @@ async def _run_major_simulation_once(bot: Bot):
         calc_result = await calc_val(member.uid)
         if calc_result is not None:
             prob_ge5, expected_value = calc_result
-            homework_rows.append((member.uid, homework_teams_hash(member.teams), prob_ge5, expected_value))
+            homework_rows.append((member.uid, homework_teams_text(member.teams), prob_ge5, expected_value))
     latest_match_id = None
     if finished_matches and len(finished_matches[0]) >= 4:
         latest_match_id = str(finished_matches[0][3])

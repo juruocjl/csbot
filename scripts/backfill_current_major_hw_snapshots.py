@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from pathlib import Path
 import sys
 import time
 
 import nonebot
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -22,10 +21,17 @@ from plugins.models import MajorHW, MajorHWSnapshot, MajorSimulationSnapshot
 from plugins.utils import async_session_factory, local_storage
 
 
-def homework_teams_hash(teams_json: str) -> str:
+def homework_teams_text(teams_json: str) -> str:
     teams = json.loads(teams_json)
-    normalized = json.dumps(teams, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    if len(teams) == 10:
+        normalized = {
+            "3-0": sorted(teams[:2]),
+            "3-1/3-2": sorted(teams[2:8]),
+            "0-3": sorted(teams[8:]),
+        }
+    else:
+        normalized = teams
+    return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
 async def main() -> None:
@@ -48,6 +54,11 @@ async def main() -> None:
             existing_snapshot = await session.get(MajorSimulationSnapshot, (stage, match_count))
             total_weight = existing_snapshot.total_weight if existing_snapshot else 0.0
 
+            await session.execute(
+                delete(MajorHWSnapshot)
+                .where(MajorHWSnapshot.stage == stage)
+                .where(MajorHWSnapshot.match_count == match_count)
+            )
             await session.merge(MajorSimulationSnapshot(
                 stage=stage,
                 match_count=match_count,
@@ -63,7 +74,7 @@ async def main() -> None:
                     stage=stage,
                     match_count=match_count,
                     uid=member.uid,
-                    teams_hash=homework_teams_hash(member.teams),
+                    homework_text=homework_teams_text(member.teams),
                     created_at=created_at,
                     winrate=member.winrate,
                     expval=member.expval,
