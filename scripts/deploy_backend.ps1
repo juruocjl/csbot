@@ -5,6 +5,8 @@ param(
     [string]$FrontendDir = "/home/ubuntu/csbot/dist",
     [string]$FrontendBranch = "build-output",
     [string]$ScreenName = "csbot",
+    [string]$SteamMonitorDir = "/home/ubuntu/steam_monitor_js",
+    [string]$SteamMonitorScreenName = "steam_monitor",
     [string]$UvPath = "/home/ubuntu/.local/bin/uv",
     [string]$SshConfig = "$HOME\.ssh\config",
     [string]$IdentityFile = "$HOME\.ssh\id_rsa",
@@ -12,6 +14,7 @@ param(
     [switch]$SkipPush,
     [switch]$SkipPull,
     [switch]$SkipFrontend,
+    [switch]$SkipSteamMonitor,
     [switch]$SkipRestart
 )
 
@@ -90,12 +93,12 @@ if (-not $SkipPush) {
 
 if (-not $SkipPull) {
     Write-Host "== remote git pull =="
-    Invoke-Remote "cd $RemoteDir && git pull --ff-only origin $Branch && git rev-parse --short HEAD"
+    Invoke-Remote "cd $RemoteDir && git -c http.proxy= -c https.proxy= pull --ff-only origin $Branch && git rev-parse --short HEAD"
 }
 
 if (-not $SkipFrontend) {
     Write-Host "== frontend build-output pull =="
-    Invoke-Remote "if [ -d $FrontendDir/.git ]; then cd $FrontendDir && git pull --ff-only origin $FrontendBranch && git rev-parse --short HEAD; else echo 'frontend git dir not found: $FrontendDir'; fi"
+    Invoke-Remote "if [ -d $FrontendDir/.git ]; then cd $FrontendDir && git -c http.proxy= -c https.proxy= pull --ff-only origin $FrontendBranch && git rev-parse --short HEAD; else echo 'frontend git dir not found: $FrontendDir'; fi"
 }
 
 if ($SkipRestart) {
@@ -110,5 +113,13 @@ Invoke-Remote "pgrep -f '[b]ot.py' | xargs -r kill -9; screen -wipe >/dev/null 2
 Invoke-Remote "cd $RemoteDir && screen -dmS $ScreenName bash -lc 'cd $RemoteDir && ENVIRONMENT=prod $UvPath run python bot.py > /tmp/csbot-start.log 2>&1'"
 Start-Sleep -Seconds 10
 Invoke-Remote "echo SCREEN_LIST; screen -ls; echo PIDS; pgrep -af '[b]ot.py' || true; echo LOG_TAIL; tail -80 /tmp/csbot-start.log"
+
+if (-not $SkipSteamMonitor) {
+    Write-Host "== restart $SteamMonitorScreenName =="
+    Invoke-RemoteAllowFailure "screen -S $SteamMonitorScreenName -X quit 2>/dev/null || true" | Out-Null
+    Invoke-Remote "if [ -d $SteamMonitorDir ]; then cd $SteamMonitorDir && screen -dmS $SteamMonitorScreenName bash -lc 'source /home/ubuntu/.nvm/nvm.sh && cd $SteamMonitorDir && bash run.sh >> steam_monitor_js.log 2>&1'; else echo 'steam monitor dir not found: $SteamMonitorDir'; fi"
+    Start-Sleep -Seconds 5
+    Invoke-Remote "echo SCREEN_LIST; screen -ls; echo STEAM_MONITOR; pgrep -af 'steam_monitor|node src/index|npm start' || true; echo STEAM_MONITOR_LOG; tail -40 $SteamMonitorDir/steam_monitor_js.log 2>/dev/null || true"
+}
 
 Write-Host "== done =="
