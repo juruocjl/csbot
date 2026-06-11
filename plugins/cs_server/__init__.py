@@ -1405,6 +1405,23 @@ class MajorHomeworkHistoryResponse(BaseModel):
     stage: str = Field(..., description="Major stage")
     players: list[MajorHomeworkHistoryItem] = Field(..., description="Homework history by player")
 
+class MajorHomeworkPersonalRow(BaseModel):
+    matchCount: int = Field(..., description="Finished match count when this snapshot was generated")
+    createdAt: int = Field(..., description="Snapshot unix timestamp")
+    event: str = Field(..., description="Event that produced this row")
+    homeworkText: str = Field(..., description="Canonical homework picks at this snapshot")
+    probability: float | None = Field(None, description="Probability of passing the homework")
+    probabilityChange: float | None = Field(None, description="Probability delta from previous row")
+    expected: float | None = Field(None, description="Expected correct picks")
+    picks: dict[str, list[MajorHomeworkPick]] = Field(..., description="Grouped picks")
+
+class MajorHomeworkPersonalResponse(BaseModel):
+    stage: str = Field(..., description="Major stage")
+    uid: str = Field(..., description="QQ user id")
+    avatar: str = Field(..., description="QQ avatar URL")
+    categories: list[str] = Field(..., description="Pick categories")
+    rows: list[MajorHomeworkPersonalRow] = Field(..., description="Personal homework history")
+
 MAJOR_TEAM_LOGOS: dict[str, str] = {
     "Vitality": "vita.png",
     "The MongolZ": "mong.png",
@@ -1545,6 +1562,55 @@ def _major_result_picks(records: dict[str, tuple[int, int]]) -> dict[str, list[M
         grouped[category] = picks
     return grouped
 
+def _major_records_at_count(games: list, match_count: int) -> dict[str, tuple[int, int]]:
+    chronological_games = list(reversed(games))
+    return _major_records(chronological_games[:max(0, match_count)])
+
+def _major_match_event(games: list, match_count: int) -> str | None:
+    if match_count <= 0:
+        return None
+    chronological_games = list(reversed(games))
+    index = match_count - 1
+    if index >= len(chronological_games):
+        return f"第 {match_count} 场赛果更新"
+    game = chronological_games[index]
+    if not isinstance(game, (list, tuple)) or len(game) < 3:
+        return f"第 {match_count} 场赛果更新"
+    winner = get_major_team_name(game[0])
+    loser = get_major_team_name(game[1])
+    score = game[2]
+    return f"{winner} 胜 {loser} {score}"
+
+def _major_homework_text_to_grouped_picks(homework_text: str, records: dict[str, tuple[int, int]]) -> dict[str, list[MajorHomeworkPick]]:
+    grouped: dict[str, list[str]]
+    try:
+        raw = json.loads(homework_text)
+        if isinstance(raw, dict):
+            grouped = {
+                "3-0": list(raw.get("3-0", [])),
+                "3-1/3-2": list(raw.get("3-1/3-2", [])),
+                "0-3": list(raw.get("0-3", [])),
+            }
+        elif isinstance(raw, list):
+            grouped = {
+                "3-0": raw[:2],
+                "3-1/3-2": raw[2:8],
+                "0-3": raw[8:],
+            }
+        else:
+            grouped = {category: [] for category in MAJOR_HOMEWORK_CATEGORIES}
+    except Exception:
+        grouped = {category: [] for category in MAJOR_HOMEWORK_CATEGORIES}
+
+    return {
+        category: _major_sort_picks([
+            _major_pick(get_major_team_name(team), category, records)
+            for team in grouped.get(category, [])
+            if isinstance(team, str)
+        ])
+        for category in MAJOR_HOMEWORK_CATEGORIES
+    }
+
 @app.post("/api/rank",
     response_model=RankResponse,
     summary="获取排名列表",
@@ -1668,6 +1734,69 @@ async def get_major_homework_history(_ = Depends(get_current_user)):
             )
             for uid, points in grouped.items()
         ],
+    )
+
+@app.post(
+    "/api/major/homework/personal",
+    response_model=MajorHomeworkPersonalResponse,
+    summary="Get personal Major homework history",
+    description="Return current user's homework snapshots with event labels and probability changes.",
+)
+async def get_major_homework_personal(info: AuthSession = Depends(get_current_user)):
+    if not info.user_id:
+        raise HTTPException(status_code=401, detail="未绑定 QQ")
+    if major_hw_config.major_stage == "playoffs":
+        raise HTTPException(status_code=400, detail="Playoffs homework history is not supported on web yet")
+
+    games = json.loads(await local_storage.get(f"hltvresult{major_hw_config.major_event_id}", default="[]"))
+    async with async_session_factory() as session:
+        stmt = (
+            select(MajorHWSnapshot)
+            .where(MajorHWSnapshot.stage == major_stage_name)
+            .where(MajorHWSnapshot.uid == info.user_id)
+            .order_by(MajorHWSnapshot.match_count, MajorHWSnapshot.created_at, MajorHWSnapshot.homework_text)
+        )
+        result = await session.execute(stmt)
+        snapshots = list(result.scalars().all())
+
+    rows: list[MajorHomeworkPersonalRow] = []
+    previous_probability: float | None = None
+    previous_match_count: int | None = None
+    previous_homework_text: str | None = None
+    for snapshot in snapshots:
+        probability = _major_safe_float(snapshot.winrate)
+        probability_change = None
+        if probability is not None and previous_probability is not None:
+            probability_change = probability - previous_probability
+
+        if previous_match_count is None:
+            event = "初始作业"
+        elif snapshot.match_count == previous_match_count and snapshot.homework_text != previous_homework_text:
+            event = "修改作业"
+        else:
+            event = _major_match_event(games, snapshot.match_count) or "初始作业"
+
+        records = _major_records_at_count(games, snapshot.match_count)
+        rows.append(MajorHomeworkPersonalRow(
+            matchCount=snapshot.match_count,
+            createdAt=snapshot.created_at,
+            event=event,
+            homeworkText=snapshot.homework_text,
+            probability=probability,
+            probabilityChange=probability_change,
+            expected=_major_safe_float(snapshot.expval),
+            picks=_major_homework_text_to_grouped_picks(snapshot.homework_text, records),
+        ))
+        previous_probability = probability
+        previous_match_count = snapshot.match_count
+        previous_homework_text = snapshot.homework_text
+
+    return MajorHomeworkPersonalResponse(
+        stage=major_stage_name,
+        uid=info.user_id,
+        avatar=f"https://q1.qlogo.cn/g?b=qq&nk={info.user_id}&s=100",
+        categories=MAJOR_HOMEWORK_CATEGORIES,
+        rows=rows,
     )
 
 class AIRecordIdsResponse(BaseModel):

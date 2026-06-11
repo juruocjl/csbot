@@ -39,24 +39,28 @@ async def update_events() -> None:
     for event in config.hltv_event_id_list:
         logger.info(f"start get {event}")
         title, newres = await get_matches(event)
-        res: list[tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{event}", default="[]"))
-        res.reverse()
-        newres.reverse()
-        ids = set([match[3] for match in res])
-        if len(newres) != len(res):
+        stored_results: list[tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{event}", default="[]"))
+        chronological_results = list(reversed(stored_results))
+        chronological_new_results = list(reversed(newres))
+        ids = set([match[3] for match in chronological_results])
+        new_matches: list[tuple[str, str, str, str]] = []
+        for match in chronological_new_results:
+            if match[3] not in ids:
+                new_matches.append(match)
+                ids.add(match[3])
+        if new_matches:
             text = title + " 结果有更新"
-            for match in newres:
-                if match[3] not in ids:
-                    text += f"\n{match[0]} vs {match[1]} {match[2]}"
-                    res.append(match)
-                    ids.add(match[3])
+            for match in new_matches:
+                text += f"\n{match[0]} vs {match[1]} {match[2]}"
             for groupid in config.cs_group_list:
                 await bot.send_msg(
                     message_type="group",
                     group_id=groupid,
                     message=text
                 )
-            res.reverse()
-            await local_storage.set(f"hltvresult{event}", json.dumps(res))
-            await event_update(event)
+            for match in new_matches:
+                chronological_results.append(match)
+                snapshot = list(reversed(chronological_results))
+                await local_storage.set(f"hltvresult{event}", json.dumps(snapshot))
+                await event_update(event, snapshot)
         await asyncio.sleep(2)

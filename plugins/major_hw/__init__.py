@@ -144,7 +144,7 @@ def get_name(wuzzyname):
 
 file_path = "result.txt"
 _simulation_update_task: asyncio.Task | None = None
-_simulation_update_pending = False
+_simulation_update_queue: list[list[tuple[str, str, str, str]]] = []
 
 
 logger.info(f"{major_stage_name}, {major_teams}")
@@ -377,10 +377,9 @@ async def hwupd_function():
 
 @simupd.handle()
 async def calc_simulate():
-    global _simulation_update_pending
     bot = get_bot()
     if _simulation_update_task is not None and not _simulation_update_task.done():
-        _simulation_update_pending = True
+        await _enqueue_major_simulation(bot)
         await simupd.finish("已有模拟正在进行，已加入队列")
     await _enqueue_major_simulation(bot)
     await simupd.finish("已开始后台模拟")
@@ -424,11 +423,12 @@ async def _send_major_rank_groups(bot: Bot, title: str):
             )
 
 
-async def _run_major_simulation_once(bot: Bot):
+async def _run_major_simulation_once(bot: Bot, finished_matches: list[tuple[str, str, str, str]] | None = None):
     global results
 
     await _send_major_groups(bot, "开始重新模拟")
-    finished_matches = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
+    if finished_matches is None:
+        finished_matches = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
     await asyncio.to_thread(gen_win_matrix, str(teamfile),
                             finished_matches,
                             newest_first=True)
@@ -464,35 +464,37 @@ async def _run_major_simulation_once(bot: Bot):
 
 
 async def _run_queued_major_simulation(bot: Bot):
-    global _simulation_update_pending, _simulation_update_task
+    global _simulation_update_task
 
     try:
-        while True:
-            _simulation_update_pending = False
+        while _simulation_update_queue:
+            finished_matches = _simulation_update_queue.pop(0)
             try:
-                await _run_major_simulation_once(bot)
+                await _run_major_simulation_once(bot, finished_matches)
             except Exception:
                 logger.exception("major simulation failed")
                 await _send_major_groups(bot, "新结果模拟失败，请查看日志")
                 return
-            if not _simulation_update_pending:
-                return
-            await _send_major_groups(bot, "检测到新赛果，继续用最新结果重新模拟")
+            if _simulation_update_queue:
+                await _send_major_groups(bot, "检测到后续赛果，继续按下一场结果重新模拟")
     finally:
         _simulation_update_task = None
 
 
-async def _enqueue_major_simulation(bot: Bot):
-    global _simulation_update_pending, _simulation_update_task
+async def _enqueue_major_simulation(bot: Bot, finished_matches: list[tuple[str, str, str, str]] | None = None):
+    global _simulation_update_task
+
+    if finished_matches is None:
+        finished_matches = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
+    _simulation_update_queue.append(list(finished_matches))
 
     if _simulation_update_task is not None and not _simulation_update_task.done():
-        _simulation_update_pending = True
-        await _send_major_groups(bot, "模拟正在进行，已记录新赛果，完成后会用最新结果再算一次")
+        await _send_major_groups(bot, "模拟正在进行，已记录新赛果快照，完成后会按顺序再算一次")
         return
 
     _simulation_update_task = asyncio.create_task(_run_queued_major_simulation(bot))
 
-async def event_update(event_id):
+async def event_update(event_id, finished_matches: list[tuple[str, str, str, str]] | None = None):
 
     if event_id == config.major_event_id:
         logger.info(f"{event_id} updated")
@@ -510,7 +512,7 @@ async def event_update(event_id):
                     message=f"成功计算 {len(res)} 份作业"
                 )
         else:
-            await _enqueue_major_simulation(bot)
+            await _enqueue_major_simulation(bot, finished_matches)
 
 major_all_stages = [f"{config.major_name}-{x}" for x in ["stage1", "stage2", "stage3", "playoffs-quad", "playoffs-semi", "playoffs-final"]]
 
