@@ -424,7 +424,7 @@ async def _send_major_rank_groups(bot: Bot, title: str):
 
 
 async def _run_major_simulation_once(bot: Bot, finished_matches: list[tuple[str, str, str, str]] | None = None):
-    global results
+    global results, total_simulations
 
     await _send_major_groups(bot, "开始重新模拟")
     if finished_matches is None:

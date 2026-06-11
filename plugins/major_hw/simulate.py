@@ -245,7 +245,12 @@ class SwissSystem:
     def round_matches(self, round_num: int) -> list[tuple[Team, Team]]:
         # 按战绩分组
         groups: dict[int, list[Team]] = {}  # 用字典存储不同战绩的组
-        for team in self.remaining:
+        eligible_teams = [
+            team
+            for team in self.remaining
+            if self.records[team].wins + self.records[team].losses == round_num - 1
+        ]
+        for team in eligible_teams:
             diff = self.records[team].diff
             if diff not in groups:
                 groups[diff] = []
@@ -373,7 +378,7 @@ class SwissSystem:
             return matches
 
         # 第一轮特殊处理（使用初始种子排名）
-        if len(groups.get(0, [])) == len(self.records):
+        if round_num == 1 and len(groups.get(0, [])) == len(eligible_teams):
             # 按初始种子排名排序
             teams = sorted(groups[0], key=lambda t: t.seed)
             return list(zip(teams, teams[len(teams) // 2 :]))
@@ -397,7 +402,7 @@ class SwissSystem:
     def next_round_num(self) -> int:
         if not self.remaining:
             return 6
-        return max(self.records[team].wins + self.records[team].losses for team in self.remaining) + 1
+        return min(self.records[team].wins + self.records[team].losses for team in self.remaining) + 1
 
     def simulate_tournament(self) -> None:
         """模拟整个比赛阶段，直到所有队伍都完成比赛"""
