@@ -21,6 +21,7 @@ from thefuzz import process
 from unicodedata import normalize
 import json
 import asyncio
+import gzip
 import time
 from pathlib import Path
 from sqlalchemy import update, select
@@ -93,6 +94,7 @@ class DataManager:
         latest_match_id: str | None,
         total_weight: float,
         homework_rows: list[tuple[str, str, float, float]],
+        result_size: int = 0,
     ) -> None:
         created_at = int(time.time())
         async with async_session_factory() as session:
@@ -104,7 +106,7 @@ class DataManager:
                     latest_match_id=latest_match_id,
                     created_at=created_at,
                     total_weight=total_weight,
-                    result_size=0,
+                    result_size=result_size,
                     result_gzip=b"",
                 ))
                 for uid, homework_text, winrate, expval in homework_rows:
@@ -121,6 +123,7 @@ class DataManager:
 db = DataManager()
 
 major_stage_name = f"{config.major_name}-{config.major_stage}"
+simulation_result_dir = Path("data") / "major_simulations" / major_stage_name
 
 teamfile = Path(".") / "assets" / f"{major_stage_name}.json"
 major_teams = []
@@ -170,6 +173,15 @@ def homework_teams_text(teams_json: str) -> str:
     return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
+def save_simulation_result_file(match_count: int, result_bytes: bytes) -> Path:
+    simulation_result_dir.mkdir(parents=True, exist_ok=True)
+    path = simulation_result_dir / f"{match_count}.txt.gz"
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_bytes(gzip.compress(result_bytes, compresslevel=9))
+    tmp_path.replace(path)
+    return path
+
+
 async def save_current_homework_snapshot(uid: str, teams_json: str, winrate: float, expval: float) -> None:
     finished_matches = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
     latest_match_id = None
@@ -189,6 +201,7 @@ hwhelp = on_command("作业帮助", priority=10, block=True)
 hwadd = on_command("做作业", priority=10, block=True)
 hwsee = on_command("查看作业", priority=10, block=True)
 hwrank = on_command("作业排名", priority=10, block=True)
+hwdetail = on_command("作业详情", priority=10, block=True)
 allrank = on_command("赛事作业结果", priority=10, block=True)
 hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER)
 simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSER)
@@ -212,6 +225,8 @@ async def hwhelp_funtion():
 查看自己或某人作业概率
 /作业排名
 查看当前作业排名
+/作业详情 [@某人]
+查看自己或某人的正确率变化截图
 /赛事作业结果
 查看赛事整体结果""")
     else:
@@ -222,6 +237,8 @@ async def hwhelp_funtion():
 查看自己或某人作业概率
 /作业排名
 查看当前作业排名
+/作业详情 [@某人]
+查看自己或某人的正确率变化截图
 /赛事作业结果
 查看赛事整体结果""")
 
@@ -361,6 +378,19 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
             logger.info(f"fail to get {member.uid}")
     await hwrank.finish(text)
 
+@hwdetail.handle()
+async def hwdetail_function(bot: Bot, message: GroupMessageEvent):
+    gid = message.get_session_id().split('_')[1]
+    uid = message.get_user_id()
+    for seg in message.get_message():
+        if seg.type == "at" and seg.data['qq'] != 'all':
+            uid = seg.data['qq']
+
+    screenshot = await _get_major_detail_screenshot(gid, uid)
+    if screenshot:
+        await hwdetail.finish(MessageSegment.image(screenshot))
+    await hwdetail.finish("生成作业详情截图失败，请稍后重试")
+
 @hwupd.handle()
 async def hwupd_function():
     global results
@@ -406,6 +436,18 @@ async def _get_major_rank_screenshot(group_id: str | int) -> bytes | None:
         return None
 
 
+async def _get_major_detail_screenshot(group_id: str | int, uid: str | int) -> bytes | None:
+    try:
+        from ..cs_server import db as server_db
+        from ..cs_server import get_screenshot
+
+        token = await server_db.get_bot_token(str(group_id))
+        return await get_screenshot(f"/major-homework/user/{uid}", token, width=1040)
+    except Exception:
+        logger.exception("failed to create major homework detail screenshot")
+        return None
+
+
 async def _send_major_rank_groups(bot: Bot, title: str):
     for groupid in config.cs_group_list:
         screenshot = await _get_major_rank_screenshot(groupid)
@@ -448,6 +490,8 @@ async def _run_major_simulation_once(bot: Bot, finished_matches: list[tuple[str,
     latest_match_id = None
     if finished_matches and len(finished_matches[0]) >= 4:
         latest_match_id = str(finished_matches[0][3])
+    result_bytes = Path(file_path).read_bytes()
+    save_simulation_result_file(len(finished_matches), result_bytes)
     await db.save_simulation_snapshot(
         stage=major_stage_name,
         event_id=config.major_event_id,
@@ -455,6 +499,7 @@ async def _run_major_simulation_once(bot: Bot, finished_matches: list[tuple[str,
         latest_match_id=latest_match_id,
         total_weight=total_simulations,
         homework_rows=homework_rows,
+        result_size=len(result_bytes),
     )
     logger.info(
         f"已保存 {major_stage_name} 第 {len(finished_matches)} 场后的模拟快照，"

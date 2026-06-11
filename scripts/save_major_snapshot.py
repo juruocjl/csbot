@@ -27,6 +27,7 @@ async def main() -> None:
     )
     results, total_weight = parse_simulation_results(major_hw.file_path)
     major_hw.results = results
+    result_bytes = Path(major_hw.file_path).read_bytes()
 
     homework_rows: list[tuple[str, str, float, float]] = []
     members = await major_hw.db.get_all_hw(major_hw.major_stage_name)
@@ -40,6 +41,7 @@ async def main() -> None:
     if finished_matches and len(finished_matches[0]) >= 4:
         latest_match_id = str(finished_matches[0][3])
 
+    major_hw.save_simulation_result_file(len(finished_matches), result_bytes)
     await major_hw.db.save_simulation_snapshot(
         stage=major_hw.major_stage_name,
         event_id=major_hw.config.major_event_id,
@@ -47,6 +49,7 @@ async def main() -> None:
         latest_match_id=latest_match_id,
         total_weight=total_weight,
         homework_rows=homework_rows,
+        result_size=len(result_bytes),
     )
     print(
         f"saved stage={major_hw.major_stage_name} "

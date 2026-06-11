@@ -89,7 +89,7 @@ class Result:
     three_zero: int
     advanced: int
     zero_three: int
-    pickem_results: dict[str, float]
+    pickem_results: dict[tuple[int, int, int], float]
 
     @staticmethod
     def new() -> Result:
@@ -539,30 +539,25 @@ class Simulation:
         return ss.next_round_num()
 
     @staticmethod
-    def _record_pickem_result(ss: SwissSystem, all_combinations: dict[str, float], weight: float = 1.0) -> None:
-        three_zero_teams = []
-        advanced_teams = []
-        zero_three_teams = []
+    def _record_pickem_result(ss: SwissSystem, all_combinations: dict[tuple[int, int, int], float], weight: float = 1.0) -> None:
+        three_zero_mask = 0
+        advanced_mask = 0
+        zero_three_mask = 0
 
         for team, record in ss.records.items():
             if record.wins == 3:
                 if record.losses == 0:
-                    three_zero_teams.append(team.name)
+                    three_zero_mask |= 1 << team.id
                 else:
-                    advanced_teams.append(team.name)
+                    advanced_mask |= 1 << team.id
             elif record.losses == 3 and record.wins == 0:
-                zero_three_teams.append(team.name)
+                zero_three_mask |= 1 << team.id
 
-        sim_result = {
-            '3-0': sorted(three_zero_teams),
-            '3-1/3-2': sorted(advanced_teams),
-            '0-3': sorted(zero_three_teams)
-        }
-        key = f"3-0: {', '.join(sim_result['3-0'])} | 3-1/3-2: {', '.join(sim_result['3-1/3-2'])} | 0-3: {', '.join(sim_result['0-3'])}"
+        key = (three_zero_mask, advanced_mask, zero_three_mask)
         all_combinations[key] = all_combinations.get(key, 0.0) + weight
 
     def exact(self, finished_matches: list[tuple[str, str, str, str]] | None = None, newest_first: bool = False, max_outcomes: int = MAX_EXACT_OUTCOMES) -> tuple[dict[Team, Result], int] | None:
-        all_combinations: dict[str, float] = {}
+        all_combinations: dict[tuple[int, int, int], float] = {}
         leaf_count = 0
         initial_state = self._initial_state(finished_matches, newest_first)
 
@@ -625,7 +620,7 @@ class Simulation:
         运行n次模拟
         """
         results = {team: Result.new() for team in self.teams}
-        all_combinations: dict[str, int] = {}
+        all_combinations: dict[tuple[int, int, int], int] = {}
 
         # 预生成随机数
         random_values = np.random.random(n * 10)  # 预生成足够的随机数
@@ -649,31 +644,24 @@ class Simulation:
                 ss.simulate_tournament()
 
                 # 记录当前模拟的结果
-                three_zero_teams = []
-                advanced_teams = []
-                zero_three_teams = []
+                three_zero_mask = 0
+                advanced_mask = 0
+                zero_three_mask = 0
 
                 for team, record in ss.records.items():
                     if record.wins == 3:
                         if record.losses == 0:
                             results[team].three_zero += 1
-                            three_zero_teams.append(team.name)
+                            three_zero_mask |= 1 << team.id
                         else:
                             results[team].advanced += 1
-                            advanced_teams.append(team.name)
+                            advanced_mask |= 1 << team.id
                     elif record.wins == 0:
                         results[team].zero_three += 1
-                        zero_three_teams.append(team.name)
-
-                # 记录这次模拟的结果
-                sim_result = {
-                    '3-0': sorted(three_zero_teams),
-                    '3-1/3-2': sorted(advanced_teams),
-                    '0-3': sorted(zero_three_teams)
-                }
+                        zero_three_mask |= 1 << team.id
 
                 # 记录这个组合
-                key = f"3-0: {', '.join(sim_result['3-0'])} | 3-1/3-2: {', '.join(sim_result['3-1/3-2'])} | 0-3: {', '.join(sim_result['0-3'])}"
+                key = (three_zero_mask, advanced_mask, zero_three_mask)
                 all_combinations[key] = all_combinations.get(key, 0) + 1
 
                 if progress_bar:
@@ -784,9 +772,15 @@ def format_results(
     all_combinations = list(results.values())[0].pickem_results
     sorted_combinations = sorted(all_combinations.items(), key=lambda x: x[1], reverse=True)
     with open(output_path, 'w', encoding='utf-8') as f:
-        for combination, count in sorted_combinations:
+        team_names = [team.name for team in sorted(results.keys(), key=lambda team: team.id)]
+        f.write("# major_hw_result_format=2\n")
+        f.write(f"# teams: {json.dumps(team_names, ensure_ascii=False, separators=(',', ':'))}\n")
+        for (three_zero_mask, advanced_mask, zero_three_mask), count in sorted_combinations:
             percentage = count / total_weight * 100 if total_weight else 0.0
-            f.write(f"{combination}: {format_weight(count)}/{format_weight(total_weight)} ({percentage:.4f}%)\n")
+            f.write(
+                f"m {three_zero_mask:x} {advanced_mask:x} {zero_three_mask:x}: "
+                f"{format_weight(count)}/{format_weight(total_weight)} ({percentage:.4f}%)\n"
+            )
 
     out.append(f"\n运行耗时: {run_time:.4f} 秒")
     return out

@@ -14,15 +14,16 @@ HLTV_WEIGHT = 0.7  # HLTV评分系统权重
 SIGMA = 500
 HLTV_EXP = 0.1
 RATING_K_FACTORS = {
-    "valve": 80.0,
-    "value": 80.0,
-    "hltv": 35.0,
+    "valve": 20.0,
+    "value": 20.0,
+    "hltv": 9.0,
 }
 MIN_RATING = 1.0
-RECENT_WEIGHT_MIN = 0.85
-RECENT_WEIGHT_MAX = 2.0
-UPSET_BONUS_SCALE = 3.0
-UPSET_BONUS_CAP = 2.25
+RECENT_WEIGHT_MIN = 0.8
+RECENT_WEIGHT_MAX = 1.25
+UPSET_BONUS_SCALE = 0.9
+UPSET_BONUS_CAP = 1.35
+BO3_CLEAN_WIN_BONUS = 0.05
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ def parse_score_weight(score: str) -> float:
         return 1.0
 
     if 0 <= loser_score < winner_score <= 3:
-        return 1.0 + max(0, winner_score - loser_score - 1) * 0.15
+        return 1.0 + max(0, winner_score - loser_score - 1) * BO3_CLEAN_WIN_BONUS
     return 1.0
 
 

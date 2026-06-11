@@ -9,81 +9,112 @@
       "seed": 1,
       "valve": 2003,
       "hltv": 991,
-      "alias": ["VIT", "Team Vitality"]
+      "alias": [
+        "VIT",
+        "Team Vitality"
+      ]
     },
-    "The MongolZ": {
+    "Natus Vincere": {
       "seed": 2,
-      "valve": 1745,
-      "hltv": 260,
-      "alias": ["MongolZ", "Mongolz"]
+      "valve": 1939,
+      "hltv": 712,
+      "alias": [
+        "NAVI",
+        "NaVi",
+        "navi"
+      ]
     },
     "Falcons": {
       "seed": 3,
       "valve": 1955,
       "hltv": 509,
-      "alias": ["Team Falcons", "FLC"]
+      "alias": [
+        "Team Falcons",
+        "FLC"
+      ]
     },
-    "MOUZ": {
+    "The MongolZ": {
       "seed": 4,
-      "valve": 1864,
-      "hltv": 301,
-      "alias": []
+      "valve": 1745,
+      "hltv": 260,
+      "alias": [
+        "MongolZ",
+        "Mongolz"
+      ]
+    },
+    "PARIVISION": {
+      "seed": 5,
+      "valve": 1659,
+      "hltv": 259,
+      "alias": [
+        "PARI",
+        "PV",
+        "pv",
+        "Parivision"
+      ]
+    },
+    "Aurora": {
+      "seed": 6,
+      "valve": 1721,
+      "hltv": 354,
+      "alias": [
+        "Aurora Gaming"
+      ]
     },
     "FURIA": {
-      "seed": 5,
+      "seed": 7,
       "valve": 1697,
       "hltv": 393,
       "alias": []
     },
-    "Natus Vincere": {
-      "seed": 6,
-      "valve": 1939,
-      "hltv": 712,
-      "alias": ["NAVI", "NaVi", "navi"]
-    },
-    "Aurora": {
-      "seed": 7,
-      "valve": 1721,
-      "hltv": 354,
-      "alias": ["Aurora Gaming"]
-    },
-    "PARIVISION": {
+    "MOUZ": {
       "seed": 8,
-      "valve": 1659,
-      "hltv": 259,
-      "alias": ["PARI", "PV", "pv", "Parivision"]
+      "valve": 1864,
+      "hltv": 301,
+      "alias": []
     },
     "FUT": {
       "seed": 9,
-      "alias": ["FUT Esports"]
+      "alias": [
+        "FUT Esports"
+      ]
     },
-    "BetBoom": {
+    "Spirit": {
       "seed": 10,
-      "alias": ["BetBoom Team", "BB"]
+      "alias": [
+        "Team Spirit"
+      ]
     },
     "G2": {
       "seed": 11,
-      "alias": ["G2 Esports"]
+      "alias": [
+        "G2 Esports"
+      ]
     },
-    "Legacy": {
+    "BetBoom": {
       "seed": 12,
+      "alias": [
+        "BetBoom Team",
+        "BB"
+      ]
+    },
+    "9z": {
+      "seed": 13,
+      "alias": [
+        "9z Team"
+      ]
+    },
+    "Monte": {
+      "seed": 14,
       "alias": []
     },
     "B8": {
-      "seed": 13,
-      "alias": []
-    },
-    "Spirit": {
-      "seed": 14,
-      "alias": ["Team Spirit"]
-    },
-    "Monte": {
       "seed": 15,
       "alias": []
     },
-    "9z": {
+    "Legacy": {
       "seed": 16,
-      "alias": ["9z Team"]
+      "alias": []
     }
   }
 }

@@ -14,13 +14,14 @@
         "Team Vitality"
       ]
     },
-    "The MongolZ": {
+    "Natus Vincere": {
       "seed": 2,
-      "valve": 1745,
-      "hltv": 260,
+      "valve": 1939,
+      "hltv": 712,
       "alias": [
-        "MongolZ",
-        "Mongolz"
+        "NAVI",
+        "NaVi",
+        "navi"
       ]
     },
     "Falcons": {
@@ -32,38 +33,17 @@
         "FLC"
       ]
     },
-    "MOUZ": {
+    "The MongolZ": {
       "seed": 4,
-      "valve": 1864,
-      "hltv": 301,
-      "alias": []
-    },
-    "FURIA": {
-      "seed": 5,
-      "valve": 1697,
-      "hltv": 393,
-      "alias": []
-    },
-    "Natus Vincere": {
-      "seed": 6,
-      "valve": 1939,
-      "hltv": 712,
+      "valve": 1745,
+      "hltv": 260,
       "alias": [
-        "NAVI",
-        "NaVi",
-        "navi"
-      ]
-    },
-    "Aurora": {
-      "seed": 7,
-      "valve": 1721,
-      "hltv": 354,
-      "alias": [
-        "Aurora Gaming"
+        "MongolZ",
+        "Mongolz"
       ]
     },
     "PARIVISION": {
-      "seed": 8,
+      "seed": 5,
       "valve": 1659,
       "hltv": 259,
       "alias": [
@@ -73,64 +53,84 @@
         "Parivision"
       ]
     },
+    "Aurora": {
+      "seed": 6,
+      "valve": 1721,
+      "hltv": 354,
+      "alias": [
+        "Aurora Gaming"
+      ]
+    },
+    "FURIA": {
+      "seed": 7,
+      "valve": 1697,
+      "hltv": 393,
+      "alias": []
+    },
+    "MOUZ": {
+      "seed": 8,
+      "valve": 1864,
+      "hltv": 301,
+      "alias": []
+    },
     "FUT": {
       "seed": 9,
       "alias": [
         "FUT Esports"
       ],
-      "valve": 1823,
-      "hltv": 270
+      "valve": 1719,
+      "hltv": 218
     },
-    "BetBoom": {
+    "Spirit": {
       "seed": 10,
       "alias": [
-        "BetBoom Team",
-        "BB"
+        "Team Spirit"
       ],
-      "valve": 1855,
-      "hltv": 250
+      "valve": 2001,
+      "hltv": 530
     },
     "G2": {
       "seed": 11,
       "alias": [
         "G2 Esports"
       ],
-      "valve": 1751,
-      "hltv": 249
+      "valve": 1690,
+      "hltv": 213
     },
-    "Legacy": {
+    "BetBoom": {
       "seed": 12,
-      "alias": [],
-      "valve": 1747,
-      "hltv": 354
-    },
-    "B8": {
-      "seed": 13,
-      "alias": [],
-      "valve": 1733,
-      "hltv": 271
-    },
-    "Spirit": {
-      "seed": 14,
       "alias": [
-        "Team Spirit"
+        "BetBoom Team",
+        "BB"
       ],
-      "valve": 2063,
-      "hltv": 588
-    },
-    "Monte": {
-      "seed": 15,
-      "alias": [],
-      "valve": 1706,
-      "hltv": 124
+      "valve": 1762,
+      "hltv": 197
     },
     "9z": {
-      "seed": 16,
+      "seed": 13,
       "alias": [
         "9z Team"
       ],
-      "valve": 1773,
-      "hltv": 156
+      "valve": 1656,
+      "hltv": 121
+    },
+    "Monte": {
+      "seed": 14,
+      "alias": [],
+      "valve": 1547,
+      "hltv": 93
+    },
+    "B8": {
+      "seed": 15,
+      "alias": [],
+      "valve": 1681,
+      "hltv": 228
+    },
+    "Legacy": {
+      "seed": 16,
+      "alias": [],
+      "valve": 1830,
+      "hltv": 317
     }
   }
 }

@@ -71,7 +71,7 @@ cd /home/ubuntu/csbot
 ENVIRONMENT=prod /home/ubuntu/.local/bin/uv run python scripts/generate_major_stage.py \
   --previous assets/2026-cologne-stage2.json \
   --template assets/2026-cologne-stage3.template.json \
-  --from-storage 8029 \
+  --from-storage 9029 \
   --output assets/2026-cologne-stage3.json
 ```
 

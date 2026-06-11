@@ -12,6 +12,7 @@ import time
 import re
 import json
 import math
+import os
 import aiohttp
 import psutil
 import asyncio
@@ -131,6 +132,9 @@ driver = get_driver()
 
 @driver.on_startup
 async def _():
+    if os.getenv("CS_SERVER_SKIP_STARTUP_CACHE") == "1":
+        logger.info("skip season stats cache warmup")
+        return
     await update_season_stats_cache()
 
 class DataMannager:
@@ -430,10 +434,13 @@ class InfoNameResponse(BaseModel):
     description="获取绑定的用户 ID。"
 )
 async def get_token_info(info: AuthSession = Depends(get_current_user)):
-    bot = get_bot()
-    assert isinstance(bot, Bot)
     assert info.user_id is not None
     assert info.group_id is not None
+    try:
+        bot = get_bot()
+    except ValueError:
+        return InfoNameResponse(showName=info.user_id)
+    assert isinstance(bot, Bot)
     username = await get_user_name(info.user_id)
     groupname = (await bot.get_group_info(group_id=int(info.group_id), no_cache=False))["group_name"]
     return InfoNameResponse(
@@ -1409,6 +1416,11 @@ class MajorHomeworkPersonalRow(BaseModel):
     matchCount: int = Field(..., description="Finished match count when this snapshot was generated")
     createdAt: int = Field(..., description="Snapshot unix timestamp")
     event: str = Field(..., description="Event that produced this row")
+    eventWinner: str | None = Field(None, description="Winning team for a match event")
+    eventWinnerLogo: str | None = Field(None, description="Winning team logo URL")
+    eventLoser: str | None = Field(None, description="Losing team for a match event")
+    eventLoserLogo: str | None = Field(None, description="Losing team logo URL")
+    eventScore: str | None = Field(None, description="Match score for a match event")
     homeworkText: str = Field(..., description="Canonical homework picks at this snapshot")
     probability: float | None = Field(None, description="Probability of passing the homework")
     probabilityChange: float | None = Field(None, description="Probability delta from previous row")
@@ -1565,6 +1577,20 @@ def _major_result_picks(records: dict[str, tuple[int, int]]) -> dict[str, list[M
 def _major_records_at_count(games: list, match_count: int) -> dict[str, tuple[int, int]]:
     chronological_games = list(reversed(games))
     return _major_records(chronological_games[:max(0, match_count)])
+
+def _major_match_event_detail(games: list, match_count: int) -> tuple[str, str, str] | None:
+    if match_count <= 0:
+        return None
+    chronological_games = list(reversed(games))
+    index = match_count - 1
+    if index >= len(chronological_games):
+        return None
+    game = chronological_games[index]
+    if not isinstance(game, (list, tuple)) or len(game) < 3:
+        return None
+    winner = get_major_team_name(game[0])
+    loser = get_major_team_name(game[1])
+    return winner, loser, str(game[2])
 
 def _major_match_event(games: list, match_count: int) -> str | None:
     if match_count <= 0:
@@ -1742,18 +1768,24 @@ async def get_major_homework_history(_ = Depends(get_current_user)):
     summary="Get personal Major homework history",
     description="Return current user's homework snapshots with event labels and probability changes.",
 )
-async def get_major_homework_personal(info: AuthSession = Depends(get_current_user)):
+async def get_major_homework_personal(
+    uid: str | None = Body(None, embed=True),
+    info: AuthSession = Depends(get_current_user),
+):
     if not info.user_id:
         raise HTTPException(status_code=401, detail="未绑定 QQ")
     if major_hw_config.major_stage == "playoffs":
         raise HTTPException(status_code=400, detail="Playoffs homework history is not supported on web yet")
+    target_uid = str(uid).strip() if uid else info.user_id
+    if not target_uid:
+        raise HTTPException(status_code=400, detail="Invalid target user")
 
     games = json.loads(await local_storage.get(f"hltvresult{major_hw_config.major_event_id}", default="[]"))
     async with async_session_factory() as session:
         stmt = (
             select(MajorHWSnapshot)
             .where(MajorHWSnapshot.stage == major_stage_name)
-            .where(MajorHWSnapshot.uid == info.user_id)
+            .where(MajorHWSnapshot.uid == target_uid)
             .order_by(MajorHWSnapshot.match_count, MajorHWSnapshot.created_at, MajorHWSnapshot.homework_text)
         )
         result = await session.execute(stmt)
@@ -1766,6 +1798,7 @@ async def get_major_homework_personal(info: AuthSession = Depends(get_current_us
     for snapshot in snapshots:
         probability = _major_safe_float(snapshot.winrate)
         probability_change = None
+        match_event: tuple[str, str, str] | None = None
         if probability is not None and previous_probability is not None:
             probability_change = probability - previous_probability
 
@@ -1774,6 +1807,7 @@ async def get_major_homework_personal(info: AuthSession = Depends(get_current_us
         elif snapshot.match_count == previous_match_count and snapshot.homework_text != previous_homework_text:
             event = "修改作业"
         else:
+            match_event = _major_match_event_detail(games, snapshot.match_count)
             event = _major_match_event(games, snapshot.match_count) or "初始作业"
 
         records = _major_records_at_count(games, snapshot.match_count)
@@ -1781,6 +1815,11 @@ async def get_major_homework_personal(info: AuthSession = Depends(get_current_us
             matchCount=snapshot.match_count,
             createdAt=snapshot.created_at,
             event=event,
+            eventWinner=match_event[0] if match_event else None,
+            eventWinnerLogo=_major_team_logo(match_event[0]) if match_event else None,
+            eventLoser=match_event[1] if match_event else None,
+            eventLoserLogo=_major_team_logo(match_event[1]) if match_event else None,
+            eventScore=match_event[2] if match_event else None,
             homeworkText=snapshot.homework_text,
             probability=probability,
             probabilityChange=probability_change,
@@ -1793,8 +1832,8 @@ async def get_major_homework_personal(info: AuthSession = Depends(get_current_us
 
     return MajorHomeworkPersonalResponse(
         stage=major_stage_name,
-        uid=info.user_id,
-        avatar=f"https://q1.qlogo.cn/g?b=qq&nk={info.user_id}&s=100",
+        uid=target_uid,
+        avatar=f"https://q1.qlogo.cn/g?b=qq&nk={target_uid}&s=100",
         categories=MAJOR_HOMEWORK_CATEGORIES,
         rows=rows,
     )
