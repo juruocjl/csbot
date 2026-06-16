@@ -1,0 +1,45 @@
+{
+  "playoff_start_match_count": 33,
+  "categories": ["4强", "2强", "冠军"],
+  "source": "https://majors.im/2026/cologne",
+  "matchups": [
+    ["Aurora", "BetBoom"],
+    ["9z", "FURIA"],
+    ["Spirit", "G2"],
+    ["Falcons", "Vitality"]
+  ],
+  "teams": {
+    "Spirit": {
+      "seed": 1,
+      "alias": ["Team Spirit"]
+    },
+    "FURIA": {
+      "seed": 2,
+      "alias": []
+    },
+    "Aurora": {
+      "seed": 3,
+      "alias": ["Aurora Gaming"]
+    },
+    "Vitality": {
+      "seed": 4,
+      "alias": ["VIT", "Team Vitality"]
+    },
+    "Falcons": {
+      "seed": 5,
+      "alias": ["Team Falcons", "FLC"]
+    },
+    "BetBoom": {
+      "seed": 6,
+      "alias": ["BetBoom Team", "BB"]
+    },
+    "9z": {
+      "seed": 7,
+      "alias": ["9z Team"]
+    },
+    "G2": {
+      "seed": 8,
+      "alias": ["G2 Esports"]
+    }
+  }
+}

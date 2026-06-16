@@ -29,6 +29,7 @@ from sqlalchemy import update, select
 from .gen_win_matrix import gen_win_matrix
 from .simulate import simulate
 from .verify import parse_simulation_results, evaluate_combination
+from .playoff_homework import validate_playoff_bracket
 
 from .config import Config
 
@@ -128,10 +129,12 @@ simulation_result_dir = Path("data") / "major_simulations" / major_stage_name
 teamfile = Path(".") / "assets" / f"{major_stage_name}.json"
 major_teams = []
 alias2full = {}
+playoff_matchups: list[list[str]] = []
 try:
-    with open(teamfile, "r") as f:
+    with open(teamfile, "r", encoding="utf-8") as f:
         data = json.load(f)
         major_teams = list(data['teams'].keys())
+        playoff_matchups = data.get("matchups", [])
         for team_name, team_data in data['teams'].items():
             alias2full[team_name] = team_name
             for alias in team_data['alias']:
@@ -219,14 +222,14 @@ def to_emoji(val):
 async def hwhelp_funtion():
     if config.major_stage == "playoffs":
         await hwhelp.finish(f"""当前状态 {major_stage_name}
-/做作业 四强，四强，四强，四强，二强，二强，冠军
-添加作业，可用队伍 {major_teams}
+/做作业 Aurora,FURIA,Spirit,Vitality,Aurora,Spirit,Spirit
+添加淘汰赛作业，格式为 4强x4,2强x2,冠军x1。作业必须是合法锦标赛结果：4强每场八强赛选一队，2强两个半区各选一队，冠军来自2强。
+八强对阵 {playoff_matchups}
+可用队伍 {major_teams}
 /查看作业 [@某人]
 查看自己或某人作业概率
 /作业排名
 查看当前作业排名
-/作业详情 [@某人]
-查看自己或某人的正确率变化截图
 /赛事作业结果
 查看赛事整体结果""")
     else:
@@ -246,10 +249,11 @@ async def calc_val(uid: str) -> tuple[float, float] | None:
     if config.major_stage == "playoffs":
         result: list[tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{config.major_event_id}", default="[]"))
         result.reverse()
+        playoff_start = 33
         if res := await db.get_uid_hw(uid, major_stage_name + "-quad"):
             teams = json.loads(res.teams)
-            win_teams = [team1 for team1, _, _, _ in result[33:37]]
-            loss_teams = [team2 for _, team2, _, _ in result[33:37]]
+            win_teams = [get_name(team1) for team1, _, _, _ in result[playoff_start:playoff_start + 4]]
+            loss_teams = [get_name(team2) for _, team2, _, _ in result[playoff_start:playoff_start + 4]]
             if len(result) >= 37:
                 correct = float(sum(1 for team in teams if team in win_teams))
             else:
@@ -262,8 +266,8 @@ async def calc_val(uid: str) -> tuple[float, float] | None:
             await db.set_uid_val(uid, major_stage_name + "-quad", prob_ge2, correct)
         if res := await db.get_uid_hw(uid, major_stage_name + "-semi"):
             teams = json.loads(res.teams)
-            win_teams = [team1 for team1, _, _, _ in result[37:39]]
-            loss_teams = [team2 for _, team2, _, _ in result[33:39]]
+            win_teams = [get_name(team1) for team1, _, _, _ in result[playoff_start + 4:playoff_start + 6]]
+            loss_teams = [get_name(team2) for _, team2, _, _ in result[playoff_start:playoff_start + 6]]
             if len(result) >= 39:
                 correct = sum(1 for team in teams if team in win_teams)
             else:
@@ -276,8 +280,8 @@ async def calc_val(uid: str) -> tuple[float, float] | None:
             await db.set_uid_val(uid, major_stage_name + "-semi", prob_ge1, correct)
         if res := await db.get_uid_hw(uid, major_stage_name + "-final"):
             teams = json.loads(res.teams)
-            win_teams = [team1 for team1, _, _, _ in result[39:40]]
-            loss_teams = [team2 for _, team2, _, _ in result[33:40]]
+            win_teams = [get_name(team1) for team1, _, _, _ in result[playoff_start + 6:playoff_start + 7]]
+            loss_teams = [get_name(team2) for _, team2, _, _ in result[playoff_start:playoff_start + 7]]
             if len(result) >= 40:
                 correct = sum(1 for team in teams if team in win_teams)
             else:
@@ -312,16 +316,17 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
     await hwadd.send(f"模糊匹配得到队伍 {teams}，请仔细核对")
     if config.major_stage == "playoffs":
         if len(teams) != 7:
-            await hwadd.finish("请输入七只不同队伍")
+            await hwadd.finish("请输入 7 个队伍：4强x4,2强x2,冠军x1")
         quad = teams[:4]
         semi = teams[4:6]
         final = teams[6:]
-        if len(set(quad)) != 4 or len(set(semi)) != 2 or len(set(final)) != 1:
-            await hwadd.finish("请输入正确的淘汰赛队伍数量")
+        if error := validate_playoff_bracket(quad, semi, final, playoff_matchups):
+            await hwadd.finish(f"作业不是合法锦标赛结果：{error}")
         await db.add_hw(uid, major_stage_name + "-quad", json.dumps(quad))
         await db.add_hw(uid, major_stage_name + "-semi", json.dumps(semi))
         await db.add_hw(uid, major_stage_name + "-final", json.dumps(final))
         await calc_val(uid)
+        await hwadd.finish("成功添加淘汰赛作业")
     else:
         if len(teams) != 10 or len(set(teams)) != 10:
             await hwadd.finish("请输入十只不同队伍")
@@ -549,13 +554,7 @@ async def event_update(event_id, finished_matches: list[tuple[str, str, str, str
             res = await db.get_all_hw(major_stage_name + "-quad")
             for member in res:
                 await calc_val(member.uid)
-            
-            for groupid in config.cs_group_list:
-                await bot.send_msg(
-                    message_type="group",
-                    group_id=groupid,
-                    message=f"成功计算 {len(res)} 份作业"
-                )
+            await _send_major_rank_groups(bot, f"成功计算 {len(res)} 份作业，当前作业排名")
         else:
             await _enqueue_major_simulation(bot, finished_matches)
 

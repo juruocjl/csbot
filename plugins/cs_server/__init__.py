@@ -16,12 +16,19 @@ import os
 import aiohttp
 import psutil
 import asyncio
+from pathlib import Path
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from pyppeteer import launch
+from ..major_hw.playoff_homework import (
+    PLAYOFF_CATEGORIES,
+    PLAYOFF_CATEGORY_SLOTS,
+    PLAYOFF_STATUS_LABELS,
+    playoff_category_status,
+)
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -1387,10 +1394,13 @@ class MajorHomeworkRankItem(BaseModel):
     avatar: str = Field(..., description="QQ avatar URL")
     probability: float | None = Field(None, description="Probability of passing the homework")
     expected: float | None = Field(None, description="Expected correct picks")
+    score: float | None = Field(None, description="Current deterministic score")
+    scoreLabel: str | None = Field(None, description="Human-readable score breakdown")
     picks: dict[str, list[MajorHomeworkPick]] = Field(..., description="Grouped picks")
 
 class MajorHomeworkRankResponse(BaseModel):
     stage: str = Field(..., description="Major stage")
+    stageType: str = Field("swiss", description="swiss or playoffs")
     categories: list[str] = Field(..., description="Pick categories")
     teams: list[str] = Field(..., description="Teams in this stage")
     resultPicks: dict[str, list[MajorHomeworkPick]] = Field(..., description="Current deterministic results")
@@ -1467,6 +1477,8 @@ MAJOR_HOMEWORK_CATEGORY_SLOTS = {
     "3-1/3-2": 6,
     "0-3": 2,
 }
+MAJOR_PLAYOFF_CATEGORIES = PLAYOFF_CATEGORIES
+MAJOR_PLAYOFF_CATEGORY_SLOTS = PLAYOFF_CATEGORY_SLOTS
 
 def _major_team_logo(team: str) -> str | None:
     if logo := MAJOR_TEAM_LOGOS.get(team):
@@ -1573,6 +1585,180 @@ def _major_result_picks(records: dict[str, tuple[int, int]]) -> dict[str, list[M
             picks.append(_major_unknown_pick(category))
         grouped[category] = picks
     return grouped
+
+def _major_stage_data() -> dict:
+    try:
+        with (Path("assets") / f"{major_stage_name}.json").open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        logger.exception("failed to load major stage data")
+        return {}
+
+def _playoff_start_match_count() -> int:
+    data = _major_stage_data()
+    try:
+        return int(data.get("playoff_start_match_count", 33))
+    except Exception:
+        return 33
+
+def _playoff_games(games: list) -> list:
+    chronological_games = list(reversed(games))
+    start = _playoff_start_match_count()
+    return chronological_games[start:start + 7]
+
+def _playoff_match_detail(game) -> tuple[str, str] | None:
+    if not isinstance(game, (list, tuple)) or len(game) < 2:
+        return None
+    if not isinstance(game[0], str) or not isinstance(game[1], str):
+        return None
+    return get_major_team_name(game[0]), get_major_team_name(game[1])
+
+def _playoff_state(games: list) -> dict[str, object]:
+    playoff_games = _playoff_games(games)
+    rounds = {
+        "4强": playoff_games[:4],
+        "2强": playoff_games[4:6],
+        "冠军": playoff_games[6:7],
+    }
+    winners: dict[str, list[str]] = {category: [] for category in MAJOR_PLAYOFF_CATEGORIES}
+    losers: dict[str, list[str]] = {category: [] for category in MAJOR_PLAYOFF_CATEGORIES}
+    records: dict[str, list[int]] = {team: [0, 0] for team in major_teams}
+
+    for category, round_games in rounds.items():
+        for game in round_games:
+            detail = _playoff_match_detail(game)
+            if detail is None:
+                continue
+            winner, loser = detail
+            winners[category].append(winner)
+            losers[category].append(loser)
+            records.setdefault(winner, [0, 0])[0] += 1
+            records.setdefault(loser, [0, 0])[1] += 1
+
+    eliminated = set(losers["4强"]) | set(losers["2强"]) | set(losers["冠军"])
+    return {
+        "winners": winners,
+        "losers": losers,
+        "eliminated": eliminated,
+        "records": {team: (record[0], record[1]) for team, record in records.items()},
+    }
+
+def _playoff_record_status(team: str, state: dict[str, object]) -> str:
+    winners = state["winners"]
+    losers = state["losers"]
+    if team in winners["冠军"]:
+        return "champion"
+    if team in losers["冠军"]:
+        return "runner-up"
+    if team in losers["2强"] or team in winners["2强"]:
+        return "finalist"
+    if team in losers["4强"] or team in winners["4强"]:
+        return "semifinalist"
+    return "pending"
+
+def _playoff_pick_status(team: str, category: str, state: dict[str, object]) -> str:
+    winners = state["winners"]
+    losers = state["losers"]
+    eliminated = state["eliminated"]
+    if team in winners[category]:
+        return "correct"
+    if team in eliminated:
+        return "wrong"
+    finished_slots = len(winners[category])
+    if finished_slots >= MAJOR_PLAYOFF_CATEGORY_SLOTS[category] and team not in winners[category]:
+        return "wrong"
+    return "pending"
+
+def _playoff_pick(team: str, category: str, state: dict[str, object]) -> MajorHomeworkPick:
+    records = state["records"]
+    wins, losses = records.get(team, (0, 0))
+    return MajorHomeworkPick(
+        team=team,
+        category=category,
+        status=_playoff_pick_status(team, category, state),
+        logo=_major_team_logo(team),
+        wins=wins,
+        losses=losses,
+        recordStatus=_playoff_record_status(team, state),
+    )
+
+def _playoff_result_picks(state: dict[str, object]) -> dict[str, list[MajorHomeworkPick]]:
+    winners = state["winners"]
+    grouped: dict[str, list[MajorHomeworkPick]] = {}
+    for category in MAJOR_PLAYOFF_CATEGORIES:
+        picks = _major_sort_picks([
+            _playoff_pick(team, category, state)
+            for team in winners[category]
+        ])[:MAJOR_PLAYOFF_CATEGORY_SLOTS[category]]
+        while len(picks) < MAJOR_PLAYOFF_CATEGORY_SLOTS[category]:
+            picks.append(_major_unknown_pick(category))
+        grouped[category] = picks
+    return grouped
+
+async def _major_playoff_homework_members(state: dict[str, object]) -> list[MajorHomeworkRankItem]:
+    quad_rows = await db_major_hw.get_all_hw(major_stage_name + "-quad")
+    semi_rows = await db_major_hw.get_all_hw(major_stage_name + "-semi")
+    final_rows = await db_major_hw.get_all_hw(major_stage_name + "-final")
+    rows_by_stage = {
+        "4强": {row.uid: row for row in quad_rows},
+        "2强": {row.uid: row for row in semi_rows},
+        "冠军": {row.uid: row for row in final_rows},
+    }
+    uids = set().union(*(set(rows.keys()) for rows in rows_by_stage.values()))
+
+    players: list[MajorHomeworkRankItem] = []
+    for uid in uids:
+        grouped: dict[str, list[MajorHomeworkPick]] = {}
+        teams_by_category: dict[str, list[str]] = {}
+        for category in MAJOR_PLAYOFF_CATEGORIES:
+            row = rows_by_stage[category].get(uid)
+            raw_teams = json.loads(row.teams) if row else []
+            teams = [
+                get_major_team_name(team)
+                for team in raw_teams
+                if isinstance(team, str)
+            ]
+            teams_by_category[category] = teams
+            picks = _major_sort_picks([
+                _playoff_pick(team, category, state)
+                for team in teams
+            ])[:MAJOR_PLAYOFF_CATEGORY_SLOTS[category]]
+            grouped[category] = picks
+
+        round_statuses = {
+            category: playoff_category_status(
+                teams_by_category.get(category, []),
+                category,
+                state["winners"],
+                state["eliminated"],
+            )
+            for category in MAJOR_PLAYOFF_CATEGORIES
+        }
+        score = sum(1 for status in round_statuses.values() if status == "correct")
+        status_parts = [
+            PLAYOFF_STATUS_LABELS[round_statuses[category]]
+            for category in MAJOR_PLAYOFF_CATEGORIES
+        ]
+        players.append(MajorHomeworkRankItem(
+            uid=uid,
+            avatar=f"https://q1.qlogo.cn/g?b=qq&nk={uid}&s=100",
+            probability=None,
+            expected=float(score),
+            score=float(score),
+            scoreLabel=" / ".join(status_parts),
+            picks=grouped,
+        ))
+
+    return sorted(
+        players,
+        key=lambda player: (
+            player.score or 0.0,
+            sum(1 for pick in player.picks.get("冠军", []) if pick.status == "pending"),
+            sum(1 for pick in player.picks.get("2强", []) if pick.status == "pending"),
+            sum(1 for pick in player.picks.get("4强", []) if pick.status == "pending"),
+        ),
+        reverse=True,
+    )
 
 def _major_records_at_count(games: list, match_count: int) -> dict[str, tuple[int, int]]:
     chronological_games = list(reversed(games))
@@ -1692,7 +1878,16 @@ async def get_rank_list(
 )
 async def get_major_homework_rank(_ = Depends(get_current_user)):
     if major_hw_config.major_stage == "playoffs":
-        raise HTTPException(status_code=400, detail="Playoffs homework ranking is not supported on web yet")
+        games = json.loads(await local_storage.get(f"hltvresult{major_hw_config.major_event_id}", default="[]"))
+        state = _playoff_state(games)
+        return MajorHomeworkRankResponse(
+            stage=major_stage_name,
+            stageType="playoffs",
+            categories=MAJOR_PLAYOFF_CATEGORIES,
+            teams=major_teams,
+            resultPicks=_playoff_result_picks(state),
+            players=await _major_playoff_homework_members(state),
+        )
 
     games = json.loads(await local_storage.get(f"hltvresult{major_hw_config.major_event_id}", default="[]"))
     records = _major_records(games)
@@ -1718,6 +1913,7 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
 
     return MajorHomeworkRankResponse(
         stage=major_stage_name,
+        stageType="swiss",
         categories=MAJOR_HOMEWORK_CATEGORIES,
         teams=major_teams,
         resultPicks=result_picks,
