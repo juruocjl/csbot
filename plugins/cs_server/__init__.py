@@ -353,6 +353,87 @@ async def get_legacy_score(steamid: str, timeStamp: int) -> float | None:
     extra_info = await db_val.get_extra_info(steamid, timeStamp=timeStamp)
     return extra_info.legacyScore if extra_info else None
 
+def is_ladder_mode(mode: str) -> bool:
+    return mode.startswith("天梯") or mode == "PVP周末联赛"
+
+def previous_season_id(season: str) -> str | None:
+    match = re.fullmatch(r"S(\d+)", season)
+    if not match:
+        return None
+    season_num = int(match.group(1))
+    if season_num <= 1:
+        return None
+    return f"S{season_num - 1}"
+
+def predict_reset_hidden_score(prev_end_score: int) -> float:
+    if prev_end_score < 1600:
+        return 0.529831 * prev_end_score + 557.78
+    if prev_end_score < 2000:
+        return 0.095130 * prev_end_score + 1360.66
+    return 0.173595 * prev_end_score + 1469.43
+
+async def get_display_pvp_score(player: MatchStatsPW) -> tuple[int | None, bool]:
+    if player.pvpScore > 0:
+        return int(player.pvpScore), False
+    if not is_ladder_mode(player.mode):
+        return None, False
+
+    mode_filter = (MatchStatsPW.mode.like("天梯%")) | (MatchStatsPW.mode == "PVP周末联赛")
+    async with async_session_factory() as session:
+        season_stmt = (
+            select(
+                MatchStatsPW.mid,
+                MatchStatsPW.pvpScore,
+                MatchStatsPW.pvpScoreChange,
+                MatchStatsPW.timeStamp,
+            )
+            .where(MatchStatsPW.steamid == player.steamid)
+            .where(MatchStatsPW.seasonId == player.seasonId)
+            .where(mode_filter)
+            .order_by(MatchStatsPW.timeStamp.asc(), MatchStatsPW.mid.asc())
+        )
+        season_rows = list((await session.execute(season_stmt)).all())
+        current_index = next(
+            (
+                index for index, row in enumerate(season_rows)
+                if row.mid == player.mid and int(row.timeStamp) == int(player.timeStamp)
+            ),
+            None,
+        )
+        if current_index is None:
+            return None, False
+
+        visible_index = next(
+            (index for index, row in enumerate(season_rows) if int(row.pvpScore or 0) > 0),
+            None,
+        )
+        if visible_index is not None:
+            hidden_start = int(season_rows[visible_index].pvpScore) - sum(
+                int(row.pvpScoreChange or 0) for row in season_rows[: visible_index + 1]
+            )
+        else:
+            prev_season = previous_season_id(player.seasonId)
+            if not prev_season:
+                return None, False
+            prev_stmt = (
+                select(MatchStatsPW.pvpScore)
+                .where(MatchStatsPW.steamid == player.steamid)
+                .where(MatchStatsPW.seasonId == prev_season)
+                .where(mode_filter)
+                .where(MatchStatsPW.pvpScore > 0)
+                .order_by(MatchStatsPW.timeStamp.desc(), MatchStatsPW.mid.desc())
+                .limit(1)
+            )
+            prev_end_score = (await session.execute(prev_stmt)).scalar_one_or_none()
+            if not prev_end_score:
+                return None, False
+            hidden_start = predict_reset_hidden_score(int(prev_end_score))
+
+        display_score = hidden_start + sum(
+            int(row.pvpScoreChange or 0) for row in season_rows[: current_index + 1]
+        )
+        return max(1, int(round(display_score))), True
+
 db = DataMannager()
 
 verify = on_command("验证", aliases={"verify"}, priority=10)
@@ -718,6 +799,8 @@ class MatchPWPlayerInfo(BaseModel):
     assists: int = Field(..., description="助攻数")
     legacyScore: float | None = Field(..., description="玩家的底蕴分数")
     pvpScore: float = Field(..., description="玩家的天梯分数")
+    displayPvpScore: float | None = Field(None, description="用于展示段位的分数，定段赛可能为预测值")
+    isPredictedPvpScore: bool = Field(False, description="展示分数是否为预测值")
     pvpScoreChange: float = Field(..., description="玩家的天梯分数变化")
     pvpStars: int = Field(..., description="玩家的天梯星级")
 
@@ -745,6 +828,24 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
     if not match_detail:
         raise HTTPException(status_code=404, detail="Match not found")
     match_extra = await db_val.get_match_extra(matchId)
+    async def build_player_info(player: MatchStatsPW) -> MatchPWPlayerInfo:
+        display_score, is_predicted = await get_display_pvp_score(player)
+        return MatchPWPlayerInfo(
+            steamId=player.steamid,
+            nickname=await get_nickname(player.steamid),
+            team=player.team,
+            rating=player.pwRating,
+            we=player.we,
+            kills=player.kill,
+            deaths=player.death,
+            assists=player.assist,
+            legacyScore=await get_legacy_score(player.steamid, player.timeStamp),
+            pvpScore=player.pvpScore,
+            displayPvpScore=display_score,
+            isPredictedPvpScore=is_predicted,
+            pvpScoreChange=player.pvpScoreChange,
+            pvpStars=player.pvpStars
+        )
     return MatchPWInfo(
         matchId=matchId,
         timestamp=match_detail[0].timeStamp,
@@ -757,22 +858,7 @@ async def get_match_info(matchId: str = Body(..., embed=True), _ = Depends(get_c
         team2Score=match_detail[0].score2,
         team1LegacyScore=match_extra.team1Legacy if match_extra else None,
         team2LegacyScore=match_extra.team2Legacy if match_extra else None,
-        players=[
-            MatchPWPlayerInfo(
-                steamId=player.steamid,
-                nickname=await get_nickname(player.steamid),
-                team=player.team,
-                rating=player.pwRating,
-                we=player.we,
-                kills=player.kill,
-                deaths=player.death,
-                assists=player.assist,
-                legacyScore=await get_legacy_score(player.steamid, player.timeStamp),
-                pvpScore=player.pvpScore,
-                pvpScoreChange=player.pvpScoreChange,
-                pvpStars=player.pvpStars
-            ) for player in match_detail
-        ]
+        players=[await build_player_info(player) for player in match_detail]
     )
 
 class MatchHistoryItem(BaseModel):
@@ -788,7 +874,10 @@ class MatchHistoryItem(BaseModel):
     rating: float = Field(..., description="玩家评分")
     we: float = Field(..., description="玩家 WE 值")
     pvpScore: float = Field(..., description="天梯分数")
+    displayPvpScore: float | None = Field(None, description="用于展示段位的分数，定段赛可能为预测值")
+    isPredictedPvpScore: bool = Field(False, description="展示分数是否为预测值")
     pvpScoreChange: float = Field(..., description="天梯分数变化")
+    pvpStars: int = Field(..., description="天梯星级")
     legacyDiff: float | None = Field(..., description="底蕴分数变化")
 
 class MatchHistoryResponse(BaseModel):
@@ -819,28 +908,33 @@ async def get_match_history(
             return extra_info.team2Legacy - extra_info.team1Legacy
     if not total_count:
         raise HTTPException(status_code=404, detail="No match history found")
+
+    async def build_history_item(record: MatchStatsPW) -> MatchHistoryItem:
+        display_score, is_predicted = await get_display_pvp_score(record)
+        return MatchHistoryItem(
+            matchId=record.mid,
+            timeStamp=record.timeStamp,
+            season=record.seasonId,
+            mode=record.mode,
+            mapName=record.mapName,
+            team=record.team,
+            winTeam=record.winTeam,
+            team1Score=record.score1,
+            team2Score=record.score2,
+            rating=record.pwRating,
+            we=record.we,
+            pvpScore=record.pvpScore,
+            displayPvpScore=display_score,
+            isPredictedPvpScore=is_predicted,
+            pvpScoreChange=record.pvpScoreChange,
+            pvpStars=record.pvpStars,
+            legacyDiff=await get_legacy_diff(record)
+        )
     
     return MatchHistoryResponse(
         totCount=total_count,
         pageSize=20,
-        matches=[
-            MatchHistoryItem(
-                matchId=record.mid,
-                timeStamp=record.timeStamp,
-                season=record.seasonId,
-                mode=record.mode,
-                mapName=record.mapName,
-                team=record.team,
-                winTeam=record.winTeam,
-                team1Score=record.score1,
-                team2Score=record.score2,
-                rating=record.pwRating,
-                we=record.we,
-                pvpScore=record.pvpScore,
-                pvpScoreChange=record.pvpScoreChange,
-                legacyDiff=await get_legacy_diff(record)
-            ) for record in match_records
-        ] if match_records else []
+        matches=[await build_history_item(record) for record in match_records] if match_records else []
     )
 
 class MatchGPPlayerInfo(BaseModel):
