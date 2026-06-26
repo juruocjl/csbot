@@ -367,10 +367,10 @@ def previous_season_id(season: str) -> str | None:
 
 def predict_reset_hidden_score(prev_end_score: int) -> float:
     if prev_end_score < 1600:
-        return 0.529831 * prev_end_score + 557.78
+        return 0.504089 * prev_end_score + 594.34
     if prev_end_score < 2000:
-        return 0.095130 * prev_end_score + 1360.66
-    return 0.173595 * prev_end_score + 1469.43
+        return 0.099434 * prev_end_score + 1351.14
+    return 0.119768 * prev_end_score + 1584.41
 
 async def get_display_pvp_score(player: MatchStatsPW) -> tuple[int | None, bool]:
     if player.pvpScore > 0:
