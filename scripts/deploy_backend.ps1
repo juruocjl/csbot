@@ -4,17 +4,14 @@ param(
     [string]$RemoteDir = "/home/ubuntu/csbot",
     [string]$FrontendDir = "/home/ubuntu/csbot/dist",
     [string]$FrontendBranch = "build-output",
-    [string]$ScreenName = "csbot",
-    [string]$SteamMonitorDir = "/home/ubuntu/steam_monitor_js",
-    [string]$SteamMonitorScreenName = "steam_monitor",
-    [string]$UvPath = "/home/ubuntu/.local/bin/uv",
+    [string]$ServiceName = "csbot",
+    [int]$JournalLines = 80,
     [string]$SshConfig = "$HOME\.ssh\config",
     [string]$IdentityFile = "$HOME\.ssh\id_rsa",
     [string]$KnownHosts = "$HOME\.ssh\known_hosts",
     [switch]$SkipPush,
     [switch]$SkipPull,
     [switch]$SkipFrontend,
-    [switch]$SkipSteamMonitor,
     [switch]$SkipRestart
 )
 
@@ -43,21 +40,6 @@ function Invoke-Remote {
     if ($LASTEXITCODE -ne 0) {
         throw "ssh command failed with exit code $LASTEXITCODE"
     }
-}
-
-function Invoke-RemoteAllowFailure {
-    param([string]$Command)
-
-    $sshArgs = @(
-        "-F", $SshConfig,
-        "-i", $IdentityFile,
-        "-o", "UserKnownHostsFile=$KnownHosts",
-        "-o", "BatchMode=yes",
-        $Remote,
-        $Command
-    )
-    & ssh @sshArgs
-    return $LASTEXITCODE
 }
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -106,20 +88,9 @@ if ($SkipRestart) {
     exit 0
 }
 
-Write-Host "== restart $ScreenName =="
-Invoke-RemoteAllowFailure "screen -S $ScreenName -X quit 2>/dev/null || true" | Out-Null
-Start-Sleep -Seconds 2
-Invoke-Remote "pgrep -f '[b]ot.py' | xargs -r kill -9; screen -wipe >/dev/null 2>&1 || true"
-Invoke-Remote "cd $RemoteDir && screen -dmS $ScreenName bash -lc 'cd $RemoteDir && ENVIRONMENT=prod $UvPath run python bot.py > /tmp/csbot-start.log 2>&1'"
-Start-Sleep -Seconds 10
-Invoke-Remote "echo SCREEN_LIST; screen -ls; echo PIDS; pgrep -af '[b]ot.py' || true; echo LOG_TAIL; tail -80 /tmp/csbot-start.log"
-
-if (-not $SkipSteamMonitor) {
-    Write-Host "== restart $SteamMonitorScreenName =="
-    Invoke-RemoteAllowFailure "screen -S $SteamMonitorScreenName -X quit 2>/dev/null || true" | Out-Null
-    Invoke-Remote "if [ -d $SteamMonitorDir ]; then cd $SteamMonitorDir && screen -dmS $SteamMonitorScreenName bash -lc 'source /home/ubuntu/.nvm/nvm.sh && cd $SteamMonitorDir && bash run.sh >> steam_monitor_js.log 2>&1'; else echo 'steam monitor dir not found: $SteamMonitorDir'; fi"
-    Start-Sleep -Seconds 5
-    Invoke-Remote "echo SCREEN_LIST; screen -ls; echo STEAM_MONITOR; pgrep -af 'steam_monitor|node src/index|npm start' || true; echo STEAM_MONITOR_LOG; tail -40 $SteamMonitorDir/steam_monitor_js.log 2>/dev/null || true"
-}
+Write-Host "== restart systemd service $ServiceName =="
+Invoke-Remote "sudo -n systemctl restart $ServiceName"
+Start-Sleep -Seconds 5
+Invoke-Remote "echo SERVICE_STATUS; sudo -n systemctl --no-pager -l status $ServiceName; echo JOURNAL_TAIL; sudo -n journalctl -u $ServiceName -n $JournalLines --no-pager"
 
 Write-Host "== done =="

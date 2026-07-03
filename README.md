@@ -15,7 +15,7 @@ ssh ubuntu@42.193.244.178
 
 Deployment order:
 
-1. Commit and push backend changes from local `backend`.
+1. Commit and push backend changes from local `csbot`.
 2. Commit and push frontend changes from local `csbot-front`.
 3. Pull backend on the server:
 
@@ -44,5 +44,6 @@ Useful checks:
 
 ```bash
 grep -n "MAJOR_STAGE" ~/csbot/.env.prod
+grep -n "CS_EVENT_GROUP_LIST" ~/csbot/.env.prod
 curl -sI http://127.0.0.1:1234/major-homework | head
 ```

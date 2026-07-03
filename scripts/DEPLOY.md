@@ -3,7 +3,7 @@
 Use the PowerShell deploy script from Windows:
 
 ```powershell
-cd C:\Users\cjlqwq\Documents\csbot\backend
+cd C:\Users\cjlqwq\Documents\csbot\csbot
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy_backend.ps1
 ```
 
@@ -15,15 +15,16 @@ What it does:
 4. Runs `git pull --ff-only origin main` on `ubuntu@cgserver:/home/ubuntu/csbot`.
 5. Pulls frontend build artifacts from `origin/build-output` in
    `/home/ubuntu/csbot/dist`.
-6. Restarts the `csbot` screen session with:
+6. Restarts and verifies the `csbot` systemd service:
 
 ```bash
-ENVIRONMENT=prod /home/ubuntu/.local/bin/uv run python bot.py
+sudo systemctl restart csbot
+sudo systemctl status csbot
+sudo journalctl -u csbot -n 80 --no-pager
 ```
 
-The script intentionally avoids `uv run nb run` because nb-cli scans the project
-directory for virtual environments and can fail on restricted runtime folders
-such as `pg_data`.
+The server's systemd unit runs the bot from `/home/ubuntu/csbot` with
+`ENVIRONMENT=prod` and `/home/ubuntu/.local/bin/uv run python bot.py`.
 
 Useful variants:
 
