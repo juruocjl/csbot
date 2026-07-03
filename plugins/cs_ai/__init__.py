@@ -9,7 +9,7 @@ from nonebot.params import CommandArg
 from nonebot import logger
 
 require("utils")
-from ..utils import async_session_factory
+from ..utils import async_session_factory, get_session
 
 require("models")
 from ..models import AIMemory, AIChatRecord, MatchStatsPW
@@ -35,6 +35,7 @@ import re
 from sqlalchemy import select, func, case
 import time
 import uuid
+import aiohttp
 
 from .config import Config
 
@@ -80,6 +81,107 @@ def _chat_user_filters(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(item) for item in values if QQ_ID_PATTERN.fullmatch(str(item))]
+
+
+def _string_list(values: Any, limit: int = 20) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    for item in values:
+        text = str(item).strip()
+        if text:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+async def tavily_search(
+    query: str,
+    *,
+    max_results: int = 5,
+    search_depth: str = "basic",
+    topic: str = "general",
+    time_range: str | None = None,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> str:
+    if not config.cs_tavily_api_key:
+        return json.dumps({"error": "Tavily API key is not configured."}, ensure_ascii=False)
+
+    query = (query or "").strip()
+    if not query:
+        return json.dumps({"error": "query is required."}, ensure_ascii=False)
+
+    max_results = max(1, min(int(max_results or 5), 8))
+    if search_depth not in {"basic", "advanced"}:
+        search_depth = "basic"
+    if topic not in {"general", "news", "finance"}:
+        topic = "general"
+    if time_range not in {"day", "week", "month", "year"}:
+        time_range = None
+
+    payload: dict[str, Any] = {
+        "query": query,
+        "max_results": max_results,
+        "search_depth": search_depth,
+        "topic": topic,
+        "include_answer": True,
+        "include_raw_content": False,
+        "include_images": False,
+        "include_image_descriptions": False,
+    }
+    if time_range:
+        payload["time_range"] = time_range
+    if include_domains:
+        payload["include_domains"] = include_domains[:20]
+    if exclude_domains:
+        payload["exclude_domains"] = exclude_domains[:20]
+
+    try:
+        session = get_session()
+        async with session.post(
+            "https://api.tavily.com/search",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {config.cs_tavily_api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as response:
+            response_text = await response.text()
+            if response.status >= 400:
+                return json.dumps(
+                    {"error": f"Tavily request failed with status {response.status}.", "detail": response_text[:500]},
+                    ensure_ascii=False,
+                )
+            data = await response.json(content_type=None)
+    except Exception as e:
+        return json.dumps({"error": f"Tavily request failed: {e}"}, ensure_ascii=False)
+
+    records = []
+    for item in data.get("results", [])[:max_results]:
+        content = str(item.get("content") or "")
+        if len(content) > 700:
+            content = content[:697] + "..."
+        records.append(
+            {
+                "title": item.get("title"),
+                "url": item.get("url"),
+                "content": content,
+                "score": item.get("score"),
+                "published_date": item.get("published_date"),
+            }
+        )
+    return json.dumps(
+        {
+            "query": data.get("query", query),
+            "answer": data.get("answer"),
+            "results": records,
+            "response_time": data.get("response_time"),
+        },
+        ensure_ascii=False,
+    )
 
 
 class DataManager:
@@ -555,6 +657,26 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         {
             "type": "function",
             "function": {
+                "name": "tavily_search",
+                "description": "Search the public web through Tavily for current events, external facts, product/news/company information, or anything not available in local CS/group-chat data. Prefer search_depth=basic unless the user asks for deeper research.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Focused natural-language web search query."},
+                        "max_results": {"type": "integer", "default": 5, "description": "Number of results to return, 1-8."},
+                        "search_depth": {"type": "string", "enum": ["basic", "advanced"], "default": "basic"},
+                        "topic": {"type": "string", "enum": ["general", "news", "finance"], "default": "general"},
+                        "time_range": {"type": "string", "enum": ["day", "week", "month", "year"], "description": "Optional recency filter."},
+                        "include_domains": {"type": "array", "items": {"type": "string"}, "default": []},
+                        "exclude_domains": {"type": "array", "items": {"type": "string"}, "default": []},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_chat_spans",
                 "description": "Search indexed group chat retrieval spans. Use this first for questions about recorded chat history. If the user asks for messages sent by a specific person, put that person's QQ id in users instead of relying only on query. The users parameter only accepts QQ id strings, never nicknames.",
                 "parameters": {
@@ -679,6 +801,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     current_datetime_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。严格禁止输出markdown，不要包含链接。每次输出前请自检：若检测到明显markdown格式，必须先重写为纯文本后再输出。请合理分配工具调用次数。")
     await add_event("system", f"当前本地时间：{current_datetime_text}。聊天记录工具的 time_start/time_end 请优先使用本地时间字符串：YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS；不要主动换算成 Unix 秒。若用户说今天、昨天、最近、上周等相对时间，请基于这个当前时间换算后再调用工具。聊天记录问题里，“最近”默认 7 天；未指定时间且问题很泛时先查最近 30 天，结果不足再查全量。")
+    await add_event("system", "如果问题需要公网信息、最新新闻、外部公司/产品/赛事/价格/政策资料，或本地数据库无法回答，请调用 tavily_search。群聊记录问题仍优先调用 search_chat_spans，不要用 Tavily 查群聊内部消息。Tavily 返回结果里包含 URL，最终回答涉及外部事实时应简短说明依据来源。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
     await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，唯一正确格式是 [at:id]（例如 [at:123456]），这样才能被正确转义为at消息。严禁使用 @id、(at:id)、（at:id）、[昵称/id] 或其他任何变体；最终回复前必须自检并把所有错误at格式改成 [at:id]。")
@@ -770,7 +893,19 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 logger.warning(f"tool arg parse fail {fname}: {e}")
                 continue
 
-            if fname == "fetch_user_summary":
+            if fname == "tavily_search":
+                content = await tavily_search(
+                    str(fargs.get("query", "")),
+                    max_results=int(fargs.get("max_results", 5) or 5),
+                    search_depth=str(fargs.get("search_depth", "basic")),
+                    topic=str(fargs.get("topic", "general")),
+                    time_range=fargs.get("time_range"),
+                    include_domains=_string_list(fargs.get("include_domains", [])),
+                    exclude_domains=_string_list(fargs.get("exclude_domains", [])),
+                )
+                await add_event("tool", content, tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_user_summary":
                 name = _pick_name(fargs.get("name", ""))
                 if not name:
                     continue
