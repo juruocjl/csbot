@@ -14,6 +14,10 @@ from ..utils import async_session_factory
 require("models")
 from ..models import AIMemory, AIChatRecord, MatchStatsPW
 
+require("chat_history")
+from ..chat_history import db as chat_history_db
+from ..chat_history import group_id_from_sid
+
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time,valid_rank
@@ -42,6 +46,9 @@ __plugin_meta__ = PluginMetadata(
 )
 
 config = get_plugin_config(Config)
+
+AI_TOOL_BUDGET = 40
+GROUP_RANKING_RESULT_LIMIT = 10
 
 REPORT_KNOWLEDGE_HEADER = "[自动日报周报知识]"
 MARKDOWN_PATTERN = re.compile(
@@ -398,6 +405,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
 
     mem = await db.get_mem(sid)
     recent_report_knowledge = await db.get_recent_report_knowledge(sid, limit=4)
+    chat_group_id = group_id_from_sid(sid)
 
     start_time = time.time()
 
@@ -474,6 +482,112 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_chat_spans",
+                "description": "Search indexed group chat retrieval spans. Use this first for questions about recorded chat history. Users are QQ ids.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "default": ""},
+                        "users": {"type": "array", "items": {"type": "string"}, "default": []},
+                        "time_start": {
+                            "type": "string",
+                            "description": "Start time in local time, for example 2026-07-03 or 2026-07-03 14:30:00.",
+                        },
+                        "time_end": {
+                            "type": "string",
+                            "description": "End time in local time, for example 2026-07-03 or 2026-07-03 23:59:59.",
+                        },
+                        "limit": {"type": "integer", "default": 10},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_span_messages",
+                "description": "Fetch messages covered by one retrieval span returned by search_chat_spans.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "span_id": {"type": "integer"},
+                    },
+                    "required": ["span_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_chunk_messages",
+                "description": "Fetch complete messages for a stable core chunk.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "chunk_id": {"type": "integer"},
+                    },
+                    "required": ["chunk_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_reply_thread",
+                "description": "Follow reply edges for a message. Use it when a result may answer or reply to another message far away.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "integer"},
+                        "direction": {"type": "string", "enum": ["ancestors", "replies", "both"], "default": "both"},
+                        "context": {"type": "integer", "default": 3},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_message_context",
+                "description": "Fetch time-neighbor messages around one message id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "integer"},
+                        "before": {"type": "integer", "default": 8},
+                        "after": {"type": "integer", "default": 8},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_chat_stats",
+                "description": "Get group chat statistics from core messages only. Users are QQ ids.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "default": ""},
+                        "users": {"type": "array", "items": {"type": "string"}, "default": []},
+                        "time_start": {
+                            "type": "string",
+                            "description": "Start time in local time, for example 2026-07-03 or 2026-07-03 14:30:00.",
+                        },
+                        "time_end": {
+                            "type": "string",
+                            "description": "End time in local time, for example 2026-07-03 or 2026-07-03 23:59:59.",
+                        },
+                        "bucket": {"type": "string", "enum": ["day", "hour"], "default": "day"},
+                    },
+                },
+            },
+        },
     ]
 
     messages: list[dict[str, Any]] = []
@@ -491,11 +605,14 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             msg["reasoning_content"] = reasoning_content
         
         messages.append(msg)
-    tool_budget = 20
+    tool_budget = AI_TOOL_BUDGET
+    current_datetime_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。严格禁止输出markdown，不要包含链接。每次输出前请自检：若检测到明显markdown格式，必须先重写为纯文本后再输出。请合理分配工具调用次数。")
+    await add_event("system", f"当前本地时间：{current_datetime_text}。聊天记录工具的 time_start/time_end 请优先使用本地时间字符串：YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS；不要主动换算成 Unix 秒。若用户说今天、昨天、最近、上周等相对时间，请基于这个当前时间换算后再调用工具。聊天记录问题里，“最近”默认 7 天；未指定时间且问题很泛时先查最近 30 天，结果不足再查全量。")
     rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
     await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，唯一正确格式是 [at:id]（例如 [at:123456]），这样才能被正确转义为at消息。严禁使用 @id、(at:id)、（at:id）、[昵称/id] 或其他任何变体；最终回复前必须自检并把所有错误at格式改成 [at:id]。")
+    await add_event("system", "涉及已记录群聊内容的问题，必须先调用 search_chat_spans。若结果涉及 reply，或用户问“谁回答了”“回复哪句”“后来有没有人答”，继续调用 fetch_reply_thread。若命中的 span 信息不足，调用 fetch_span_messages 或 fetch_message_context 展开。聊天记录工具只暴露 QQ 号；需要 at 时输出 [at:qq]。使用聊天记录作答时，请给出时间、QQ号和 message_id 作为依据。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
     if recent_report_knowledge:
@@ -649,15 +766,87 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     else:
                         vals = sorted(vals, key=lambda x: x[1][0], reverse=reverse)
                         avg_val = sum([v[1][0] for v in vals]) / len(vals)
-                        top5 = vals[:5]
-                        res_text = f"{time_type} {rankconfig.title} 平均 {avg_val:.2f}，前五："
+                        ranking_rows = vals[:GROUP_RANKING_RESULT_LIMIT]
+                        res_text = f"{time_type} {rankconfig.title} 平均 {avg_val:.2f}，前{len(ranking_rows)}："
                         top_rows: list[str] = []
-                        for s, (v, _cnt) in top5:
+                        for s, (v, _cnt) in ranking_rows:
                             top_rows.append(f"{await _format_user_label(s)} {v:.2f}")
                         res_text += "，".join(top_rows)
                         await add_event("tool", res_text, tool_call_id=tool_call.id)
                 except Exception as e:
                     await add_event("tool", f"获取排名数据失败: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "search_chat_spans":
+                try:
+                    content = await chat_history_db.search_chat_spans(
+                        chat_group_id,
+                        query=str(fargs.get("query", "")),
+                        users=[str(item) for item in fargs.get("users", [])],
+                        time_start=fargs.get("time_start"),
+                        time_end=fargs.get("time_end"),
+                        limit=int(fargs.get("limit", 10)),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"search_chat_spans failed: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_span_messages":
+                try:
+                    content = await chat_history_db.fetch_span_messages(
+                        chat_group_id,
+                        span_id=int(fargs.get("span_id")),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"fetch_span_messages failed: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_chunk_messages":
+                try:
+                    content = await chat_history_db.fetch_chunk_messages(
+                        chat_group_id,
+                        chunk_id=int(fargs.get("chunk_id")),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"fetch_chunk_messages failed: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_reply_thread":
+                try:
+                    content = await chat_history_db.fetch_reply_thread(
+                        chat_group_id,
+                        message_id=int(fargs.get("message_id")),
+                        direction=str(fargs.get("direction", "both")),
+                        context=int(fargs.get("context", 3)),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"fetch_reply_thread failed: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_message_context":
+                try:
+                    content = await chat_history_db.fetch_message_context(
+                        chat_group_id,
+                        message_id=int(fargs.get("message_id")),
+                        before=int(fargs.get("before", 8)),
+                        after=int(fargs.get("after", 8)),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"fetch_message_context failed: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_chat_stats":
+                try:
+                    content = await chat_history_db.fetch_chat_stats(
+                        chat_group_id,
+                        query=str(fargs.get("query", "")),
+                        users=[str(item) for item in fargs.get("users", [])],
+                        time_start=fargs.get("time_start"),
+                        time_end=fargs.get("time_end"),
+                        bucket=str(fargs.get("bucket", "day")),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"fetch_chat_stats failed: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
 
         if tool_budget <= 0:

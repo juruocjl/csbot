@@ -2,7 +2,7 @@ from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from .config import Config
 
-from sqlalchemy import Integer, Float, String, LargeBinary, Boolean, Text, BigInteger
+from sqlalchemy import Integer, Float, String, LargeBinary, Boolean, Text, BigInteger, Index
 from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass, Mapped, mapped_column
 
 __plugin_meta__ = PluginMetadata(
@@ -336,6 +336,89 @@ class AIChatRecord(Base):
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_calls: Mapped[str | None] = mapped_column(Text, nullable=True)
     reasoning_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+# Indexed group chat messages for AI retrieval.
+class ChatMessageIndex(Base):
+    __tablename__ = "chat_message_index"
+    __table_args__ = (
+        Index("ix_chat_message_group_time", "group_id", "timestamp"),
+        Index("ix_chat_message_group_user_time", "group_id", "user_id", "timestamp"),
+        Index("ix_chat_message_primary_chunk", "primary_chunk_id"),
+    )
+
+    record_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mid: Mapped[int] = mapped_column(Integer, index=True)
+    group_id: Mapped[str] = mapped_column(String(20), index=True)
+    user_id: Mapped[str] = mapped_column(String(20), index=True)
+    timestamp: Mapped[int] = mapped_column(BigInteger)
+    plain_text: Mapped[str] = mapped_column(Text)
+    normalized_text: Mapped[str] = mapped_column(Text)
+    mentioned_uids: Mapped[str] = mapped_column(Text, default="[]")
+    reply_to_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    reply_to_mid: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    has_image: Mapped[bool] = mapped_column(Boolean, default=False)
+    image_summaries: Mapped[str] = mapped_column(Text, default="[]")
+    segment_types: Mapped[str] = mapped_column(Text, default="[]")
+    primary_chunk_id: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+
+
+class ChatChunkIndex(Base):
+    __tablename__ = "chat_chunk_index"
+    __table_args__ = (
+        Index("ix_chat_chunk_group_time", "group_id", "start_time", "end_time"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
+    group_id: Mapped[str] = mapped_column(String(20), index=True)
+    start_time: Mapped[int] = mapped_column(BigInteger)
+    end_time: Mapped[int] = mapped_column(BigInteger)
+    chunk_text: Mapped[str] = mapped_column(Text)
+    keywords: Mapped[str] = mapped_column(Text, default="[]")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    participant_uids: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class ChatChunkMessage(Base):
+    __tablename__ = "chat_chunk_message"
+    __table_args__ = (
+        Index("ix_chat_chunk_message_message", "message_id"),
+    )
+
+    chunk_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role: Mapped[str] = mapped_column(String(20), primary_key=True)
+    message_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ChatRetrievalSpan(Base):
+    __tablename__ = "chat_retrieval_span"
+    __table_args__ = (
+        Index("ix_chat_span_group_time", "group_id", "start_time", "end_time"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, init=False)
+    group_id: Mapped[str] = mapped_column(String(20), index=True)
+    start_time: Mapped[int] = mapped_column(BigInteger)
+    end_time: Mapped[int] = mapped_column(BigInteger)
+    span_text: Mapped[str] = mapped_column(Text)
+    keywords: Mapped[str] = mapped_column(Text, default="[]")
+    participant_uids: Mapped[str] = mapped_column(Text, default="[]")
+    message_ids: Mapped[str] = mapped_column(Text, default="[]")
+    chunk_ids: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class ChatReplyEdge(Base):
+    __tablename__ = "chat_reply_edge"
+    __table_args__ = (
+        Index("ix_chat_reply_to", "to_message_id"),
+        Index("ix_chat_reply_group_time", "group_id", "from_time"),
+    )
+
+    from_message_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    to_message_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[str] = mapped_column(String(20), index=True)
+    from_time: Mapped[int] = mapped_column(BigInteger)
+    to_time: Mapped[int] = mapped_column(BigInteger)
 
 # 用户认证会话
 class AuthSession(Base):

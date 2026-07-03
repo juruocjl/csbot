@@ -16,6 +16,9 @@ from ..utils import local_storage
 require("models")
 from ..models import GroupMsg, ImgCacheInfo, GroupMember
 
+require("chat_history")
+from ..chat_history import db as chat_history_db
+
 
 from .config import Config
 
@@ -58,11 +61,13 @@ plt.rcParams["axes.unicode_minus"] = False
 
 
 class DataManager:
-    async def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes):
+    async def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes) -> int:
         async with async_session_factory() as session:
             async with session.begin():
                 msg = GroupMsg(mid=mid, sid=sid, timestamp=timestamp, data=data_bytes)
                 session.add(msg)
+                await session.flush()
+                return msg.id
 
     async def touch_img_cache(self, hashval: str) -> tuple[bool, bool]:
         async with async_session_factory() as session:
@@ -232,7 +237,8 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         if seg.type == "text":
             msglist.append(["text", seg.data["text"]])
         elif seg.type == "reply":
-            msglist.append(["reply", await db.get_id_by_mid(int(seg.data["id"]))])
+            reply_mid = int(seg.data["id"])
+            msglist.append(["reply", await db.get_id_by_mid(reply_mid), reply_mid])
         elif seg.type == "at":
             msglist.append(["at", seg.data["qq"]])
         elif seg.type == "face":
@@ -263,10 +269,14 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         else:
             msglist.append([seg.type, ])
             mhs = random.randbytes(32).hex()
-    await db.insert_groupmsg(
+    record_id = await db.insert_groupmsg(
         mid, sid, timestamp,
         msgpack.dumps(msglist)
     )
+    try:
+        await chat_history_db.index_group_message(record_id)
+    except Exception as e:
+        logger.warning(f"index chat message {record_id} failed: {e}")
     if mhs is not None:
         return mhs
     return hashlib.sha256(msgpack.dumps(msglist)).hexdigest()

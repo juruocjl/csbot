@@ -16,6 +16,7 @@ import os
 import aiohttp
 import psutil
 import asyncio
+import uuid
 from pathlib import Path
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +48,7 @@ from ..cs_db_upd import db as db_upd
 from ..cs_db_upd import TooFrequentError, LockingError
 require("cs_ai")
 from ..cs_ai import db as db_ai
+from ..cs_ai import ai_ask_main
 
 require("major_hw")
 from ..major_hw import config as major_hw_config
@@ -2131,6 +2133,36 @@ async def get_major_homework_personal(
 class AIRecordIdsResponse(BaseModel):
     isEnd: bool = Field(..., description="是否已结束生成")
     recordIds: list[int] = Field(..., description="此聊天记录编号列表")
+
+class AIAskResponse(BaseModel):
+    chatId: str = Field(..., description="AI chat id")
+
+async def _run_web_ai_chat(chat_id: str, uid: str, sid: str, prompt: str, persona: str | None) -> None:
+    try:
+        await ai_ask_main(uid, sid, persona, prompt, chat_id=chat_id)
+    except Exception as e:
+        logger.exception("web ai chat failed")
+        await db_ai.insert_chat_record(chat_id, "assistant", f"AI请求失败: {e}", None, None, True)
+
+@app.post("/api/ai/ask",
+    response_model=AIAskResponse,
+    summary="创建AI聊天",
+    description="从网页创建一次AI聊天，并返回聊天记录 ID。"
+)
+async def ask_ai_from_web(
+    prompt: str = Body(..., embed=True),
+    persona: str | None = Body(None, embed=True),
+    info: AuthSession = Depends(get_current_user),
+):
+    if not info.user_id or not info.group_id:
+        raise HTTPException(status_code=401, detail="未绑定 QQ 或群")
+    prompt = prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is empty")
+    chat_id = str(uuid.uuid4())
+    sid = f"group_{info.group_id}_{info.user_id}"
+    asyncio.create_task(_run_web_ai_chat(chat_id, info.user_id, sid, prompt, persona))
+    return AIAskResponse(chatId=chat_id)
 
 @app.post("/api/ai/recordids",
     response_model=AIRecordIdsResponse,
