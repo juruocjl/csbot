@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, time as datetime_time
 import asyncio
 import json
+import math
 import re
 from typing import Any, Callable, Iterable
 
@@ -47,6 +48,9 @@ MAX_SPAN_CHARS = 3000
 LIVE_REBUILD_SECONDS = 7200
 STARTUP_REPAIR_SECONDS = 86400
 STARTUP_REPAIR_LIMIT = 5000
+BM25_CANDIDATE_LIMIT = 50000
+BM25_K1 = 1.5
+BM25_B = 0.75
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_\u4e00-\u9fff]+")
 SPACE_RE = re.compile(r"\s+")
@@ -111,6 +115,62 @@ def normalize_text(text: str) -> str:
     text = text.lower()
     text = SPACE_RE.sub(" ", text)
     return " ".join(TOKEN_RE.findall(text))
+
+
+def _bm25_tokens(text: str) -> list[str]:
+    text = _keyword_source_text(text)
+    normalized = normalize_text(text)
+    if not normalized:
+        return []
+    tokens: list[str] = []
+    try:
+        import jieba
+
+        rough_tokens = jieba.lcut(normalized)
+    except Exception:
+        rough_tokens = TOKEN_RE.findall(normalized)
+    for token in rough_tokens:
+        token = token.strip().lower()
+        if not token:
+            continue
+        for part in TOKEN_RE.findall(token):
+            if not _is_noise_keyword(part):
+                tokens.append(part)
+    return tokens
+
+
+def _bm25_rank(query_terms: list[str], documents: list[list[str]]) -> list[float]:
+    if not query_terms or not documents:
+        return [0.0 for _ in documents]
+    doc_count = len(documents)
+    avg_len = sum(len(doc) for doc in documents) / doc_count if doc_count else 0.0
+    if avg_len <= 0:
+        return [0.0 for _ in documents]
+
+    doc_freq: Counter[str] = Counter()
+    query_terms = list(dict.fromkeys(query_terms))
+    query_set = set(query_terms)
+    for doc in documents:
+        doc_freq.update(set(doc) & query_set)
+
+    idf = {
+        term: math.log(1 + (doc_count - doc_freq.get(term, 0) + 0.5) / (doc_freq.get(term, 0) + 0.5))
+        for term in query_terms
+    }
+
+    scores: list[float] = []
+    for doc in documents:
+        term_freq = Counter(doc)
+        doc_len = len(doc)
+        score = 0.0
+        for term in query_terms:
+            freq = term_freq.get(term, 0)
+            if freq <= 0:
+                continue
+            denominator = freq + BM25_K1 * (1 - BM25_B + BM25_B * doc_len / avg_len)
+            score += idf[term] * (freq * (BM25_K1 + 1)) / denominator
+        scores.append(score)
+    return scores
 
 
 def _keyword_source_text(text: str) -> str:
@@ -704,8 +764,7 @@ class DataManager:
         limit = max(1, min(int(limit or 10), 20))
         start_ts = _parse_time_bound(time_start, is_end=False)
         end_ts = _parse_time_bound(time_end, is_end=True)
-        query_norm = normalize_text(query)
-        query_terms = TOKEN_RE.findall(query_norm)
+        query_terms = _bm25_tokens(query)
         async with async_session_factory() as session:
             stmt = select(ChatRetrievalSpan).where(ChatRetrievalSpan.group_id == group_id)
             if start_ts is not None:
@@ -715,25 +774,27 @@ class DataManager:
             if users:
                 user_filters = [ChatRetrievalSpan.participant_uids.like(f'%"{str(user)}"%') for user in users]
                 stmt = stmt.where(or_(*user_filters))
-            if query_terms:
-                like_filters = []
-                for term in query_terms[:8]:
-                    like = f"%{term}%"
-                    like_filters.append(func.lower(ChatRetrievalSpan.span_text).like(like))
-                    like_filters.append(func.lower(ChatRetrievalSpan.keywords).like(like))
-                stmt = stmt.where(or_(*like_filters))
-            result = await session.execute(stmt.order_by(ChatRetrievalSpan.end_time.desc()).limit(limit * 5))
+            result = await session.execute(stmt.order_by(ChatRetrievalSpan.end_time.desc()).limit(BM25_CANDIDATE_LIMIT))
             spans = list(result.scalars().all())
 
-        def score(span: ChatRetrievalSpan) -> int:
-            text = normalize_text(span.span_text)
-            if not query_terms:
-                return 1
-            return sum(text.count(term) for term in query_terms)
+        candidate_count = len(spans)
+        if query_terms:
+            documents = [
+                _bm25_tokens(f"{span.span_text}\n{' '.join(str(word) for word in _json_loads_list(span.keywords))}")
+                for span in spans
+            ]
+            scores = _bm25_rank(query_terms, documents)
+            scored_spans = [
+                (span, score)
+                for span, score in zip(spans, scores)
+                if score > 0
+            ]
+            scored_spans = sorted(scored_spans, key=lambda item: (item[1], item[0].end_time), reverse=True)[:limit]
+        else:
+            scored_spans = [(span, 1.0) for span in spans[:limit]]
 
-        spans = sorted(spans, key=lambda item: (score(item), item.end_time), reverse=True)[:limit]
         records = []
-        for span in spans:
+        for span, bm25_score in scored_spans:
             snippet = _short_text(span.span_text, 700)
             records.append({
                 "span_id": span.id,
@@ -746,10 +807,16 @@ class DataManager:
                 "message_ids": _json_loads_list(span.message_ids),
                 "chunk_ids": _json_loads_list(span.chunk_ids),
                 "keywords": _json_loads_list(span.keywords),
-                "score": score(span),
+                "score": round(bm25_score, 4),
+                "score_type": "bm25" if query_terms else "recency",
                 "snippet": snippet,
             })
-        return _json_dumps({"records": records, "truncated": len(spans) >= limit})
+        return _json_dumps({
+            "records": records,
+            "truncated": candidate_count >= BM25_CANDIDATE_LIMIT,
+            "candidate_count": candidate_count,
+            "query_terms": query_terms,
+        })
 
     async def fetch_span_messages(self, group_id: str, span_id: int) -> str:
         async with async_session_factory() as session:
