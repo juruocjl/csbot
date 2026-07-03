@@ -934,10 +934,7 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
                 if segment["type"] == "text":
                     text += segment['data']['text']
                 elif segment["type"] == "at":
-                    if name := await db_val.get_username(segment['data']['qq']):
-                        text += name
-                    else:
-                        text += "<未找到用户>"
+                    text += f"[at:{segment['data']['qq']}]"
             uid = str(msg2["user_id"])
     except:
         logger.warning("获取回复消息失败")

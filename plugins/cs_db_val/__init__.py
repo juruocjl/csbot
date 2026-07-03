@@ -620,10 +620,7 @@ class DataManager:
             if seg.type == "text":
                 result += seg.data['text']
             elif seg.type == "at":
-                if name := await self.get_username(seg.data['qq']):
-                    result += name
-                else:
-                    result += "<未找到用户>"
+                result += f"[at:{seg.data['qq']}]"
         return result.strip()
 
 db = DataManager()
