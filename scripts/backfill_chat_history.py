@@ -12,7 +12,7 @@ import nonebot
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-nonebot.init(cs_database=os.environ["CS_DATABASE"])
+nonebot.init()
 nonebot.load_plugin(Path("plugins") / "models")
 nonebot.load_plugin(Path("plugins") / "utils")
 nonebot.load_plugin(Path("plugins") / "chat_history")

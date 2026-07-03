@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 import sys
 
@@ -12,7 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-nonebot.init(cs_database=os.environ["CS_DATABASE"])
+nonebot.init()
 nonebot.load_plugin(Path("plugins") / "models")
 
 from plugins.models import (
