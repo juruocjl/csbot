@@ -49,6 +49,11 @@ config = get_plugin_config(Config)
 
 AI_TOOL_BUDGET = 40
 GROUP_RANKING_RESULT_LIMIT = 10
+AI_QA_MEMORY_SUFFIX = ":recent_ai_qa"
+AI_QA_MEMORY_MAX_ENTRIES = 6
+AI_QA_MEMORY_MAX_CHARS = 3000
+AI_QA_QUESTION_MAX_CHARS = 220
+AI_QA_ANSWER_MAX_CHARS = 420
 
 REPORT_KNOWLEDGE_HEADER = "[自动日报周报知识]"
 MARKDOWN_PATTERN = re.compile(
@@ -88,6 +93,10 @@ class DataManager:
         clean_gid = self._process_gid(gid)
         return f"{clean_gid}:report"
 
+    def _ai_qa_memory_gid(self, gid: str) -> str:
+        clean_gid = self._process_gid(gid)
+        return f"{clean_gid}{AI_QA_MEMORY_SUFFIX}"
+
     async def get_mem(self, gid: str) -> str:
         clean_gid = self._process_gid(gid)
 
@@ -106,6 +115,59 @@ class DataManager:
                 new_memory = AIMemory(gid=clean_gid, mem=mem)
                 
                 await session.merge(new_memory)
+
+    def _clip_for_ai_qa_memory(self, text: str, max_len: int) -> str:
+        compact = " ".join((text or "").split())
+        if len(compact) <= max_len:
+            return compact
+        return compact[: max_len - 3] + "..."
+
+    def _parse_ai_qa_memory_entries(self, mem: str) -> list[str]:
+        entries: list[str] = []
+        current: list[str] = []
+        for line in mem.splitlines():
+            if line.startswith("- "):
+                if current:
+                    entries.append("\n".join(current).strip())
+                current = [line]
+            elif current:
+                current.append(line)
+        if current:
+            entries.append("\n".join(current).strip())
+        return [entry for entry in entries if entry]
+
+    async def get_recent_ai_qa_memory(self, gid: str) -> str:
+        qa_gid = self._ai_qa_memory_gid(gid)
+        async with async_session_factory() as session:
+            memory_obj = await session.get(AIMemory, qa_gid)
+            mem = memory_obj.mem if memory_obj else ""
+        if len(mem) <= AI_QA_MEMORY_MAX_CHARS:
+            return mem.strip()
+        return mem[: AI_QA_MEMORY_MAX_CHARS - 3].rstrip() + "..."
+
+    async def remember_ai_qa(self, gid: str, persona: str | None, question: str, answer: str):
+        qa_gid = self._ai_qa_memory_gid(gid)
+        persona_name = persona or "default"
+        now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        question_text = self._clip_for_ai_qa_memory(question, AI_QA_QUESTION_MAX_CHARS)
+        answer_text = self._clip_for_ai_qa_memory(answer, AI_QA_ANSWER_MAX_CHARS)
+        new_entry = f"- {now_text} persona={persona_name}\n  Q: {question_text}\n  A: {answer_text}"
+
+        async with async_session_factory() as session:
+            memory_obj = await session.get(AIMemory, qa_gid)
+            mem = memory_obj.mem if memory_obj else ""
+        entries = [new_entry] + self._parse_ai_qa_memory_entries(mem)
+        entries = entries[:AI_QA_MEMORY_MAX_ENTRIES]
+        merged = "\n".join(entries)
+        while len(merged) > AI_QA_MEMORY_MAX_CHARS and len(entries) > 1:
+            entries.pop()
+            merged = "\n".join(entries)
+        if len(merged) > AI_QA_MEMORY_MAX_CHARS:
+            merged = merged[: AI_QA_MEMORY_MAX_CHARS - 3].rstrip() + "..."
+
+        async with async_session_factory() as session:
+            async with session.begin():
+                await session.merge(AIMemory(gid=qa_gid, mem=merged))
 
     def _split_manual_and_auto_memory(self, mem: str) -> tuple[str, list[str]]:
         if REPORT_KNOWLEDGE_HEADER not in mem:
@@ -411,6 +473,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 label_steamid[user_label] = member_steamid
 
     mem = await db.get_mem(sid)
+    recent_ai_qa_memory = await db.get_recent_ai_qa_memory(sid)
     recent_report_knowledge = await db.get_recent_report_knowledge(sid, limit=4)
     chat_group_id = group_id_from_sid(sid)
 
@@ -624,6 +687,17 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", "聊天记录按人检索规则：如果用户问的是“某人发的消息”“某人什么时候说/去/做了什么”“某人有没有提到某事”，必须把这个人的 QQ 号放进 users 来限定发言人，query 只放要查的内容关键词。不要只把这个人的昵称、别名或 QQ 号塞进 query。只有当问题是“谁提到了某事”“哪条消息里出现了某人/某词”，才主要用 query 检索消息内容。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
+    if recent_ai_qa_memory:
+        await add_event(
+            "system",
+            (
+                "最近几次 AI 问答记录（按时间倒序）：\n"
+                f"{recent_ai_qa_memory}\n"
+                "这些记录来自不同 persona。persona 只表示当时回答使用的角色/风格，"
+                "除非用户本轮明确选择同一 persona，否则不要模仿历史回答的语气、口癖或人设；"
+                "只参考其中的用户问题、结论、事实和已经查到的信息。"
+            ),
+        )
     if recent_report_knowledge:
         await add_event("system", f"最近自动日报/周报知识（按时间倒序）：\n{recent_report_knowledge}\n请在回答时参考这些近期趋势。")
 
@@ -900,6 +974,10 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             ]
     final_reasoning = getattr(final_msg, "reasoning_content", None)
     await add_event("assistant", output, reasoning_content=final_reasoning, is_end=True)
+    try:
+        await db.remember_ai_qa(sid, persona, text, output)
+    except Exception as e:
+        logger.warning(f"remember recent ai qa failed: {e}")
     
     end_time = time.time()
     duration = int(end_time - start_time)
