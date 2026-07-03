@@ -7,32 +7,32 @@
 
 ## Deploy
 
-Use the public IP SSH target when deploying:
+Use the backend deploy runbook in [`scripts/DEPLOY.md`](scripts/DEPLOY.md).
+
+The server SSH target is:
 
 ```bash
 ssh ubuntu@42.193.244.178
 ```
 
-Deployment order:
+Short version:
 
-1. Commit and push backend changes from local `csbot`.
-2. Commit and push frontend changes from local `csbot-front`.
-3. Pull backend on the server:
+1. Commit backend changes from local `csbot`.
+2. If frontend changed, commit and push `csbot-front/main`, then wait for GitHub Actions to update `build-output`.
+3. Deploy backend from Windows:
 
-```bash
-cd ~/csbot
-git pull --ff-only
+```powershell
+cd C:\Users\cjlqwq\Documents\csbot\csbot
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy_backend.ps1
 ```
 
-4. Pull the built frontend output on the server after GitHub Actions finishes:
+Backend-only deploy:
 
-```bash
-cd ~/csbot/dist
-git fetch origin build-output
-git pull --ff-only
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy_backend.ps1 -SkipFrontend
 ```
 
-5. Restart and verify the bot with systemd. Do not use `screen` for csbot anymore.
+The bot is managed by systemd. Do not use `screen` for csbot anymore.
 
 ```bash
 sudo systemctl restart csbot
