@@ -62,12 +62,24 @@ MARKDOWN_PATTERN = re.compile(
     r"(^\s{0,3}---+\s*$)",
     re.MULTILINE,
 )
+MEMORY_QQ_PARENS_PATTERN = re.compile(r"(?<!\[at:)[\(（](\d{5,12})[\)）]")
+QQ_ID_PATTERN = re.compile(r"^\d{5,12}$")
 
 
 def _contains_markdown(text: str) -> bool:
     if not text:
         return False
     return bool(MARKDOWN_PATTERN.search(text))
+
+
+def _normalize_memory_mentions(text: str) -> str:
+    return MEMORY_QQ_PARENS_PATTERN.sub(r"([at:\1])", text)
+
+
+def _chat_user_filters(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(item) for item in values if QQ_ID_PATTERN.fullmatch(str(item))]
 
 
 class DataManager:
@@ -404,6 +416,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 label_steamid[user_label] = member_steamid
 
     mem = await db.get_mem(sid)
+    normalized_mem = _normalize_memory_mentions(mem)
     recent_report_knowledge = await db.get_recent_report_knowledge(sid, limit=4)
     chat_group_id = group_id_from_sid(sid)
 
@@ -613,9 +626,9 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，唯一正确格式是 [at:id]（例如 [at:123456]），这样才能被正确转义为at消息。严禁使用 @id、(at:id)、（at:id）、[昵称/id] 或其他任何变体；最终回复前必须自检并把所有错误at格式改成 [at:id]。")
     await add_event("system", "涉及已记录群聊内容的问题，必须先调用 search_chat_spans。若结果涉及 reply，或用户问“谁回答了”“回复哪句”“后来有没有人答”，继续调用 fetch_reply_thread。若命中的 span 信息不足，调用 fetch_span_messages 或 fetch_message_context 展开。聊天记录工具只暴露 QQ 号；需要 at 时输出 [at:qq]。使用聊天记录作答时，请给出时间、QQ号和 message_id 作为依据。")
-    await add_event("system", "聊天记录检索的重要规则：search_chat_spans 和 fetch_chat_stats 的 users 参数只能填写 QQ 号字符串，绝不能填写昵称、群名片、Steam 名或自然语言称呼。若用户用昵称问某个人，先从可用用户列表中找到对应的 [at:QQ号]，再把 QQ 号放进 users；如果无法确定 QQ 号，就不要传 users，改用 query 关键词检索并在最终回答中说明未能确定具体 QQ 号。")
+    await add_event("system", "聊天记录检索的重要规则：search_chat_spans 和 fetch_chat_stats 的 users 参数只能填写 QQ 号字符串，绝不能填写昵称、群名片、Steam 名或自然语言称呼。若用户用昵称或记忆里的别名问某个人，先从可用用户列表或已有记忆中找到对应的 [at:QQ号]，再把 QQ 号放进 users；如果无法确定 QQ 号，就不要传 users，改用 query 关键词检索并在最终回答中说明未能确定具体 QQ 号。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
-    await add_event("user", f"已有记忆：{mem}")
+    await add_event("user", f"已有记忆：{normalized_mem}")
     if recent_report_knowledge:
         await add_event("system", f"最近自动日报/周报知识（按时间倒序）：\n{recent_report_knowledge}\n请在回答时参考这些近期趋势。")
 
@@ -782,7 +795,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     content = await chat_history_db.search_chat_spans(
                         chat_group_id,
                         query=str(fargs.get("query", "")),
-                        users=[str(item) for item in fargs.get("users", [])],
+                        users=_chat_user_filters(fargs.get("users", [])),
                         time_start=fargs.get("time_start"),
                         time_end=fargs.get("time_end"),
                         limit=int(fargs.get("limit", 10)),
@@ -840,7 +853,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     content = await chat_history_db.fetch_chat_stats(
                         chat_group_id,
                         query=str(fargs.get("query", "")),
-                        users=[str(item) for item in fargs.get("users", [])],
+                        users=_chat_user_filters(fargs.get("users", [])),
                         time_start=fargs.get("time_start"),
                         time_end=fargs.get("time_end"),
                         bucket=str(fargs.get("bucket", "day")),
