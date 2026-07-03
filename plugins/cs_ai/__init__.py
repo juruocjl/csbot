@@ -62,7 +62,6 @@ MARKDOWN_PATTERN = re.compile(
     r"(^\s{0,3}---+\s*$)",
     re.MULTILINE,
 )
-MEMORY_QQ_PARENS_PATTERN = re.compile(r"(?<!\[at:)[\(（](\d{5,12})[\)）]")
 QQ_ID_PATTERN = re.compile(r"^\d{5,12}$")
 
 
@@ -70,10 +69,6 @@ def _contains_markdown(text: str) -> bool:
     if not text:
         return False
     return bool(MARKDOWN_PATTERN.search(text))
-
-
-def _normalize_memory_mentions(text: str) -> str:
-    return MEMORY_QQ_PARENS_PATTERN.sub(r"([at:\1])", text)
 
 
 def _chat_user_filters(values: Any) -> list[str]:
@@ -416,7 +411,6 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 label_steamid[user_label] = member_steamid
 
     mem = await db.get_mem(sid)
-    normalized_mem = _normalize_memory_mentions(mem)
     recent_report_knowledge = await db.get_recent_report_knowledge(sid, limit=4)
     chat_group_id = group_id_from_sid(sid)
 
@@ -629,7 +623,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", "聊天记录检索的重要规则：search_chat_spans 和 fetch_chat_stats 的 users 参数只能填写 QQ 号字符串，绝不能填写昵称、群名片、Steam 名或自然语言称呼。若用户用昵称或记忆里的别名问某个人，先从可用用户列表或已有记忆中找到对应的 [at:QQ号]，再把 QQ 号放进 users；如果无法确定 QQ 号，就不要传 users，改用 query 关键词检索并在最终回答中说明未能确定具体 QQ 号。")
     await add_event("system", "聊天记录按人检索规则：如果用户问的是“某人发的消息”“某人什么时候说/去/做了什么”“某人有没有提到某事”，必须把这个人的 QQ 号放进 users 来限定发言人，query 只放要查的内容关键词。不要只把这个人的昵称、别名或 QQ 号塞进 query。只有当问题是“谁提到了某事”“哪条消息里出现了某人/某词”，才主要用 query 检索消息内容。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
-    await add_event("user", f"已有记忆：{normalized_mem}")
+    await add_event("user", f"已有记忆：{mem}")
     if recent_report_knowledge:
         await add_event("system", f"最近自动日报/周报知识（按时间倒序）：\n{recent_report_knowledge}\n请在回答时参考这些近期趋势。")
 
@@ -1029,7 +1023,7 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
             parts.append(seg.data["text"])
         elif seg.type == "at":
             qq = str(seg.data["qq"])
-            parts.append(f"@{qq}")
+            parts.append(f"[at:{qq}]")
     text = "".join(parts)
     text = text.strip()
     if not text:
@@ -1042,10 +1036,10 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
             api_key=config.cs_ai_api_key,
             base_url=config.cs_ai_url,
         )
-        msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": "你需要管理需要记忆的内容，接下来会先给你当前记忆的内容，接着用户会给出新的内容，请整理输出记忆内容。由于记忆长度有限，请尽可能使用简单的语言，把更重要的信息放在靠前的位置。请不要输出无关内容，你的输出应当只包含需要记忆的内容。特别注意：涉及成员时必须优先记忆并保留QQ号，不要只记录昵称。"}]
+        msgs: list[ChatCompletionMessageParam] = [{"role": "system", "content": "你需要管理需要记忆的内容。接下来会先给你当前记忆，再给你用户新增的内容，请整理并只输出最终记忆内容。记忆长度有限，请用简短语言，把重要信息放在靠前位置。涉及群成员时必须保留 QQ 号，并统一写成 [at:QQ号] 格式，例如：猪=冰阔落加白糖[at:3550667442]。不要使用 @QQ、(QQ)、（QQ）、昵称(QQ) 或只写昵称。已有记忆里如果存在旧格式 QQ，也要改写为 [at:QQ号]。"}]
         mem = await db.get_mem(sid)
-        msgs.append({"role": "user", "content": f"这是当前的记忆内容：{mem}"})
-        msgs.append({"role": "user", "content": f"这是要加入的内容"})
+        msgs.append({"role": "user", "content": f"当前记忆内容：{mem}"})
+        msgs.append({"role": "user", "content": "新增内容："})
         msgs.append({"role": "user", "content": text})
         print(msgs)
         response = await client.chat.completions.create(
