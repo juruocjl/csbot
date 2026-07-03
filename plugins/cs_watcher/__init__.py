@@ -63,6 +63,12 @@ class DataManager:
                 self.queue_set.add(steamid)
                 self.update_queue.put_nowait(steamid)
 
+    async def retry_queue_after(self, steamid: str, delay: int):
+        await asyncio.sleep(max(1, delay))
+        async with self.queue_lock:
+            if steamid in self.queue_set:
+                self.update_queue.put_nowait(steamid)
+
     def get_last_game_state(self, steamid: str) -> str:
         return self.last_game_state.get(steamid, "")
 
@@ -76,6 +82,7 @@ class DataManager:
                 # 阻塞等待队列有数据
                 steamid = await self.update_queue.get()
                 is_locking_error = False
+                is_retry_later = False
                 try:
                     logger.info(f"开始更新玩家数据: {steamid}")
                     nickname, pwlist, gplist = await db_upd.update_stats(steamid)
@@ -90,11 +97,13 @@ class DataManager:
                     await asyncio.sleep(1)
                 except TooFrequentError as e:
                     logger.warning(f"更新过于频繁，跳过: {steamid}, {e}")
+                    is_retry_later = True
+                    asyncio.create_task(self.retry_queue_after(steamid, e.wait_time + 2))
                 except Exception as e:
                     logger.error(f"更新玩家数据失败: {steamid}, {e}")
                 
                 # 成功或失败（非 LockingError）都从队列集合中移除
-                if not is_locking_error:
+                if not is_locking_error and not is_retry_later:
                     async with self.queue_lock:
                         self.queue_set.discard(steamid)
             except Exception as e:
