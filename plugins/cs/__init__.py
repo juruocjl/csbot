@@ -50,6 +50,19 @@ __plugin_meta__ = PluginMetadata(
 )
 
 
+def parse_target_args(args: Message) -> tuple[list[str], list[str]]:
+    target_uids: list[str] = []
+    text_tokens: list[str] = []
+    for seg in args:
+        if seg.type == "at":
+            qq = seg.data.get("qq")
+            if qq is not None and str(qq) != "all":
+                target_uids.append(str(qq))
+        elif seg.type == "text":
+            text_tokens.extend(str(seg.data.get("text", "")).split())
+    return target_uids, text_tokens
+
+
 bind = on_command("绑定", priority=10, block=True)
 
 unbind = on_command("解绑", priority=10, block=True)
@@ -120,7 +133,14 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
     
     print("user: %s\nsession: %s\n" % (uid, sid))
     steamid = await db_val.get_steamid(uid)
-    if user := await db_val.work_msg(args):
+    target_uids, text_tokens = parse_target_args(args)
+    if target_uids:
+        target_uid = target_uids[0]
+        steamid = await db_val.get_steamid(target_uid)
+        if not steamid:
+            await show.finish("该用户未绑定")
+    elif text_tokens:
+        user = " ".join(text_tokens)
         print(user)
         if result := await db_val.search_user(user):
             await show.send(f"找到用户 {result.name}")
@@ -172,14 +192,7 @@ async def rank_function(message: GroupMessageEvent, args: Message = CommandArg()
 async def scoretrend_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     time_type = "本赛季"
-    target_uids: list[str] = []
-    text_tokens: list[str] = []
-
-    for seg in args:
-        if seg.type == "at":
-            target_uids.append(str(seg.data["qq"]))
-        elif seg.type == "text":
-            text_tokens.extend(seg.data["text"].split())
+    target_uids, text_tokens = parse_target_args(args)
 
     if text_tokens:
         if text_tokens[0] in valid_time:
@@ -253,13 +266,25 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
 
-    text = await db_val.work_msg(args)
+    target_uids, text_tokens = parse_target_args(args)
 
     steamid = await db_val.get_steamid(uid)
     time_type = "全部"
 
-    if text:
-        cmd = text.split()
+    if target_uids:
+        target_uid = target_uids[0]
+        steamid = await db_val.get_steamid(target_uid)
+        if not steamid:
+            await matches.finish("该用户未绑定")
+        if len(text_tokens) > 1:
+            await matches.finish(f"参数错误。用法：/记录 (@人或用户昵称) (时间)\n可用时间：{valid_time}")
+        if text_tokens:
+            if text_tokens[0] not in valid_time:
+                await matches.finish("非法的时间")
+            else:
+                time_type = text_tokens[0]
+    elif text_tokens:
+        cmd = text_tokens
         if len(cmd) == 1:
             if cmd[0] not in valid_time:
                 if result := await db_val.search_user(cmd[0]):
@@ -309,13 +334,13 @@ async def updateall_function():
 @matchteammate.handle()
 async def matchteammate_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
-    for seg in message.get_message():
-        if seg.type == "at":
-            uid = seg.data["qq"]
+    target_uids, text_tokens = parse_target_args(args)
+    if target_uids:
+        uid = target_uids[0]
     steamid = await db_val.get_steamid(uid)
     if not steamid:
         await matchteammate.finish("该用户未绑定")
-    time_type = args.extract_plain_text().strip()
+    time_type = " ".join(text_tokens).strip()
     if not time_type:
         time_type = "本赛季"
     if time_type not in valid_time:
