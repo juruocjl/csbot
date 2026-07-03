@@ -66,6 +66,23 @@ KEYWORD_STOP_WORDS = {
     "at",
     "image",
     "face",
+    "什么",
+    "时候",
+    "怎么",
+    "为什么",
+    "哪个",
+    "哪里",
+    "有没有",
+    "是不是",
+    "多少",
+    "几号",
+    "几点",
+    "如何",
+    "是否",
+    "这个",
+    "那个",
+    "一下",
+    "一个",
 }
 ProgressCallback = Callable[[str, int, int | None], None]
 
