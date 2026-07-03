@@ -486,7 +486,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             "type": "function",
             "function": {
                 "name": "search_chat_spans",
-                "description": "Search indexed group chat retrieval spans. Use this first for questions about recorded chat history. Users are QQ ids.",
+                "description": "Search indexed group chat retrieval spans. Use this first for questions about recorded chat history. The users parameter only accepts QQ id strings, never nicknames.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -569,7 +569,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             "type": "function",
             "function": {
                 "name": "fetch_chat_stats",
-                "description": "Get group chat statistics from core messages only. Users are QQ ids.",
+                "description": "Get group chat statistics from core messages only. The users parameter only accepts QQ id strings, never nicknames.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -613,6 +613,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，唯一正确格式是 [at:id]（例如 [at:123456]），这样才能被正确转义为at消息。严禁使用 @id、(at:id)、（at:id）、[昵称/id] 或其他任何变体；最终回复前必须自检并把所有错误at格式改成 [at:id]。")
     await add_event("system", "涉及已记录群聊内容的问题，必须先调用 search_chat_spans。若结果涉及 reply，或用户问“谁回答了”“回复哪句”“后来有没有人答”，继续调用 fetch_reply_thread。若命中的 span 信息不足，调用 fetch_span_messages 或 fetch_message_context 展开。聊天记录工具只暴露 QQ 号；需要 at 时输出 [at:qq]。使用聊天记录作答时，请给出时间、QQ号和 message_id 作为依据。")
+    await add_event("system", "聊天记录检索的重要规则：search_chat_spans 和 fetch_chat_stats 的 users 参数只能填写 QQ 号字符串，绝不能填写昵称、群名片、Steam 名或自然语言称呼。若用户用昵称问某个人，先从可用用户列表中找到对应的 [at:QQ号]，再把 QQ 号放进 users；如果无法确定 QQ 号，就不要传 users，改用 query 关键词检索并在最终回答中说明未能确定具体 QQ 号。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     await add_event("user", f"已有记忆：{mem}")
     if recent_report_knowledge:
