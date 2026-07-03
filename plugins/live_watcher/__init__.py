@@ -86,6 +86,9 @@ async def live_watcher():
     for liveid in config.live_watch_list:
         try:
             live_status = await get_live_status(liveid)
+        except asyncio.CancelledError:
+            logger.info("[live_watcher] cancelled")
+            return
         except Exception:
             logger.exception(f"[live_watcher] failed to fetch live status: {liveid}")
             continue
