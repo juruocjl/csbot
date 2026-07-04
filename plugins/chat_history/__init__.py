@@ -270,7 +270,6 @@ def _is_good_lexicon_term(term: str) -> bool:
 def _lexicon_candidates_from_text(text: str) -> set[str]:
     source = _keyword_source_text(text)
     normalized = normalize_text(source)
-    compact = normalized.replace(" ", "")
     candidates: set[str] = set()
     for term in ALNUM_RUN_RE.findall(normalized):
         term = term.lower()
@@ -284,11 +283,6 @@ def _lexicon_candidates_from_text(text: str) -> set[str]:
         rough_tokens = TOKEN_RE.findall(normalized)
     for token in rough_tokens:
         for term in TOKEN_RE.findall(token.lower()):
-            if _is_good_lexicon_term(term):
-                candidates.add(term)
-    for run in CJK_RUN_RE.findall(compact):
-        for idx in range(len(run) - 1):
-            term = run[idx : idx + 2]
             if _is_good_lexicon_term(term):
                 candidates.add(term)
     return candidates
