@@ -69,14 +69,6 @@ MARKDOWN_PATTERN = re.compile(
     re.MULTILINE,
 )
 QQ_ID_PATTERN = re.compile(r"^\d{5,12}$")
-CHAT_HISTORY_QUERY_PATTERN = re.compile(
-    r"(聊天|群里|群聊|记录|历史|刚才|刚刚|前面|上面|之前|以前|过去|"
-    r"讨论|说过|提到|回复|回答|问过|谁说|谁问|谁答|后来|"
-    r"什么时候|哪天|几号|几点|有没有人|有没有.*说|有没有.*提)"
-)
-CHAT_HISTORY_PERSON_PATTERN = re.compile(
-    r"(\[at:\d+\]|@|我|他|她|谁).*(什么时候|哪天|几号|说|问|答|回复|提到|去|来|买|发|做)"
-)
 
 
 def _contains_markdown(text: str) -> bool:
@@ -89,17 +81,6 @@ def _chat_user_filters(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(item) for item in values if QQ_ID_PATTERN.fullmatch(str(item))]
-
-
-def _should_force_chat_search(text: str) -> bool:
-    compact = " ".join((text or "").split())
-    if not compact:
-        return False
-    if CHAT_HISTORY_QUERY_PATTERN.search(compact):
-        return True
-    if len(compact) <= 60 and CHAT_HISTORY_PERSON_PATTERN.search(compact):
-        return True
-    return False
 
 
 def _string_list(values: Any, limit: int = 20) -> list[str]:
@@ -697,7 +678,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             "type": "function",
             "function": {
                 "name": "search_chat_spans",
-                "description": "Search indexed group chat retrieval spans. Use this first for questions about recorded chat history, earlier/current group discussion, who said something, when someone did/said something, or whether something was mentioned. Current discussion context is only a hint for query construction, not evidence for the final answer. If the user asks for messages sent by a specific person, put that person's QQ id in users instead of relying only on query. The users parameter only accepts QQ id strings, never nicknames.",
+                "description": "Search indexed group chat retrieval spans. Use this first when the user is asking about recorded group-chat content, earlier/current group discussion, who said something in chat, when someone said/did something according to chat, or whether something was mentioned in chat. Current discussion context is only a hint for query construction, not evidence for the final answer. If the user asks for messages sent by a specific person, put that person's QQ id in users instead of relying only on query. The users parameter only accepts QQ id strings, never nicknames.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -825,7 +806,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，唯一正确格式是 [at:id]（例如 [at:123456]），这样才能被正确转义为at消息。严禁使用 @id、(at:id)、（at:id）、[昵称/id] 或其他任何变体；最终回复前必须自检并把所有错误at格式改成 [at:id]。")
     await add_event("system", "涉及已记录群聊内容的问题，必须先调用 search_chat_spans。若结果涉及 reply，或用户问“谁回答了”“回复哪句”“后来有没有人答”，继续调用 fetch_reply_thread。若命中的 span 信息不足，调用 fetch_span_messages 或 fetch_message_context 展开。聊天记录工具只暴露 QQ 号；需要 at 时输出 [at:qq]。使用聊天记录作答时，请给出时间、QQ号和 message_id 作为依据。")
-    await add_event("system", "群聊现场提问规则：用户经常是在群里讨论某个话题后再问 AI。只要问题是在问“刚才/之前/群里讨论的事实、某人什么时候/有没有/说过什么、谁回答了什么、后来有没有结论”，都应视为聊天记录检索任务，而不是凭当前对话上下文直接回答。当前用户消息、最近 AI 问答记忆、当前讨论话题只能用于提炼 query、识别 QQ 号和时间范围；不能作为最终答案证据。最终答案必须基于 search_chat_spans/fetch_* 返回的消息证据。")
+    await add_event("system", "群聊现场提问判断示例：用户常常是在群里讨论某个话题后再问 AI。若问题看起来是在追问群聊里的事实、发言、结论或某个人在群里说过什么，应先用 search_chat_spans 检索，而不是直接凭当前对话上下文回答。例如：“刚才他们说的结论是什么”“谁回答了这个问题”“[at:123]什么时候说要去美国”“有人提过换显卡吗”“前面讨论的比赛是哪场”。若问题是在问外部公开事实、赛事时间、价格、政策、产品信息或 CS 数据，则不要因为出现“什么时候/有没有”等词就默认查群聊，应选择 tavily_search 或 CS 数据工具。例如：“major 什么时候开始”“今天有什么比赛”“查一下我的本赛季 rating”。当前用户消息、最近 AI 问答记忆、当前讨论话题只能用于提炼 query、识别 QQ 号和时间范围；不能作为聊天记录类最终答案证据。")
     await add_event("system", "聊天记录检索的重要规则：search_chat_spans 和 fetch_chat_stats 的 users 参数只能填写 QQ 号字符串，绝不能填写昵称、群名片、Steam 名或自然语言称呼。若用户用昵称或记忆里的别名问某个人，先从可用用户列表或已有记忆中找到对应的 [at:QQ号]，再把 QQ 号放进 users；如果无法确定 QQ 号，就不要传 users，改用 query 关键词检索并在最终回答中说明未能确定具体 QQ 号。")
     await add_event("system", "聊天记录按人检索规则：如果用户问的是“某人发的消息”“某人什么时候说/去/做了什么”“某人有没有提到某事”，必须把这个人的 QQ 号放进 users 来限定发言人，query 只放要查的内容关键词。不要只把这个人的昵称、别名或 QQ 号塞进 query。只有当问题是“谁提到了某事”“哪条消息里出现了某人/某词”，才主要用 query 检索消息内容。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
@@ -877,14 +858,13 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("user", text)
 
     tools_param = cast(Any, tools)
-    force_chat_search = _should_force_chat_search(text)
     
     # 构建 API 参数（messages 是引用，会自动更新）
     api_params: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
         "tools": tools_param,
-        "tool_choice": {"type": "function", "function": {"name": "search_chat_spans"}} if force_chat_search else "auto",
+        "tool_choice": "auto",
     }
     
     # 如果配置启用思考模式，通过 extra_body 添加 thinking 参数
@@ -892,8 +872,6 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         api_params["extra_body"] = {"thinking": {"type": "enabled", "budget_tokens": 10000}}
     
     response = await client.chat.completions.create(**api_params)
-    if force_chat_search:
-        api_params["tool_choice"] = "auto"
 
     while tool_budget > 0 and response.choices[0].message.tool_calls:
         msg_with_calls = response.choices[0].message
