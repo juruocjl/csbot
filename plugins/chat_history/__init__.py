@@ -55,6 +55,7 @@ BM25_B = 0.75
 LEXICON_MAX_TERMS = 2000
 LEXICON_MIN_FREQ = 3
 LEXICON_MIN_DOC_FREQ = 2
+LEXICON_MAX_DOC_FREQ_RATIO = 0.02
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_\u4e00-\u9fff]+")
 CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
@@ -72,6 +73,9 @@ KEYWORD_STOP_WORDS = {
     "at",
     "image",
     "face",
+    "动画",
+    "表情",
+    "动画表情",
     "什么",
     "时候",
     "怎么",
@@ -95,6 +99,11 @@ KEYWORD_STOP_WORDS = {
     "一个",
     "了吗",
     "了么",
+    "感觉",
+    "真是",
+    "但是",
+    "为什",
+    "怎么这",
 }
 ProgressCallback = Callable[[str, int, int | None], None]
 
@@ -277,9 +286,10 @@ def _lexicon_candidates_from_text(text: str) -> set[str]:
     return candidates
 
 
-def _score_lexicon_term(term: str, freq: int, doc_freq: int) -> float:
+def _score_lexicon_term(term: str, freq: int, doc_freq: int, total_docs: int) -> float:
     length_bonus = min(len(term), 6) / 2
-    return float(freq) * (1.0 + math.log1p(doc_freq)) * length_bonus
+    idf = math.log(1.0 + (max(total_docs, 1) + 1) / (doc_freq + 1))
+    return float(freq) * idf * length_bonus
 
 
 def extract_keywords(text: str, limit: int = 12) -> list[str]:
@@ -796,14 +806,25 @@ class DataManager:
                 doc_freq[term] += row.doc_freq
                 last_seen[term] = max(last_seen.get(term, 0), row.last_seen)
 
+        total_docs_for_score = max(total_docs, max(doc_freq.values(), default=0))
+        max_enabled_doc_freq = total_docs_for_score
+        if total_docs_for_score >= 1000:
+            max_enabled_doc_freq = max(LEXICON_MIN_DOC_FREQ, int(total_docs_for_score * LEXICON_MAX_DOC_FREQ_RATIO))
+
         scored = [
-            (term, term_freq[term], doc_freq[term], _score_lexicon_term(term, term_freq[term], doc_freq[term]))
+            (term, term_freq[term], doc_freq[term], _score_lexicon_term(term, term_freq[term], doc_freq[term], total_docs_for_score))
             for term in term_freq
             if _is_good_lexicon_term(term)
         ]
         scored.sort(key=lambda item: (item[3], item[1], len(item[0])), reverse=True)
         keep = scored[: LEXICON_MAX_TERMS * 2]
-        enabled_terms = {term for term, freq, docs, _score in scored[:LEXICON_MAX_TERMS] if freq >= LEXICON_MIN_FREQ and docs >= LEXICON_MIN_DOC_FREQ}
+        enabled_terms = {
+            term
+            for term, freq, docs, _score in scored[:LEXICON_MAX_TERMS]
+            if freq >= LEXICON_MIN_FREQ
+            and docs >= LEXICON_MIN_DOC_FREQ
+            and docs <= max_enabled_doc_freq
+        }
 
         async with async_session_factory() as session:
             async with session.begin():
