@@ -276,13 +276,21 @@ def _lexicon_candidates_from_text(text: str) -> set[str]:
         term = term.lower()
         if _is_good_lexicon_term(term):
             candidates.add(term)
+    try:
+        import jieba
+
+        rough_tokens = jieba.lcut(normalized)
+    except Exception:
+        rough_tokens = TOKEN_RE.findall(normalized)
+    for token in rough_tokens:
+        for term in TOKEN_RE.findall(token.lower()):
+            if _is_good_lexicon_term(term):
+                candidates.add(term)
     for run in CJK_RUN_RE.findall(compact):
-        max_n = min(5, len(run))
-        for n in range(2, max_n + 1):
-            for idx in range(len(run) - n + 1):
-                term = run[idx : idx + n]
-                if _is_good_lexicon_term(term):
-                    candidates.add(term)
+        for idx in range(len(run) - 1):
+            term = run[idx : idx + 2]
+            if _is_good_lexicon_term(term):
+                candidates.add(term)
     return candidates
 
 
