@@ -776,6 +776,7 @@ class DataManager:
         users: list[str] | None = None,
         time_start: int | str | None = None,
         time_end: int | str | None = None,
+        strict_time_end: bool = False,
         limit: int = 10,
     ) -> str:
         limit = max(1, min(int(limit or 10), 20))
@@ -787,7 +788,10 @@ class DataManager:
             if start_ts is not None:
                 stmt = stmt.where(ChatRetrievalSpan.end_time >= start_ts)
             if end_ts is not None:
-                stmt = stmt.where(ChatRetrievalSpan.start_time <= end_ts)
+                if strict_time_end:
+                    stmt = stmt.where(ChatRetrievalSpan.end_time <= end_ts)
+                else:
+                    stmt = stmt.where(ChatRetrievalSpan.start_time <= end_ts)
             if users:
                 user_filters = [ChatRetrievalSpan.participant_uids.like(f'%"{str(user)}"%') for user in users]
                 stmt = stmt.where(or_(*user_filters))
@@ -833,6 +837,7 @@ class DataManager:
             "truncated": candidate_count >= BM25_CANDIDATE_LIMIT,
             "candidate_count": candidate_count,
             "query_terms": query_terms,
+            "strict_time_end": bool(strict_time_end),
         })
 
     async def fetch_span_messages(self, group_id: str, span_id: int) -> str:

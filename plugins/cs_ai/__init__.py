@@ -692,6 +692,11 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                             "type": "string",
                             "description": "End time in local time, for example 2026-07-03 or 2026-07-03 23:59:59.",
                         },
+                        "strict_time_end": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "If true, only return spans whose end time is at or before time_end. Use this when searching older history while excluding the current live discussion.",
+                        },
                         "limit": {"type": "integer", "default": 10},
                     },
                 },
@@ -807,6 +812,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，唯一正确格式是 [at:id]（例如 [at:123456]），这样才能被正确转义为at消息。严禁使用 @id、(at:id)、（at:id）、[昵称/id] 或其他任何变体；最终回复前必须自检并把所有错误at格式改成 [at:id]。")
     await add_event("system", "涉及已记录群聊内容的问题，必须先调用 search_chat_spans。若结果涉及 reply，或用户问“谁回答了”“回复哪句”“后来有没有人答”，继续调用 fetch_reply_thread。若命中的 span 信息不足，调用 fetch_span_messages 或 fetch_message_context 展开。聊天记录工具只暴露 QQ 号；需要 at 时输出 [at:qq]。使用聊天记录作答时，请给出时间、QQ号和 message_id 作为依据。")
     await add_event("system", "群聊现场提问判断示例：用户常常是在群里讨论某个话题后再问 AI。若问题看起来是在追问群聊里的事实、发言、结论或某个人在群里说过什么，应先用 search_chat_spans 检索，而不是直接凭当前对话上下文回答。例如：“刚才他们说的结论是什么”“谁回答了这个问题”“[at:123]什么时候说要去美国”“有人提过换显卡吗”“前面讨论的比赛是哪场”。若问题是在问外部公开事实、赛事时间、价格、政策、产品信息或 CS 数据，则不要因为出现“什么时候/有没有”等词就默认查群聊，应选择 tavily_search 或 CS 数据工具。例如：“major 什么时候开始”“今天有什么比赛”“查一下我的本赛季 rating”。当前用户消息、最近 AI 问答记忆、当前讨论话题只能用于提炼 query、识别 QQ 号和时间范围；不能作为聊天记录类最终答案证据。")
+    await add_event("system", "“以前有没有人提过”类问题的检索规则：如果用户是在当前现场话题后追问“是不是有人提过/以前有没有/之前有没有说过”，不要把当前几分钟刚出现的同话题消息当作“以前有人提过”的证据。做法示例：先用当前话题提炼 query 检索；如果命中的最佳结果就是当前现场或刚才触发提问的消息，只能说明“刚才有人说过”，不能直接回答“以前有人提过”。此时应再次调用 search_chat_spans，把 time_end 设到该现场话题之前，并设置 strict_time_end=true，查更早历史；若仍无结果，回答“只查到刚才/当前这次提到，未查到更早记录”。例如当前 19:56 用户问“是不是有人提过某游戏出新卡了”，若第一次命中 19:54 的“某游戏是不是出新卡了”，应继续查 19:54 之前的历史，而不是把 19:54 当作以前证据。")
     await add_event("system", "聊天记录检索的重要规则：search_chat_spans 和 fetch_chat_stats 的 users 参数只能填写 QQ 号字符串，绝不能填写昵称、群名片、Steam 名或自然语言称呼。若用户用昵称或记忆里的别名问某个人，先从可用用户列表或已有记忆中找到对应的 [at:QQ号]，再把 QQ 号放进 users；如果无法确定 QQ 号，就不要传 users，改用 query 关键词检索并在最终回答中说明未能确定具体 QQ 号。")
     await add_event("system", "聊天记录按人检索规则：如果用户问的是“某人发的消息”“某人什么时候说/去/做了什么”“某人有没有提到某事”，必须把这个人的 QQ 号放进 users 来限定发言人，query 只放要查的内容关键词。不要只把这个人的昵称、别名或 QQ 号塞进 query。只有当问题是“谁提到了某事”“哪条消息里出现了某人/某词”，才主要用 query 检索消息内容。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
@@ -1003,6 +1009,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                         users=_chat_user_filters(fargs.get("users", [])),
                         time_start=fargs.get("time_start"),
                         time_end=fargs.get("time_end"),
+                        strict_time_end=bool(fargs.get("strict_time_end", False)),
                         limit=int(fargs.get("limit", 10)),
                     )
                     await add_event("tool", content, tool_call_id=tool_call.id)
