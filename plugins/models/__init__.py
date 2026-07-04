@@ -402,9 +402,26 @@ class ChatRetrievalSpan(Base):
     end_time: Mapped[int] = mapped_column(BigInteger)
     span_text: Mapped[str] = mapped_column(Text)
     keywords: Mapped[str] = mapped_column(Text, default="[]")
+    token_text: Mapped[str] = mapped_column(Text, default="[]")
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
     participant_uids: Mapped[str] = mapped_column(Text, default="[]")
     message_ids: Mapped[str] = mapped_column(Text, default="[]")
     chunk_ids: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class ChatTokenLexicon(Base):
+    __tablename__ = "chat_token_lexicon"
+    __table_args__ = (
+        Index("ix_chat_token_group_enabled_score", "group_id", "enabled", "score"),
+    )
+
+    group_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    term: Mapped[str] = mapped_column(String(80), primary_key=True)
+    freq: Mapped[int] = mapped_column(Integer, default=0)
+    doc_freq: Mapped[int] = mapped_column(Integer, default=0)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    last_seen: Mapped[int] = mapped_column(BigInteger, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ChatReplyEdge(Base):

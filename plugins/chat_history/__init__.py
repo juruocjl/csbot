@@ -24,6 +24,7 @@ from ..models import (
     ChatMessageIndex,
     ChatReplyEdge,
     ChatRetrievalSpan,
+    ChatTokenLexicon,
     GroupMsg,
 )
 
@@ -51,8 +52,13 @@ STARTUP_REPAIR_LIMIT = 5000
 BM25_CANDIDATE_LIMIT = 50000
 BM25_K1 = 1.5
 BM25_B = 0.75
+LEXICON_MAX_TERMS = 2000
+LEXICON_MIN_FREQ = 3
+LEXICON_MIN_DOC_FREQ = 2
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_\u4e00-\u9fff]+")
+CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+ALNUM_RUN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{1,31}")
 SPACE_RE = re.compile(r"\s+")
 MESSAGE_HEADER_RE = re.compile(
     r"^(?:anchor\s+)?\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+qq=\S+\s+mid=\d+:\s*"
@@ -74,6 +80,10 @@ KEYWORD_STOP_WORDS = {
     "哪里",
     "有没有",
     "是不是",
+    "有没",
+    "没有",
+    "是不",
+    "不是",
     "多少",
     "几号",
     "几点",
@@ -83,6 +93,8 @@ KEYWORD_STOP_WORDS = {
     "那个",
     "一下",
     "一个",
+    "了吗",
+    "了么",
 }
 ProgressCallback = Callable[[str, int, int | None], None]
 
@@ -134,7 +146,7 @@ def normalize_text(text: str) -> str:
     return " ".join(TOKEN_RE.findall(text))
 
 
-def _bm25_tokens(text: str) -> list[str]:
+def _bm25_tokens(text: str, lexicon_terms: Iterable[str] | None = None) -> list[str]:
     text = _keyword_source_text(text)
     normalized = normalize_text(text)
     if not normalized:
@@ -153,6 +165,21 @@ def _bm25_tokens(text: str) -> list[str]:
         for part in TOKEN_RE.findall(token):
             if not _is_noise_keyword(part):
                 tokens.append(part)
+    seen_tokens = set(tokens)
+    for run in CJK_RUN_RE.findall(normalized):
+        for idx in range(len(run) - 1):
+            gram = run[idx : idx + 2]
+            if gram not in seen_tokens and not _is_noise_keyword(gram):
+                tokens.append(gram)
+                seen_tokens.add(gram)
+    if lexicon_terms:
+        for term in lexicon_terms:
+            term = normalize_text(str(term)).replace(" ", "")
+            if not term or term in seen_tokens or _is_noise_keyword(term):
+                continue
+            if term in normalized.replace(" ", ""):
+                tokens.append(term)
+                seen_tokens.add(term)
     return tokens
 
 
@@ -211,6 +238,48 @@ def _is_noise_keyword(word: str) -> bool:
     if re.fullmatch(r"\d{1,2}:\d{1,2}(:\d{1,2})?", normalized):
         return True
     return False
+
+
+def _is_good_lexicon_term(term: str) -> bool:
+    term = normalize_text(term).replace(" ", "")
+    if _is_noise_keyword(term):
+        return False
+    if len(term) > 32:
+        return False
+    if re.fullmatch(r"[a-z]+", term) and len(term) < 3:
+        return False
+    if re.fullmatch(r"[\u4e00-\u9fff]+", term):
+        if len(term) < 2 or len(term) > 6:
+            return False
+        if term[0] in {"的", "了", "是", "不", "有", "没", "在", "和", "跟", "就"}:
+            return False
+        if term[-1] in {"的", "了", "吗", "么", "啊", "吧", "呢"}:
+            return False
+    return True
+
+
+def _lexicon_candidates_from_text(text: str) -> set[str]:
+    source = _keyword_source_text(text)
+    normalized = normalize_text(source)
+    compact = normalized.replace(" ", "")
+    candidates: set[str] = set()
+    for term in ALNUM_RUN_RE.findall(normalized):
+        term = term.lower()
+        if _is_good_lexicon_term(term):
+            candidates.add(term)
+    for run in CJK_RUN_RE.findall(compact):
+        max_n = min(5, len(run))
+        for n in range(2, max_n + 1):
+            for idx in range(len(run) - n + 1):
+                term = run[idx : idx + n]
+                if _is_good_lexicon_term(term):
+                    candidates.add(term)
+    return candidates
+
+
+def _score_lexicon_term(term: str, freq: int, doc_freq: int) -> float:
+    length_bonus = min(len(term), 6) / 2
+    return float(freq) * (1.0 + math.log1p(doc_freq)) * length_bonus
 
 
 def extract_keywords(text: str, limit: int = 12) -> list[str]:
@@ -417,6 +486,9 @@ def _build_span_groups(rows: list[ChatMessageIndex]) -> list[list[ChatMessageInd
 
 
 class DataManager:
+    def __init__(self) -> None:
+        self._lexicon_cache: dict[str, set[str]] = {}
+
     def _index_row_from_group_msg(self, msg: GroupMsg) -> ChatMessageIndex | None:
         try:
             group_id = group_id_from_sid(msg.sid)
@@ -461,6 +533,7 @@ class DataManager:
 
         await self.refresh_reply_edge(record_id)
         if rebuild_tail and group_id is not None:
+            await self.update_group_lexicon(group_id, start_time=timestamp, replace=False)
             await self.rebuild_group_indexes(group_id, start_time=max(0, timestamp - LIVE_REBUILD_SECONDS))
 
     async def refresh_reply_edge(self, record_id: int) -> None:
@@ -638,7 +711,123 @@ class DataManager:
             if progress_callback:
                 progress_callback("chunks_spans", index, len(groups))
 
+    async def _enabled_lexicon_terms(self, group_id: str, *, refresh: bool = False) -> set[str]:
+        if not refresh and group_id in self._lexicon_cache:
+            return self._lexicon_cache[group_id]
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(ChatTokenLexicon.term)
+                .where(ChatTokenLexicon.group_id == group_id, ChatTokenLexicon.enabled == True)
+                .order_by(ChatTokenLexicon.score.desc())
+                .limit(LEXICON_MAX_TERMS)
+            )
+            terms = {str(term) for term in result.scalars().all()}
+        try:
+            import jieba
+
+            for term in terms:
+                jieba.add_word(term)
+        except Exception:
+            pass
+        self._lexicon_cache[group_id] = terms
+        return terms
+
+    async def update_group_lexicon(
+        self,
+        group_id: str,
+        start_time: int = 0,
+        replace: bool = True,
+        batch_size: int = 2000,
+    ) -> int:
+        batch_size = max(100, int(batch_size))
+        term_freq: Counter[str] = Counter()
+        doc_freq: Counter[str] = Counter()
+        last_seen: dict[str, int] = {}
+        last_id = 0
+        total_docs = 0
+
+        while True:
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(ChatMessageIndex.record_id, ChatMessageIndex.timestamp, ChatMessageIndex.plain_text)
+                    .where(
+                        ChatMessageIndex.group_id == group_id,
+                        ChatMessageIndex.record_id > last_id,
+                        ChatMessageIndex.timestamp >= max(0, int(start_time)),
+                    )
+                    .order_by(ChatMessageIndex.record_id.asc())
+                    .limit(batch_size)
+                )
+                rows = list(result.all())
+            if not rows:
+                break
+            for record_id, timestamp, plain_text in rows:
+                last_id = int(record_id)
+                if not plain_text:
+                    continue
+                candidates = _lexicon_candidates_from_text(plain_text)
+                if not candidates:
+                    continue
+                compact = normalize_text(plain_text).replace(" ", "")
+                total_docs += 1
+                for term in candidates:
+                    count = compact.count(term)
+                    term_freq[term] += max(1, count)
+                    doc_freq[term] += 1
+                    last_seen[term] = max(last_seen.get(term, 0), int(timestamp))
+
+        if not term_freq:
+            return 0
+
+        if replace:
+            selected_terms = set(term_freq.keys())
+        else:
+            selected_terms = set(term_freq.keys())
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(ChatTokenLexicon).where(
+                        ChatTokenLexicon.group_id == group_id,
+                        ChatTokenLexicon.term.in_(selected_terms),
+                    )
+                )
+                existing = {row.term: row for row in result.scalars().all()}
+            for term, row in existing.items():
+                term_freq[term] += row.freq
+                doc_freq[term] += row.doc_freq
+                last_seen[term] = max(last_seen.get(term, 0), row.last_seen)
+
+        scored = [
+            (term, term_freq[term], doc_freq[term], _score_lexicon_term(term, term_freq[term], doc_freq[term]))
+            for term in term_freq
+            if _is_good_lexicon_term(term)
+        ]
+        scored.sort(key=lambda item: (item[3], item[1], len(item[0])), reverse=True)
+        keep = scored[: LEXICON_MAX_TERMS * 2]
+        enabled_terms = {term for term, freq, docs, _score in scored[:LEXICON_MAX_TERMS] if freq >= LEXICON_MIN_FREQ and docs >= LEXICON_MIN_DOC_FREQ}
+
+        async with async_session_factory() as session:
+            async with session.begin():
+                if replace:
+                    await session.execute(delete(ChatTokenLexicon).where(ChatTokenLexicon.group_id == group_id))
+                for term, freq, docs, score in keep:
+                    await session.merge(ChatTokenLexicon(
+                        group_id=group_id,
+                        term=term,
+                        freq=int(freq),
+                        doc_freq=int(docs),
+                        score=float(score),
+                        last_seen=int(last_seen.get(term, 0)),
+                        enabled=term in enabled_terms,
+                    ))
+        self._lexicon_cache.pop(group_id, None)
+        await self._enabled_lexicon_terms(group_id, refresh=True)
+        logger.info(f"chat lexicon updated group={group_id} docs={total_docs} terms={len(keep)} enabled={len(enabled_terms)}")
+        return len(enabled_terms)
+
     async def rebuild_group_indexes(self, group_id: str, start_time: int = 0) -> None:
+        if start_time <= 0:
+            await self.update_group_lexicon(group_id, replace=True)
+        lexicon_terms = await self._enabled_lexicon_terms(group_id)
         async with async_session_factory() as session:
             async with session.begin():
                 if start_time <= 0:
@@ -738,6 +927,7 @@ class DataManager:
                             seen.add(anchor.record_id)
                             lines.append(_format_message(anchor, prefix="anchor"))
                     text = "\n".join(lines)
+                    span_tokens = _bm25_tokens(text, lexicon_terms)
                     chunk_ids = sorted({row.primary_chunk_id for row in span_rows if row.primary_chunk_id is not None})
                     span = ChatRetrievalSpan(
                         group_id=group_id,
@@ -745,6 +935,8 @@ class DataManager:
                         end_time=span_rows[-1].timestamp,
                         span_text=text,
                         keywords=_json_dumps(extract_keywords(text)),
+                        token_text=_json_dumps(span_tokens),
+                        token_count=len(span_tokens),
                         participant_uids=_json_dumps(_participants(span_rows)),
                         message_ids=_json_dumps([row.record_id for row in span_rows]),
                         chunk_ids=_json_dumps(chunk_ids),
@@ -782,7 +974,8 @@ class DataManager:
         limit = max(1, min(int(limit or 10), 20))
         start_ts = _parse_time_bound(time_start, is_end=False)
         end_ts = _parse_time_bound(time_end, is_end=True)
-        query_terms = _bm25_tokens(query)
+        lexicon_terms = await self._enabled_lexicon_terms(group_id)
+        query_terms = _bm25_tokens(query, lexicon_terms)
         async with async_session_factory() as session:
             stmt = select(ChatRetrievalSpan).where(ChatRetrievalSpan.group_id == group_id)
             if start_ts is not None:
@@ -800,10 +993,12 @@ class DataManager:
 
         candidate_count = len(spans)
         if query_terms:
-            documents = [
-                _bm25_tokens(f"{span.span_text}\n{' '.join(str(word) for word in _json_loads_list(span.keywords))}")
-                for span in spans
-            ]
+            documents: list[list[str]] = []
+            for span in spans:
+                tokens = [str(token) for token in _json_loads_list(getattr(span, "token_text", None))]
+                if not tokens:
+                    tokens = _bm25_tokens(span.span_text, lexicon_terms)
+                documents.append(tokens)
             scores = _bm25_rank(query_terms, documents)
             scored_spans = [
                 (span, score)

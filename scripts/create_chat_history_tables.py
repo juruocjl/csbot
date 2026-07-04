@@ -20,6 +20,7 @@ from plugins.models import (
     ChatMessageIndex,
     ChatReplyEdge,
     ChatRetrievalSpan,
+    ChatTokenLexicon,
 )
 
 
@@ -32,6 +33,7 @@ async def main() -> None:
             ChatChunkIndex.__table__,
             ChatChunkMessage.__table__,
             ChatRetrievalSpan.__table__,
+            ChatTokenLexicon.__table__,
             ChatReplyEdge.__table__,
         ]:
             await connection.run_sync(table.create, checkfirst=True)
