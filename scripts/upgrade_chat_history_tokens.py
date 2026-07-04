@@ -31,8 +31,10 @@ async def main() -> None:
         columns = await connection.run_sync(existing_columns)
         if "token_text" not in columns:
             await connection.execute(text("ALTER TABLE chat_retrieval_span ADD COLUMN token_text TEXT NOT NULL DEFAULT '[]'"))
+            await connection.execute(text("ALTER TABLE chat_retrieval_span ALTER COLUMN token_text DROP DEFAULT"))
         if "token_count" not in columns:
             await connection.execute(text("ALTER TABLE chat_retrieval_span ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0"))
+            await connection.execute(text("ALTER TABLE chat_retrieval_span ALTER COLUMN token_count DROP DEFAULT"))
 
         await connection.run_sync(ChatTokenLexicon.__table__.create, checkfirst=True)
     await engine.dispose()
