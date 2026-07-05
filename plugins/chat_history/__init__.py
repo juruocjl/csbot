@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, time as datetime_time
+from functools import lru_cache
 import asyncio
 import json
 import math
@@ -59,6 +60,7 @@ LEXICON_MAX_DOC_FREQ_RATIO = 0.005
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_\u4e00-\u9fff]+")
 CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+CJK_TERM_RE = re.compile(r"^[\u4e00-\u9fff]{2,6}$")
 ALNUM_RUN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{1,31}")
 SPACE_RE = re.compile(r"\s+")
 MESSAGE_HEADER_RE = re.compile(
@@ -105,6 +107,7 @@ KEYWORD_STOP_WORDS = {
     "为什",
     "怎么这",
 }
+PINYIN_TOKEN_PREFIX = "__py:"
 ProgressCallback = Callable[[str, int, int | None], None]
 
 
@@ -155,6 +158,22 @@ def normalize_text(text: str) -> str:
     return " ".join(TOKEN_RE.findall(text))
 
 
+@lru_cache(maxsize=50000)
+def _pinyin_token(term: str) -> str | None:
+    term = normalize_text(term).replace(" ", "")
+    if not CJK_TERM_RE.fullmatch(term) or _is_noise_keyword(term):
+        return None
+    try:
+        from pypinyin import lazy_pinyin
+
+        syllables = lazy_pinyin(term, errors="ignore", strict=False)
+    except Exception:
+        return None
+    if len(syllables) != len(term) or not all(syllables):
+        return None
+    return PINYIN_TOKEN_PREFIX + "_".join(syllables)
+
+
 def _bm25_tokens(text: str, lexicon_terms: Iterable[str] | None = None) -> list[str]:
     text = _keyword_source_text(text)
     normalized = normalize_text(text)
@@ -189,6 +208,11 @@ def _bm25_tokens(text: str, lexicon_terms: Iterable[str] | None = None) -> list[
             if term in normalized.replace(" ", ""):
                 tokens.append(term)
                 seen_tokens.add(term)
+    for token in list(tokens):
+        pinyin_token = _pinyin_token(token)
+        if pinyin_token and pinyin_token not in seen_tokens:
+            tokens.append(pinyin_token)
+            seen_tokens.add(pinyin_token)
     return tokens
 
 
