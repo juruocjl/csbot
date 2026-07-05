@@ -544,6 +544,8 @@ class DataManager:
     def _format_duration(self, duration: int | None) -> str:
         if not duration:
             return "未知"
+        if int(duration) < 180:
+            return f"{int(duration)}分"
         minutes, seconds = divmod(int(duration), 60)
         return f"{minutes}分{seconds:02d}秒"
 
@@ -558,6 +560,13 @@ class DataManager:
         if digits <= 0:
             return f"{float(value):+.0f}"
         return f"{float(value):+.{digits}f}"
+
+    def _format_optional_number(self, value: float | int | None, digits: int = 0) -> str:
+        if value is None:
+            return "未知"
+        if digits <= 0:
+            return f"{float(value):.0f}"
+        return f"{float(value):.{digits}f}"
 
     def _is_ladder_mode(self, mode: str) -> bool:
         return mode.startswith("天梯") or mode == "PVP周末联赛"
@@ -819,7 +828,7 @@ class DataManager:
                     f"首杀/首死 {player.entryKill}/{player.firstDeath}，爆头 {player.headShot}({player.headShotRatio:.0%})，狙杀 {player.snipeNum}，"
                     f"多杀 2K/3K/4K/5K={player.twoKill}/{player.threeKill}/{player.fourKill}/{player.fiveKill}，"
                     f"道具 {player.throwsCnt}，闪白敌/队友 {player.flashSuccess}/{player.flashTeammate}，"
-                    f"天梯分 {score_text}，分数变化{self._format_signed(player.pvpScoreChange)}，星级 {player.pvpStars}，底蕴 {legacy_score if legacy_score is not None else '未知'}。"
+                    f"天梯分 {score_text}，分数变化{self._format_signed(player.pvpScoreChange)}，星级 {player.pvpStars}，底蕴 {self._format_optional_number(legacy_score)}。"
                 )
         return "\n".join(lines)
 
@@ -847,7 +856,7 @@ class DataManager:
                     f"多杀 2K/3K/4K/5K={player.twoKill}/{player.threeKill}/{player.fourKill}/{player.fiveKill}，"
                     f"道具 {player.throwsCnt}，闪光 {player.flash}，闪白敌/队友 {player.flashSuccess}/{player.flashTeammate}，"
                     f"下包/拆包 {player.bombPlanted}/{player.bombDefused}，雷伤/火伤 {player.grenadeDamage}/{player.infernoDamage}，"
-                    f"官匹等级 {player.rank}，底蕴 {legacy_score if legacy_score is not None else '未知'}。"
+                    f"官匹等级 {player.rank}，底蕴 {self._format_optional_number(legacy_score)}。"
                 )
         return "\n".join(lines)
 
