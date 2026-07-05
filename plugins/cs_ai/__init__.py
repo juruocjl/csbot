@@ -55,6 +55,9 @@ AI_QA_MEMORY_MAX_ENTRIES = 6
 AI_QA_MEMORY_MAX_CHARS = 3000
 AI_QA_QUESTION_MAX_CHARS = 220
 AI_QA_ANSWER_MAX_CHARS = 420
+AI_FORWARD_MIN_CHARS = 500
+AI_FORWARD_MIN_LINES = 6
+AI_FORWARD_NODE_MAX_CHARS = 1600
 
 REPORT_KNOWLEDGE_HEADER = "[自动日报周报知识]"
 MARKDOWN_PATTERN = re.compile(
@@ -75,6 +78,75 @@ def _contains_markdown(text: str) -> bool:
     if not text:
         return False
     return bool(MARKDOWN_PATTERN.search(text))
+
+
+def _render_at_segments(text: str) -> Message:
+    result = Message()
+    last = 0
+    # 支持 [at:123]、[at：123]、[AT: 123] 等格式
+    at_pattern = re.compile(r"\[(?:at|AT)\s*[:：]\s*(\d+)\]")
+    for match in at_pattern.finditer(text):
+        start, end = match.span()
+        if start > last:
+            result += text[last:start]
+        result += MessageSegment.at(match.group(1))
+        last = end
+    if last < len(text):
+        result += text[last:]
+    return result
+
+
+def _should_forward_ai_result(text: str) -> bool:
+    return len(text) >= AI_FORWARD_MIN_CHARS or text.count("\n") + 1 >= AI_FORWARD_MIN_LINES
+
+
+def _split_forward_text(text: str, max_chars: int = AI_FORWARD_NODE_MAX_CHARS) -> list[str]:
+    paragraphs = text.splitlines(keepends=True)
+    chunks: list[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        if len(paragraph) > max_chars:
+            if current.strip():
+                chunks.append(current.rstrip())
+                current = ""
+            for start in range(0, len(paragraph), max_chars):
+                chunk = paragraph[start : start + max_chars].strip()
+                if chunk:
+                    chunks.append(chunk)
+            continue
+        if len(current) + len(paragraph) > max_chars and current.strip():
+            chunks.append(current.rstrip())
+            current = paragraph
+        else:
+            current += paragraph
+    if current.strip():
+        chunks.append(current.rstrip())
+    return chunks or [text]
+
+
+async def _send_ai_forward_result(
+    bot: Bot,
+    group_id: str,
+    text: str,
+    *,
+    prompt: str | None = None,
+    prompt_user_id: str | None = None,
+) -> bool:
+    try:
+        bot_uin = int(str(getattr(bot, "self_id", "0")) or "0")
+        nodes = Message()
+        if prompt:
+            prompt_uin = int(prompt_user_id) if prompt_user_id and prompt_user_id.isdigit() else bot_uin
+            nodes += MessageSegment.node_custom(prompt_uin, "用户提问", _render_at_segments(prompt))
+        chunks = _split_forward_text(text)
+        for index, chunk in enumerate(chunks, start=1):
+            nickname = "CSBot AI" if len(chunks) == 1 else f"CSBot AI {index}/{len(chunks)}"
+            nodes += MessageSegment.node_custom(bot_uin, nickname, _render_at_segments(chunk))
+        await bot.call_api("send_group_forward_msg", group_id=int(group_id), messages=nodes)
+        return True
+    except Exception as e:
+        logger.warning(f"send ai forward result failed: {e}")
+        return False
 
 
 def _chat_user_filters(values: Any) -> list[str]:
@@ -1132,21 +1204,6 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     
 
 async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message, chat_id: str | None = None) -> Message:
-    def _render_at_segments(text: str) -> Message:
-        result = Message()
-        last = 0
-        # 支持 [at:123]、[at：123]、[AT: 123] 等格式
-        at_pattern = re.compile(r"\[(?:at|AT)\s*[:：]\s*(\d+)\]")
-        for match in at_pattern.finditer(text):
-            start, end = match.span()
-            if start > last:
-                result += text[last:start]
-            result += MessageSegment.at(match.group(1))
-            last = end
-        if last < len(text):
-            result += text[last:]
-        return result
-
     text = await db_val.work_msg(msg)
     msg2id: int | None = None
     try:
@@ -1166,6 +1223,24 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
     logger.info(f"UID: {uid}, Text: {text}")
 
     ai_text = await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
+    if _should_forward_ai_result(ai_text):
+        sent_forward = False
+        try:
+            sent_forward = await _send_ai_forward_result(
+                bot,
+                group_id_from_sid(sid),
+                ai_text,
+                prompt=text,
+                prompt_user_id=uid,
+            )
+        except Exception as e:
+            logger.warning(f"prepare ai forward result failed: {e}")
+        if sent_forward:
+            notice = MessageSegment.at(uid) + " AI回答已用聊天记录转发发送。"
+            if msg2id is not None:
+                return MessageSegment.reply(msg2id) + notice
+            return notice
+
     ai_message = _render_at_segments(ai_text)
 
     if msg2id is not None:
