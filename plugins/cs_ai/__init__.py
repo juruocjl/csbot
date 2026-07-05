@@ -1203,7 +1203,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     return f"（已深度思考 {duration}s）\n" + output
     
 
-async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message, chat_id: str | None = None) -> Message:
+async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Message, orimsg: Message, chat_id: str | None = None) -> Message | None:
     text = await db_val.work_msg(msg)
     msg2id: int | None = None
     try:
@@ -1236,10 +1236,7 @@ async def ai_ask2(bot: Bot, uid: str, sid: str, persona: str | None, msg: Messag
         except Exception as e:
             logger.warning(f"prepare ai forward result failed: {e}")
         if sent_forward:
-            notice = MessageSegment.at(uid) + " AI回答已用聊天记录转发发送。"
-            if msg2id is not None:
-                return MessageSegment.reply(msg2id) + notice
-            return notice
+            return None
 
     ai_message = _render_at_segments(ai_text)
 
@@ -1256,9 +1253,10 @@ async def aiask_function(bot: Bot, message: MessageEvent, args: Message = Comman
     await aiask.send(
         MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
-    await aiask.finish(
-        await ai_ask2(bot, uid, sid, None, args, message.original_message, chat_id=chat_id)
-    )
+    response = await ai_ask2(bot, uid, sid, None, args, message.original_message, chat_id=chat_id)
+    if response is None:
+        await aiask.finish()
+    await aiask.finish(response)
 
 @aiasktb.handle()
 async def aiasktb_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
@@ -1268,9 +1266,10 @@ async def aiasktb_function(bot: Bot, message: MessageEvent, args: Message = Comm
     await aiasktb.send(
         MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
-    await aiasktb.finish(
-        await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message, chat_id=chat_id)
-    )
+    response = await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message, chat_id=chat_id)
+    if response is None:
+        await aiasktb.finish()
+    await aiasktb.finish(response)
 
 @aiaskxmm.handle()
 async def aiaskxmm_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
@@ -1280,9 +1279,10 @@ async def aiaskxmm_function(bot: Bot, message: MessageEvent, args: Message = Com
     await aiaskxmm.send(
         MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
-    await aiaskxmm.finish(
-        await ai_ask2(bot, uid, sid, "xmm", args, message.original_message, chat_id=chat_id)
-    )
+    response = await ai_ask2(bot, uid, sid, "xmm", args, message.original_message, chat_id=chat_id)
+    if response is None:
+        await aiaskxmm.finish()
+    await aiaskxmm.finish(response)
 
 @aiaskxhs.handle()
 async def aiaskxhs_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
@@ -1292,9 +1292,10 @@ async def aiaskxhs_function(bot: Bot, message: MessageEvent, args: Message = Com
     await aiaskxhs.send(
         MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
-    await aiaskxhs.finish(
-        await ai_ask2(bot, uid, sid, "xhs", args, message.original_message, chat_id=chat_id)
-    )
+    response = await ai_ask2(bot, uid, sid, "xhs", args, message.original_message, chat_id=chat_id)
+    if response is None:
+        await aiaskxhs.finish()
+    await aiaskxhs.finish(response)
 
 @aiasktmr.handle()
 async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
@@ -1304,9 +1305,10 @@ async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = Com
     await aiasktmr.send(
         MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
-    await aiasktmr.finish(
-        await ai_ask2(bot, uid, sid, "tmr", args, message.original_message, chat_id=chat_id)
-    )
+    response = await ai_ask2(bot, uid, sid, "tmr", args, message.original_message, chat_id=chat_id)
+    if response is None:
+        await aiasktmr.finish()
+    await aiasktmr.finish(response)
 
 @aimem.handle()
 async def aimem_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
