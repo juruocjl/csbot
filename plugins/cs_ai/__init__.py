@@ -12,7 +12,7 @@ require("utils")
 from ..utils import async_session_factory, get_session
 
 require("models")
-from ..models import AIMemory, AIChatRecord, MatchStatsPW
+from ..models import AIMemory, AIChatRecord, MatchStatsGP, MatchStatsPW
 
 require("chat_history")
 from ..chat_history import db as chat_history_db
@@ -21,6 +21,7 @@ from ..chat_history import group_id_from_sid
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time,valid_rank
+from ..cs_db_val import gp_time
 from ..cs_db_val import NoValueError
 from ..cs_db_val import get_ladder_filter
 
@@ -508,6 +509,362 @@ class DataManager:
         if uid is not None:
             return f"{nickname}([at:{uid}])"
         return f"{nickname}({steamid})"
+
+    async def _format_match_player_label(self, steamid: str) -> str:
+        uid = await db_val.get_uid_by_steamid(steamid)
+        base_info = await db_val.get_base_info(steamid)
+        nickname = base_info.name if base_info is not None else "未知玩家"
+        if uid is not None:
+            return f"{nickname}([at:{uid}])"
+        return f"{nickname}(路人 steamid={steamid})"
+
+    def _format_match_time(self, timestamp: int) -> str:
+        return datetime.fromtimestamp(int(timestamp)).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _parse_match_time(self, value: Any, *, is_end: bool = False) -> int | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return int(text)
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                parsed = datetime.strptime(text, "%Y-%m-%d")
+                if is_end:
+                    parsed = parsed.replace(hour=23, minute=59, second=59)
+                return int(parsed.timestamp())
+            normalized = text.replace("T", " ")
+            parsed = datetime.fromisoformat(normalized)
+            return int(parsed.timestamp())
+        except Exception:
+            return None
+
+    def _format_duration(self, duration: int | None) -> str:
+        if not duration:
+            return "未知"
+        minutes, seconds = divmod(int(duration), 60)
+        return f"{minutes}分{seconds:02d}秒"
+
+    def _format_match_result(self, team: int, win_team: int) -> str:
+        if win_team <= 0:
+            return "未知"
+        return "胜" if team == win_team else "负"
+
+    def _format_signed(self, value: float | int | None, digits: int = 0) -> str:
+        if value is None:
+            return "未知"
+        if digits <= 0:
+            return f"{float(value):+.0f}"
+        return f"{float(value):+.{digits}f}"
+
+    def _is_ladder_mode(self, mode: str) -> bool:
+        return mode.startswith("天梯") or mode == "PVP周末联赛"
+
+    def _previous_season_id(self, season: str) -> str | None:
+        match = re.fullmatch(r"S(\d+)", season)
+        if not match:
+            return None
+        season_num = int(match.group(1))
+        if season_num <= 1:
+            return None
+        return f"S{season_num - 1}"
+
+    def _predict_reset_hidden_score(self, prev_end_score: int) -> float:
+        if prev_end_score < 1600:
+            return 0.504089 * prev_end_score + 594.34
+        if prev_end_score < 2000:
+            return 0.099434 * prev_end_score + 1351.14
+        return 0.119768 * prev_end_score + 1584.41
+
+    async def _get_display_pvp_score(self, player: MatchStatsPW) -> tuple[int | None, bool]:
+        if player.pvpScore > 0:
+            return int(player.pvpScore), False
+        if not self._is_ladder_mode(player.mode):
+            return None, False
+
+        mode_filter = (MatchStatsPW.mode.like("天梯%")) | (MatchStatsPW.mode == "PVP周末联赛")
+        async with async_session_factory() as session:
+            season_stmt = (
+                select(
+                    MatchStatsPW.mid,
+                    MatchStatsPW.pvpScore,
+                    MatchStatsPW.pvpScoreChange,
+                    MatchStatsPW.timeStamp,
+                )
+                .where(MatchStatsPW.steamid == player.steamid)
+                .where(MatchStatsPW.seasonId == player.seasonId)
+                .where(mode_filter)
+                .order_by(MatchStatsPW.timeStamp.asc(), MatchStatsPW.mid.asc())
+            )
+            season_rows = list((await session.execute(season_stmt)).all())
+            current_index = next(
+                (
+                    index for index, row in enumerate(season_rows)
+                    if row.mid == player.mid and int(row.timeStamp) == int(player.timeStamp)
+                ),
+                None,
+            )
+            if current_index is None:
+                return None, False
+
+            visible_index = next(
+                (index for index, row in enumerate(season_rows) if int(row.pvpScore or 0) > 0),
+                None,
+            )
+            if visible_index is not None:
+                hidden_start = int(season_rows[visible_index].pvpScore) - sum(
+                    int(row.pvpScoreChange or 0) for row in season_rows[: visible_index + 1]
+                )
+            else:
+                prev_season = self._previous_season_id(player.seasonId)
+                if not prev_season:
+                    return None, False
+                prev_stmt = (
+                    select(MatchStatsPW.pvpScore)
+                    .where(MatchStatsPW.steamid == player.steamid)
+                    .where(MatchStatsPW.seasonId == prev_season)
+                    .where(mode_filter)
+                    .where(MatchStatsPW.pvpScore > 0)
+                    .order_by(MatchStatsPW.timeStamp.desc(), MatchStatsPW.mid.desc())
+                    .limit(1)
+                )
+                prev_end_score = (await session.execute(prev_stmt)).scalar_one_or_none()
+                if not prev_end_score:
+                    return None, False
+                hidden_start = self._predict_reset_hidden_score(int(prev_end_score))
+
+            display_score = hidden_start + sum(
+                int(row.pvpScoreChange or 0) for row in season_rows[: current_index + 1]
+            )
+            return max(1, int(round(display_score))), True
+
+    async def _get_legacy_score(self, steamid: str, timestamp: int) -> float | None:
+        extra_info = await db_val.get_extra_info(steamid, timeStamp=timestamp)
+        return extra_info.legacyScore if extra_info else None
+
+    async def _get_match_user_team(self, players: list[tuple[str, int]]) -> int | None:
+        team1_users = False
+        team2_users = False
+        for steamid, team in players:
+            is_user = await db_val.is_user(steamid)
+            if is_user and team == 1:
+                team1_users = True
+            elif is_user and team == 2:
+                team2_users = True
+        if team1_users and not team2_users:
+            return 1
+        if team2_users and not team1_users:
+            return 2
+        return None
+
+    async def _format_pw_history_item(self, record: MatchStatsPW) -> str:
+        display_score, is_predicted = await self._get_display_pvp_score(record)
+        display_score_text = "未知" if display_score is None else f"{display_score}{' 预测' if is_predicted else ''}"
+        extra_info = await db_val.get_match_extra(record.mid)
+        legacy_diff: float | None = None
+        if extra_info:
+            legacy_diff = extra_info.team1Legacy - extra_info.team2Legacy if record.team == 1 else extra_info.team2Legacy - extra_info.team1Legacy
+        result = self._format_match_result(record.team, record.winTeam)
+        return (
+            f"{self._format_match_time(record.timeStamp)} mid={record.mid} 完美 {record.mode} {record.mapName} "
+            f"{record.score1}:{record.score2} 队伍{record.team}{result}；"
+            f"KDA {record.kill}/{record.death}/{record.assist} rating {record.pwRating:.2f} WE {record.we:.1f} "
+            f"ADR {record.adpr:.0f} 分数 {display_score_text} 变化{self._format_signed(record.pvpScoreChange)} "
+            f"底蕴差{self._format_signed(legacy_diff)}"
+        )
+
+    async def _format_gp_history_item(self, record: Any) -> str:
+        extra_info = await db_val.get_match_gp_extra(record.mid)
+        legacy_diff: float | None = None
+        if extra_info and extra_info.team1Legacy is not None and extra_info.team2Legacy is not None:
+            legacy_diff = extra_info.team1Legacy - extra_info.team2Legacy if record.team == 1 else extra_info.team2Legacy - extra_info.team1Legacy
+        result = self._format_match_result(record.team, record.winTeam)
+        return (
+            f"{self._format_match_time(record.timeStamp)} mid={record.mid} 官匹 {record.mode} {record.mapName} "
+            f"{record.score1}:{record.score2} 队伍{record.team}{result}；"
+            f"KDA {record.kill}/{record.death}/{record.assist} rating {record.rating:.2f} ADR {record.adpr:.0f} "
+            f"官匹等级 {record.rank} 底蕴差{self._format_signed(legacy_diff)}"
+        )
+
+    async def _get_pw_history_records(
+        self,
+        steamid: str,
+        time_type: str,
+        limit: int,
+        start_ts: int | None,
+        end_ts: int | None,
+    ) -> tuple[list[MatchStatsPW], int, str]:
+        if start_ts is None and end_ts is None:
+            return (
+                await db_val.get_matches(steamid, time_type, limit=limit) or [],
+                await db_val.get_matches_count(steamid, time_type),
+                time_type,
+            )
+        async with async_session_factory() as session:
+            filters = [MatchStatsPW.steamid == steamid]
+            if start_ts is not None:
+                filters.append(MatchStatsPW.timeStamp >= start_ts)
+            if end_ts is not None:
+                filters.append(MatchStatsPW.timeStamp <= end_ts)
+            records_stmt = (
+                select(MatchStatsPW)
+                .where(*filters)
+                .order_by(MatchStatsPW.timeStamp.desc())
+                .limit(limit)
+            )
+            count_stmt = select(func.count(MatchStatsPW.mid)).where(*filters)
+            records = list((await session.execute(records_stmt)).scalars().all())
+            count = int((await session.execute(count_stmt)).scalar_one())
+        return records, count, self._format_time_range_label(start_ts, end_ts)
+
+    async def _get_gp_history_records(
+        self,
+        steamid: str,
+        time_type: str,
+        limit: int,
+        start_ts: int | None,
+        end_ts: int | None,
+    ) -> tuple[list[MatchStatsGP], int, str]:
+        if start_ts is None and end_ts is None:
+            gp_time_type = time_type if time_type in gp_time else "全部"
+            return (
+                await db_val.get_matches_gp(steamid, gp_time_type, limit=limit) or [],
+                await db_val.get_matches_gp_count(steamid, gp_time_type),
+                gp_time_type,
+            )
+        async with async_session_factory() as session:
+            filters = [MatchStatsGP.steamid == steamid]
+            if start_ts is not None:
+                filters.append(MatchStatsGP.timeStamp >= start_ts)
+            if end_ts is not None:
+                filters.append(MatchStatsGP.timeStamp <= end_ts)
+            records_stmt = (
+                select(MatchStatsGP)
+                .where(*filters)
+                .order_by(MatchStatsGP.timeStamp.desc())
+                .limit(limit)
+            )
+            count_stmt = select(func.count(MatchStatsGP.mid)).where(*filters)
+            records = list((await session.execute(records_stmt)).scalars().all())
+            count = int((await session.execute(count_stmt)).scalar_one())
+        return records, count, self._format_time_range_label(start_ts, end_ts)
+
+    def _format_time_range_label(self, start_ts: int | None, end_ts: int | None) -> str:
+        if start_ts is None and end_ts is None:
+            return "未指定"
+        start_text = self._format_match_time(start_ts) if start_ts is not None else "不限开始"
+        end_text = self._format_match_time(end_ts) if end_ts is not None else "不限结束"
+        return f"{start_text} 至 {end_text}"
+
+    async def get_player_match_history_prompt(
+        self,
+        steamid: str,
+        time_type: str = "本赛季",
+        match_type: str = "all",
+        limit: int = 10,
+        time_start: Any = None,
+        time_end: Any = None,
+    ) -> str:
+        match_type = match_type if match_type in {"all", "perfect", "gp"} else "all"
+        limit = max(1, min(int(limit or 10), 20))
+        start_ts = self._parse_match_time(time_start)
+        end_ts = self._parse_match_time(time_end, is_end=True)
+        if time_start and start_ts is None:
+            return f"time_start 无法解析：{time_start}。请使用 YYYY-MM-DD、YYYY-MM-DD HH:MM:SS 或 Unix 秒。"
+        if time_end and end_ts is None:
+            return f"time_end 无法解析：{time_end}。请使用 YYYY-MM-DD、YYYY-MM-DD HH:MM:SS 或 Unix 秒。"
+        user_label = await self._format_user_label(steamid)
+        range_text = self._format_time_range_label(start_ts, end_ts) if start_ts is not None or end_ts is not None else time_type
+        sections: list[str] = [f"玩家 {user_label} 比赛记录查询：请求类型={match_type}，时间范围={range_text}，每类最多{limit}场。"]
+
+        if match_type in {"all", "perfect"}:
+            pw_records, pw_count, pw_range = await self._get_pw_history_records(steamid, time_type, limit, start_ts, end_ts)
+            sections.append(f"完美记录：{pw_range} 共{pw_count}场，返回{len(pw_records)}场。")
+            if pw_records:
+                sections.extend([await self._format_pw_history_item(record) for record in pw_records])
+
+        if match_type in {"all", "gp"}:
+            gp_records, gp_count, gp_range = await self._get_gp_history_records(steamid, time_type, limit, start_ts, end_ts)
+            suffix = "" if start_ts is not None or end_ts is not None or gp_range == time_type else f"（官匹不支持 {time_type}，实际使用 {gp_range}）"
+            sections.append(f"官匹记录：{gp_range} 共{gp_count}场，返回{len(gp_records)}场。{suffix}")
+            if gp_records:
+                sections.extend([await self._format_gp_history_item(record) for record in gp_records])
+
+        return "\n".join(sections)
+
+    async def _format_pw_match_detail(self, match_id: str) -> str | None:
+        match_detail = await db_val.get_match_detail(match_id)
+        if not match_detail:
+            return None
+        match_extra = await db_val.get_match_extra(match_id)
+        first = match_detail[0]
+        user_team = await self._get_match_user_team([(player.steamid, player.team) for player in match_detail])
+        lines = [
+            f"完美比赛详情 mid={match_id}",
+            f"时间 {self._format_match_time(first.timeStamp)}；赛季 {first.seasonId}；模式 {first.mode}；地图 {first.mapName}；比分 {first.score1}:{first.score2}；胜方 队伍{first.winTeam}；群友队伍 {user_team if user_team is not None else '无法唯一确定'}；时长 {self._format_duration(first.duration)}。",
+            f"队伍底蕴：队伍1 {match_extra.team1Legacy:.0f}，队伍2 {match_extra.team2Legacy:.0f}。" if match_extra else "队伍底蕴：无额外数据。",
+        ]
+        for team in [1, 2]:
+            lines.append(f"队伍{team}玩家：")
+            team_players = sorted([player for player in match_detail if player.team == team], key=lambda p: p.pwRating, reverse=True)
+            for player in team_players:
+                label = await self._format_match_player_label(player.steamid)
+                legacy_score = await self._get_legacy_score(player.steamid, player.timeStamp)
+                display_score, is_predicted = await self._get_display_pvp_score(player)
+                score_text = "未知" if display_score is None else f"{display_score}{' 预测' if is_predicted else ''}"
+                lines.append(
+                    f"- {label}：KDA {player.kill}/{player.death}/{player.assist}，rating {player.pwRating:.2f}，WE {player.we:.1f}，ADR {player.adpr:.0f}，"
+                    f"首杀/首死 {player.entryKill}/{player.firstDeath}，爆头 {player.headShot}({player.headShotRatio:.0%})，狙杀 {player.snipeNum}，"
+                    f"多杀 2K/3K/4K/5K={player.twoKill}/{player.threeKill}/{player.fourKill}/{player.fiveKill}，"
+                    f"道具 {player.throwsCnt}，闪白敌/队友 {player.flashSuccess}/{player.flashTeammate}，"
+                    f"天梯分 {score_text}，分数变化{self._format_signed(player.pvpScoreChange)}，星级 {player.pvpStars}，底蕴 {legacy_score if legacy_score is not None else '未知'}。"
+                )
+        return "\n".join(lines)
+
+    async def _format_gp_match_detail(self, match_id: str) -> str | None:
+        match_detail = await db_val.get_match_gp_detail(match_id)
+        if not match_detail:
+            return None
+        match_extra = await db_val.get_match_gp_extra(match_id)
+        first = match_detail[0]
+        user_team = await self._get_match_user_team([(player.steamid, player.team) for player in match_detail])
+        lines = [
+            f"官匹比赛详情 mid={match_id}",
+            f"时间 {self._format_match_time(first.timeStamp)}；模式 {first.mode}；地图 {first.mapName}；比分 {first.score1}:{first.score2}；胜方 队伍{first.winTeam}；群友队伍 {user_team if user_team is not None else '无法唯一确定'}；时长 {self._format_duration(first.duration)}。",
+            f"队伍底蕴：队伍1 {match_extra.team1Legacy:.0f}，队伍2 {match_extra.team2Legacy:.0f}。" if match_extra and match_extra.team1Legacy is not None and match_extra.team2Legacy is not None else "队伍底蕴：无额外数据。",
+        ]
+        for team in [1, 2]:
+            lines.append(f"队伍{team}玩家：")
+            team_players = sorted([player for player in match_detail if player.team == team], key=lambda p: p.rating, reverse=True)
+            for player in team_players:
+                label = await self._format_match_player_label(player.steamid)
+                legacy_score = await self._get_legacy_score(player.steamid, player.timeStamp)
+                lines.append(
+                    f"- {label}：KDA {player.kill}/{player.death}/{player.assist}，rating {player.rating:.2f}，ADR {player.adpr:.0f}，RWS {player.rws:.1f}，KAST {player.kast:.1f}，"
+                    f"首杀/首死 {player.entryKill}/{player.entryDeath}，爆头 {player.headShot}，AWP {player.awpKill}，"
+                    f"多杀 2K/3K/4K/5K={player.twoKill}/{player.threeKill}/{player.fourKill}/{player.fiveKill}，"
+                    f"道具 {player.throwsCnt}，闪光 {player.flash}，闪白敌/队友 {player.flashSuccess}/{player.flashTeammate}，"
+                    f"下包/拆包 {player.bombPlanted}/{player.bombDefused}，雷伤/火伤 {player.grenadeDamage}/{player.infernoDamage}，"
+                    f"官匹等级 {player.rank}，底蕴 {legacy_score if legacy_score is not None else '未知'}。"
+                )
+        return "\n".join(lines)
+
+    async def get_match_detail_prompt(self, match_id: str, match_type: str = "auto") -> str:
+        match_type = match_type if match_type in {"auto", "perfect", "gp"} else "auto"
+        results: list[str] = []
+        if match_type in {"auto", "perfect"}:
+            pw_detail = await self._format_pw_match_detail(match_id)
+            if pw_detail:
+                results.append(pw_detail)
+        if match_type in {"auto", "gp"}:
+            gp_detail = await self._format_gp_match_detail(match_id)
+            if gp_detail:
+                results.append(gp_detail)
+        if not results:
+            return f"未找到比赛 mid={match_id}。"
+        return "\n\n".join(results)
     
     async def get_prompt(self, steamid: str, time_type: str = "本赛季"):
         detail_info = await db_val.get_detail_info(steamid)
@@ -729,6 +1086,40 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         {
             "type": "function",
             "function": {
+                "name": "fetch_player_matches",
+                "description": "获取指定人的完美或官匹比赛记录，包含比赛结果、地图、模式、比分、个人 KDA、rating、WE/ADR、分数变化、官匹等级等。name 可传用户昵称、[at:QQ]、QQ号或 steamid。支持快捷时间 time，也支持普通时间 time_start/time_end（YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "用户昵称、[at:QQ]、QQ号或 steamid。"},
+                        "match_type": {"type": "string", "enum": ["all", "perfect", "gp"], "default": "all"},
+                        "time": {"type": "string", "default": "本赛季", "description": "快捷时间，如 今日、昨日、本周、本赛季、两赛季、上赛季、全部。普通时间范围请用 time_start/time_end。"},
+                        "time_start": {"type": "string", "description": "可选，普通开始时间，如 2026-07-01 或 2026-07-01 18:30:00。"},
+                        "time_end": {"type": "string", "description": "可选，普通结束时间，如 2026-07-05 或 2026-07-05 23:59:59。"},
+                        "limit": {"type": "integer", "default": 10, "description": "每类最多返回多少场，1-20。"},
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_match_detail",
+                "description": "查询某场完美或官匹比赛详情，详细程度不低于网页：比赛时间、模式、地图、比分、胜方、队伍底蕴、全部玩家数据。群友会用 [at:QQ] 标注，非群友/未绑定玩家标注为路人。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "match_id": {"type": "string", "description": "比赛 ID / mid。"},
+                        "match_type": {"type": "string", "enum": ["auto", "perfect", "gp"], "default": "auto"},
+                    },
+                    "required": ["match_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "tavily_search",
                 "description": "Search the public web through Tavily for current events, external facts, product/news/company information, or anything not available in local CS/group-chat data. Prefer search_depth=basic unless the user asks for deeper research.",
                 "parameters": {
@@ -885,7 +1276,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", "涉及已记录群聊内容的问题，必须先调用 search_chat_spans。不要因为当前对话、临近消息、最近几条群聊或 AI 问答记忆里看起来已有答案，就跳过聊天记录检索；这些近期内容大家本来都能看到，只能帮助你理解问题和构造 query，不能替代检索工具作为答案证据。若结果涉及 reply，或用户问“谁回答了”“回复哪句”“后来有没有人答”，继续调用 fetch_reply_thread。若命中的 span 信息不足，调用 fetch_span_messages 或 fetch_message_context 展开。聊天记录工具只暴露 QQ 号；需要 at 时输出 [at:qq]。使用聊天记录作答时，请给出时间、QQ号和 message_id 作为依据。")
     await add_event("system", "聊天记录不是最终答案本身，而是证据材料。最终回答必须直接回答用户的问题，并把检索结果整理成结论、关系、时间线或判断；严禁只按时间复述几条聊天记录就结束任务。正确做法是先说结论，例如“以前确实有人提过/没查到更早记录/这个说法主要来自谁/数据不支持这个判断”，再用少量关键消息时间、QQ号和 message_id 说明依据。若检索结果互相矛盾或不足，应明确说明不确定和还缺什么证据。")
     await add_event("system", "群聊现场提问判断示例：用户常常是在群里讨论某个话题后再问 AI。若问题看起来是在追问群聊里的事实、发言、结论或某个人在群里说过什么，应先用 search_chat_spans 检索，而不是直接凭当前对话上下文回答。例如：“刚才他们说的结论是什么”“谁回答了这个问题”“[at:123]什么时候说要去美国”“有人提过换显卡吗”“前面讨论的比赛是哪场”。若问题是在问外部公开事实、赛事时间、价格、政策、产品信息或 CS 数据，则不要因为出现“什么时候/有没有”等词就默认查群聊，应选择 tavily_search 或 CS 数据工具。例如：“major 什么时候开始”“今天有什么比赛”“查一下我的本赛季 rating”。")
-    await add_event("system", "明显在讨论 CS、比赛、天梯、官匹、rating、WE、ADR、胜率、队友、双排、排名或某个玩家表现时，必须同时参考群聊记录和 CS 数据，不要看完一边就不管另一边。标准流程是：先用 search_chat_spans 理解群里谁说了什么、争论点是什么、问题从哪里来；只要问题涉及表现判断、比赛结论、玩家强弱、数据争论、排名或趋势，检索完聊天记录后必须继续调用 fetch_user_summary、fetch_duo_summary、fetch_teammate_ranking 或 fetch_group_rankings 等 CS 数据工具来支撑。最终回答要同时交代“群聊依据”和“数据依据”。只有当用户明确只问“群里谁说过/怎么说的”时，才可以只用聊天记录；只有当用户明确只要查数据且不关心群聊上下文时，才可以只用 CS 数据。")
+    await add_event("system", "明显在讨论 CS、比赛、天梯、官匹、rating、WE、ADR、胜率、队友、双排、排名或某个玩家表现时，必须同时参考群聊记录和 CS 数据，不要看完一边就不管另一边。标准流程是：先用 search_chat_spans 理解群里谁说了什么、争论点是什么、问题从哪里来；只要问题涉及表现判断、比赛结论、玩家强弱、数据争论、排名、趋势或某场比赛，检索完聊天记录后必须继续调用 fetch_user_summary、fetch_player_matches、fetch_match_detail、fetch_duo_summary、fetch_teammate_ranking 或 fetch_group_rankings 等 CS 数据工具来支撑。最终回答要同时交代“群聊依据”和“数据依据”。只有当用户明确只问“群里谁说过/怎么说的”时，才可以只用聊天记录；只有当用户明确只要查数据且不关心群聊上下文时，才可以只用 CS 数据。")
     await add_event("system", "近期 chunk 的作用边界：search_chat_spans 可能先命中当前现场或很近的 chunk，这些近期 chunk 可以用来理解当前话题、抽取更好的 query、识别 QQ 号、发现 reply 关系和确定要排除的现场时间窗口；但当用户问的是“以前/之前/有没有人提过/是不是早就说过”时，近期 chunk 不能作为“以前检索到了”的最终证据。若近期 chunk 只是当前话题本身，应把它当作检索线索，而不是答案依据。")
     await add_event("system", "“以前有没有人提过”类问题的检索规则：如果用户是在当前现场话题后追问“是不是有人提过/以前有没有/之前有没有说过”，不要把当前几分钟刚出现的同话题消息当作“以前有人提过”的证据。做法示例：先用当前话题提炼 query 检索；如果命中的最佳结果就是当前现场或刚才触发提问的消息，只能说明“刚才有人说过”，不能直接回答“以前有人提过”。此时应再次调用 search_chat_spans，把 time_end 设到该现场话题之前，并设置 strict_time_end=true，查更早历史；若仍无结果，回答“只查到刚才/当前这次提到，未查到更早记录”。例如当前 19:56 用户问“是不是有人提过某游戏出新卡了”，若第一次命中 19:54 的“某游戏是不是出新卡了”，应继续查 19:54 之前的历史，而不是把 19:54 当作以前证据。")
     await add_event("system", "聊天记录检索要主动向前探索：当用户的问题和群聊历史有关时，默认不要只看最近命中的消息或当前现场 chunk。首轮 search_chat_spans 可以用最近讨论帮助确定 query，但如果问题是在问“什么时候”“之前是否说过”“有没有人提过”“谁早先回答/解释过”“这件事以前怎样讨论过”，你应至少再尝试一次更早时间范围的检索。常用做法：把 time_end 设为当前现场话题开始前、首轮命中时间前，或用户提问前几分钟，并设置 strict_time_end=true；必要时逐步扩大到最近 30 天、全量历史。只有更早检索也没有有效命中时，才能说未查到更早记录。")
@@ -1077,6 +1468,47 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                         await add_event("tool", res_text, tool_call_id=tool_call.id)
                 except Exception as e:
                     await add_event("tool", f"获取排名数据失败: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_player_matches":
+                raw_name = str(fargs.get("name", "")).strip()
+                sid_target: str | None = None
+                at_match = re.search(r"\[(?:at|AT)\s*[:：]\s*(\d+)\]", raw_name)
+                if re.fullmatch(r"\d{17}", raw_name):
+                    sid_target = raw_name
+                elif at_match:
+                    sid_target = await db_val.get_steamid(at_match.group(1))
+                elif QQ_ID_PATTERN.fullmatch(raw_name):
+                    sid_target = await db_val.get_steamid(raw_name)
+                else:
+                    name = _pick_name(raw_name)
+                    sid_target = label_steamid.get(name) if name else None
+                if not sid_target:
+                    await add_event("tool", f"未找到用户或 steamid：{raw_name}", tool_call_id=tool_call.id)
+                    tool_budget -= 1
+                    continue
+                time_type = _pick_time(str(fargs.get("time", "本赛季")))
+                try:
+                    content = await db.get_player_match_history_prompt(
+                        sid_target,
+                        time_type=time_type,
+                        match_type=str(fargs.get("match_type", "all")),
+                        limit=int(fargs.get("limit", 10)),
+                        time_start=fargs.get("time_start"),
+                        time_end=fargs.get("time_end"),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"获取比赛记录失败: {e}", tool_call_id=tool_call.id)
+                tool_budget -= 1
+            elif fname == "fetch_match_detail":
+                try:
+                    content = await db.get_match_detail_prompt(
+                        str(fargs.get("match_id", "")).strip(),
+                        match_type=str(fargs.get("match_type", "auto")),
+                    )
+                    await add_event("tool", content, tool_call_id=tool_call.id)
+                except Exception as e:
+                    await add_event("tool", f"获取比赛详情失败: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
             elif fname == "search_chat_spans":
                 try:
