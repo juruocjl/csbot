@@ -1,7 +1,7 @@
 """add faceit tables
 
 Revision ID: 20260706_add_faceit_tables
-Revises:
+Revises: c21df6155654
 Create Date: 2026-07-06
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20260706_add_faceit_tables"
-down_revision: Union[str, None] = None
+down_revision: Union[str, None] = "c21df6155654"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
