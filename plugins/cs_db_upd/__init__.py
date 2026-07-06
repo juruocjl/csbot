@@ -14,7 +14,7 @@ from ..utils import async_session_factory
 from ..utils import get_session
 
 require("models")
-from ..models import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra
+from ..models import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, SteamFaceitID, MatchStatsFaceit
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 
@@ -85,6 +85,212 @@ class DataManager:
                 # 使用 delete 语句构造器
                 stmt = delete(MemberSteamID).where(MemberSteamID.uid == uid)
                 await session.execute(stmt)
+
+    def _faceit_headers(self) -> dict[str, str]:
+        if not config.faceit_api_key:
+            raise RuntimeError("FACEIT API key 未配置")
+        return {
+            "Authorization": f"Bearer {config.faceit_api_key}",
+            "Accept": "application/json",
+        }
+
+    async def _faceit_get(self, path: str, params: dict | None = None) -> dict:
+        url = "https://open.faceit.com/data/v4" + path
+        async with get_session().get(url, headers=self._faceit_headers(), params=params) as resp:
+            if resp.status == 404:
+                raise ValueError("FACEIT 数据不存在")
+            if resp.status in (401, 403):
+                raise RuntimeError("FACEIT API key 无效或无权限")
+            if resp.status >= 400:
+                text = await resp.text()
+                raise RuntimeError(f"FACEIT API 请求失败: {resp.status} {text[:200]}")
+            return await resp.json()
+
+    def _faceit_cs2_info(self, player: dict) -> dict:
+        games = player.get("games") if isinstance(player, dict) else None
+        cs2 = games.get("cs2") if isinstance(games, dict) else None
+        if not isinstance(cs2, dict):
+            raise ValueError("该 FACEIT 用户没有 CS2 信息")
+        return cs2
+
+    def _faceit_player_record(self, steamid: str, player: dict) -> SteamFaceitID:
+        cs2 = self._faceit_cs2_info(player)
+        game_player_id = str(cs2.get("game_player_id") or "")
+        if not game_player_id:
+            raise ValueError("该 FACEIT 用户没有公开 CS2 SteamID")
+        if game_player_id != steamid:
+            nickname = str(player.get("nickname") or player.get("player_id") or "unknown")
+            raise ValueError(f"FACEIT 用户 {nickname} 对应 SteamID 为 {game_player_id}，与当前 SteamID {steamid} 不一致")
+        return SteamFaceitID(
+            steamid=steamid,
+            player_id=str(player["player_id"]),
+            nickname=str(player.get("nickname") or player["player_id"]),
+            skill_level=self._as_int(cs2.get("skill_level")),
+            faceit_elo=self._as_int(cs2.get("faceit_elo")),
+            updated_at=int(time.time()),
+        )
+
+    async def bind_faceit(self, steamid: str, player_id: str) -> SteamFaceitID:
+        player = await self._faceit_get(f"/players/{player_id}")
+        record = self._faceit_player_record(steamid, player)
+        async with async_session_factory() as session:
+            async with session.begin():
+                stmt = select(SteamFaceitID).where(SteamFaceitID.player_id == record.player_id)
+                existed = (await session.execute(stmt)).scalar_one_or_none()
+                if existed is not None and existed.steamid != steamid:
+                    raise ValueError("该 FACEIT ID 已被其他 SteamID 绑定")
+                await session.merge(record)
+        return record
+
+    async def unbind_faceit(self, steamid: str):
+        async with async_session_factory() as session:
+            async with session.begin():
+                stmt = delete(SteamFaceitID).where(SteamFaceitID.steamid == steamid)
+                await session.execute(stmt)
+
+    async def _refresh_faceit_bind(self, bind: SteamFaceitID, session: AsyncSession) -> SteamFaceitID:
+        player = await self._faceit_get(f"/players/{bind.player_id}")
+        record = self._faceit_player_record(bind.steamid, player)
+        await session.merge(record)
+        return record
+
+    def _as_int(self, value, default: int = 0) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+    def _as_float(self, value, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _faceit_score(self, score: dict | None, team_key: str) -> int:
+        if not isinstance(score, dict):
+            return 0
+        return self._as_int(score.get(team_key))
+
+    def _faceit_roster(self, match_detail: dict) -> dict[str, dict]:
+        roster: dict[str, dict] = {}
+        teams = match_detail.get("teams") if isinstance(match_detail, dict) else None
+        if not isinstance(teams, dict):
+            return roster
+        for team_key, team in teams.items():
+            if not isinstance(team, dict):
+                continue
+            players = team.get("roster") or team.get("players") or []
+            if not isinstance(players, list):
+                continue
+            for player in players:
+                if not isinstance(player, dict):
+                    continue
+                pid = str(player.get("player_id") or "")
+                if not pid:
+                    continue
+                roster[pid] = {
+                    "team_key": team_key,
+                    "steamid": str(player.get("game_player_id") or "") or None,
+                    "nickname": str(player.get("nickname") or player.get("game_player_name") or pid),
+                    "skill_level": self._as_int(player.get("skill_level") or player.get("game_skill_level")),
+                    "faceit_elo": self._as_int(player.get("faceit_elo")),
+                }
+        return roster
+
+    async def _update_match_faceit(self, mid: str, timeStamp: int, bind: SteamFaceitID, session: AsyncSession) -> int:
+        count_stmt = select(func.count()).select_from(MatchStatsFaceit).where(MatchStatsFaceit.mid == mid)
+        if (await session.execute(count_stmt)).scalar_one() > 0:
+            return 0
+
+        match_detail = await self._faceit_get(f"/matches/{mid}")
+        match_stats = await self._faceit_get(f"/matches/{mid}/stats")
+        await asyncio.sleep(0.2)
+
+        results = match_detail.get("results") if isinstance(match_detail, dict) else {}
+        score = results.get("score") if isinstance(results, dict) else {}
+        winner_key = str(results.get("winner") or "") if isinstance(results, dict) else ""
+        roster = self._faceit_roster(match_detail)
+        rounds = match_stats.get("rounds") if isinstance(match_stats, dict) else []
+        if not rounds:
+            return 0
+        first_round = rounds[0]
+        round_stats = first_round.get("round_stats") if isinstance(first_round, dict) else {}
+        voting = match_detail.get("voting") if isinstance(match_detail, dict) else {}
+        voting_map = voting.get("map") if isinstance(voting, dict) else {}
+        map_name = str(round_stats.get("Map") or voting_map.get("pick") or "unknown")
+        region = str(round_stats.get("Region") or match_detail.get("region") or "")
+        competition = str(match_detail.get("competition_name") or match_detail.get("organizer_name") or "FACEIT")
+        mode = str(match_detail.get("game_mode") or "FACEIT")
+
+        teams = first_round.get("teams") if isinstance(first_round, dict) else []
+        if not isinstance(teams, list):
+            return 0
+
+        for team in teams:
+            if not isinstance(team, dict):
+                continue
+            team_key = str(team.get("team_id") or "")
+            players = team.get("players") or []
+            if not isinstance(players, list):
+                continue
+            if team_key not in ("faction1", "faction2"):
+                for roster_player in players:
+                    if not isinstance(roster_player, dict):
+                        continue
+                    pid = str(roster_player.get("player_id") or "")
+                    roster_team_key = roster.get(pid, {}).get("team_key")
+                    if roster_team_key in ("faction1", "faction2"):
+                        team_key = roster_team_key
+                        break
+            team_num = 1 if team_key == "faction1" else 2
+            win_team = 1 if winner_key == "faction1" else 2 if winner_key == "faction2" else 0
+            for player in players:
+                if not isinstance(player, dict):
+                    continue
+                pid = str(player.get("player_id") or "")
+                if not pid:
+                    continue
+                player_stats = player.get("player_stats") or {}
+                info = roster.get(pid, {})
+                steamid = info.get("steamid")
+                if not steamid:
+                    stmt = select(SteamFaceitID.steamid).where(SteamFaceitID.player_id == pid).limit(1)
+                    steamid = (await session.execute(stmt)).scalar_one_or_none()
+                skill_level = self._as_int(info.get("skill_level"))
+                faceit_elo = self._as_int(info.get("faceit_elo"))
+                if pid == bind.player_id:
+                    skill_level = bind.skill_level
+                    faceit_elo = bind.faceit_elo
+                    steamid = bind.steamid
+
+                entry = MatchStatsFaceit(
+                    mid=mid,
+                    player_id=pid,
+                    steamid=steamid,
+                    nickname=str(info.get("nickname") or player.get("nickname") or pid),
+                    mapName=map_name,
+                    team=team_num,
+                    winTeam=win_team,
+                    score1=self._faceit_score(score, "faction1"),
+                    score2=self._faceit_score(score, "faction2"),
+                    timeStamp=timeStamp,
+                    mode=mode,
+                    competitionName=competition,
+                    region=region,
+                    kill=self._as_int(player_stats.get("Kills")),
+                    death=self._as_int(player_stats.get("Deaths")),
+                    assist=self._as_int(player_stats.get("Assists")),
+                    adr=self._as_float(player_stats.get("ADR")),
+                    rating=self._as_float(player_stats.get("Rating")),
+                    kdRatio=self._as_float(player_stats.get("K/D Ratio")),
+                    headshots=self._as_int(player_stats.get("Headshots")),
+                    headshotsPct=self._as_int(player_stats.get("Headshots %")),
+                    mvp=self._as_int(player_stats.get("MVPs")),
+                    skillLevel=skill_level,
+                    faceitElo=faceit_elo,
+                )
+                await session.merge(entry)
+        return 1
 
     async def _set_match_gp_extra(self, mid: str, nextUpdateTime: int, fetchCount: int, session: AsyncSession):
         record = await session.get(MatchStatsGPExtra, mid)
@@ -639,7 +845,38 @@ class DataManager:
         else:
             logger.info(f"extra_info no change, skipped for SteamID: {steamid}")
     
-    async def update_stats(self, steamid: str, interval: int=600) -> tuple[str, list[str], list[str]]:
+    async def _update_faceit_matches(self, steamid: str, session: AsyncSession) -> list[str]:
+        bind = await session.get(SteamFaceitID, steamid)
+        if bind is None:
+            return []
+        bind = await self._refresh_faceit_bind(bind, session)
+        latest_time = await db_val.get_latest_faceit_match_time(steamid)
+        params = {
+            "game": "cs2",
+            "offset": 0,
+            "limit": 20,
+        }
+        if latest_time > 0:
+            params["from"] = latest_time + 1
+        history = await self._faceit_get(f"/players/{bind.player_id}/history", params=params)
+        await asyncio.sleep(0.2)
+        items = history.get("items") if isinstance(history, dict) else []
+        if not isinstance(items, list):
+            return []
+        added: list[str] = []
+        for match in sorted(items, key=lambda item: int(item.get("started_at") or 0)):
+            mid = str(match.get("match_id") or "")
+            started_at = self._as_int(match.get("started_at"))
+            if not mid or started_at <= latest_time:
+                continue
+            try:
+                if await self._update_match_faceit(mid, started_at, bind, session):
+                    added.append(mid)
+            except Exception as exc:
+                logger.warning(f"update faceit match skipped steamid={steamid} mid={mid} error={exc}")
+        return added
+
+    async def update_stats(self, steamid: str, interval: int=600) -> tuple[str, list[str], list[str], list[str]]:
         logger.info(f"update_stats start steamid={steamid} interval={interval}")
         # 尝试获取锁，失败则抛出 LockingError
         try:
@@ -679,6 +916,7 @@ class DataManager:
             newLastTime = LastTime
             addMatchesList: list[str] = []
             addMatchesGPList: list[str] = []
+            addMatchesFaceitList: list[str] = []
 
             async def _work(session: AsyncSession) -> None:
                 nonlocal newLastTime
@@ -753,8 +991,12 @@ class DataManager:
                 async with session.begin():
                     logger.info(f"update_stats stage=write_match_list_gp steamid={steamid}")
                     await _work_gp(session)
-            logger.info(f"update_stats done steamid={steamid} pw_added={len(addMatchesList)} gp_added={len(addMatchesGPList)}")
-            return base_info.name, addMatchesList, addMatchesGPList
+
+                async with session.begin():
+                    logger.info(f"update_stats stage=write_match_list_faceit steamid={steamid}")
+                    addMatchesFaceitList = await self._update_faceit_matches(steamid, session)
+            logger.info(f"update_stats done steamid={steamid} pw_added={len(addMatchesList)} gp_added={len(addMatchesGPList)} faceit_added={len(addMatchesFaceitList)}")
+            return base_info.name, addMatchesList, addMatchesGPList, addMatchesFaceitList
         finally:
             logger.info(f"update_stats release_lock steamid={steamid}")
             self.lock.release()

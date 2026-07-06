@@ -7,3 +7,4 @@ class Config(BaseModel):
     cs_last_season_id: str
     cs_mysteam_id: int
     cs_wmtoken: str
+    faceit_api_key: str | None = None

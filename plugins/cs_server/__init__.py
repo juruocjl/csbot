@@ -38,7 +38,7 @@ require("utils")
 from ..utils import async_session_factory, local_storage
 require("models")
 from ..models import AuthSession, MajorHWSnapshot, UserInfo
-from ..models import MatchStatsPW, MatchStatsGP
+from ..models import MatchStatsPW, MatchStatsGP, MatchStatsFaceit
 require("cs_db_val")
 from ..cs_db_val import db as db_val
 from ..cs_db_val import valid_time, gp_time, NoValueError
@@ -549,6 +549,34 @@ async def get_token_steamid(info: AuthSession = Depends(get_current_user)):
     assert info.user_id is not None
     return InfoSteamIdResponse(
         steamId=await db_val.get_steamid(info.user_id)
+    )
+
+class InfoFaceitResponse(BaseModel):
+    steamId: str | None = Field(..., description="绑定的 Steam ID")
+    playerId: str | None = Field(..., description="绑定的 FACEIT player_id")
+    nickname: str | None = Field(..., description="FACEIT 昵称")
+    skillLevel: int | None = Field(..., description="FACEIT 等级")
+    faceitElo: int | None = Field(..., description="FACEIT ELO")
+
+@app.post("/api/auth/info/faceit",
+    response_model=InfoFaceitResponse,
+    summary="获取绑定的 FACEIT 信息",
+    description="获取当前用户 SteamID 对应的 FACEIT 绑定信息。"
+)
+async def get_token_faceit(info: AuthSession = Depends(get_current_user)):
+    assert info.user_id is not None
+    steamid = await db_val.get_steamid(info.user_id)
+    if steamid is None:
+        return InfoFaceitResponse(steamId=None, playerId=None, nickname=None, skillLevel=None, faceitElo=None)
+    bind = await db_val.get_faceit_bind(steamid)
+    if bind is None:
+        return InfoFaceitResponse(steamId=steamid, playerId=None, nickname=None, skillLevel=None, faceitElo=None)
+    return InfoFaceitResponse(
+        steamId=steamid,
+        playerId=bind.player_id,
+        nickname=bind.nickname,
+        skillLevel=bind.skill_level,
+        faceitElo=bind.faceit_elo,
     )
 
 @app.post("/api/status",
@@ -1067,12 +1095,144 @@ async def get_match_gp_history(
         ] if match_records else []
     )
 
+class MatchFaceitPlayerInfo(BaseModel):
+    faceitPlayerId: str = Field(..., description="FACEIT player_id")
+    steamId: str | None = Field(..., description="Steam ID")
+    nickname: str = Field(..., description="FACEIT 昵称")
+    team: int = Field(..., description="玩家所在队伍")
+    skillLevel: int = Field(..., description="FACEIT 等级")
+    faceitElo: int = Field(..., description="FACEIT ELO")
+    adr: float = Field(..., description="ADR")
+    rating: float = Field(..., description="FACEIT Rating")
+    kdRatio: float = Field(..., description="K/D Ratio")
+    kills: int = Field(..., description="击杀")
+    deaths: int = Field(..., description="死亡")
+    assists: int = Field(..., description="助攻")
+    headshotsPct: int = Field(..., description="爆头率")
+    mvps: int = Field(..., description="MVP 数")
+
+class MatchFaceitInfo(BaseModel):
+    matchId: str = Field(..., description="比赛 ID")
+    timestamp: int = Field(..., description="比赛时间戳")
+    winTeam: int = Field(..., description="获胜队伍")
+    mode: str = Field(..., description="比赛模式")
+    competitionName: str = Field(..., description="赛事名称")
+    region: str = Field(..., description="地区")
+    mapName: str = Field(..., description="地图")
+    userTeam: int | None = Field(..., description="群友所在队伍")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    players: list[MatchFaceitPlayerInfo] = Field(..., description="玩家列表")
+
+@app.post("/api/match/infofaceit",
+    response_model=MatchFaceitInfo,
+    summary="获取 FACEIT 比赛详情",
+    description="根据比赛 ID 获取 FACEIT 比赛详情。"
+)
+async def get_match_faceit_info(matchId: str = Body(..., embed=True), _ = Depends(get_current_user)):
+    match_detail = await db_val.get_match_faceit_detail(matchId)
+    if not match_detail:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return MatchFaceitInfo(
+        matchId=matchId,
+        timestamp=match_detail[0].timeStamp,
+        winTeam=match_detail[0].winTeam,
+        mode=match_detail[0].mode,
+        competitionName=match_detail[0].competitionName,
+        region=match_detail[0].region,
+        mapName=match_detail[0].mapName,
+        userTeam=await get_match_user_team([(player.steamid, player.team) for player in match_detail if player.steamid]),
+        team1Score=match_detail[0].score1,
+        team2Score=match_detail[0].score2,
+        players=[
+            MatchFaceitPlayerInfo(
+                faceitPlayerId=player.player_id,
+                steamId=player.steamid,
+                nickname=player.nickname,
+                team=player.team,
+                skillLevel=player.skillLevel,
+                faceitElo=player.faceitElo,
+                adr=player.adr,
+                rating=player.rating,
+                kdRatio=player.kdRatio,
+                kills=player.kill,
+                deaths=player.death,
+                assists=player.assist,
+                headshotsPct=player.headshotsPct,
+                mvps=player.mvp,
+            ) for player in match_detail
+        ]
+    )
+
+class MatchFaceitHistoryItem(BaseModel):
+    matchId: str = Field(..., description="比赛 ID")
+    timeStamp: int = Field(..., description="比赛时间戳")
+    mode: str = Field(..., description="比赛模式")
+    competitionName: str = Field(..., description="赛事名称")
+    mapName: str = Field(..., description="地图")
+    team1Score: int = Field(..., description="队伍 1 分数")
+    team2Score: int = Field(..., description="队伍 2 分数")
+    team: int = Field(..., description="玩家所在队伍")
+    winTeam: int = Field(..., description="获胜队伍")
+    adr: float = Field(..., description="ADR")
+    kdRatio: float = Field(..., description="K/D Ratio")
+    kills: int = Field(..., description="击杀")
+    deaths: int = Field(..., description="死亡")
+    assists: int = Field(..., description="助攻")
+    skillLevel: int = Field(..., description="FACEIT 等级")
+    faceitElo: int = Field(..., description="FACEIT ELO")
+
+class MatchFaceitHistoryResponse(BaseModel):
+    totCount: int = Field(..., description="总比赛数")
+    pageSize: int = Field(..., description="每页大小")
+    matches: list[MatchFaceitHistoryItem] = Field(..., description="比赛列表")
+
+@app.post("/api/match/historyfaceit",
+    response_model=MatchFaceitHistoryResponse,
+    summary="获取 FACEIT 比赛历史",
+    description="根据 Steam ID 获取 FACEIT 比赛历史。"
+)
+async def get_match_faceit_history(
+    steamId: str = Body(..., embed=True),
+    timeType: str = Body(..., embed=True),
+    page: int = Body(..., embed=True, ge=1),
+    _ = Depends(get_current_user)):
+    match_records = await db_val.get_matches_faceit(steamId, timeType, offset=(page - 1) * 20, limit=20)
+    total_count = await db_val.get_matches_faceit_count(steamId, timeType)
+    if not total_count:
+        raise HTTPException(status_code=404, detail="No match history found")
+    return MatchFaceitHistoryResponse(
+        totCount=total_count,
+        pageSize=20,
+        matches=[
+            MatchFaceitHistoryItem(
+                matchId=record.mid,
+                timeStamp=record.timeStamp,
+                mode=record.mode,
+                competitionName=record.competitionName,
+                mapName=record.mapName,
+                team=record.team,
+                winTeam=record.winTeam,
+                team1Score=record.score1,
+                team2Score=record.score2,
+                adr=record.adr,
+                kdRatio=record.kdRatio,
+                kills=record.kill,
+                deaths=record.death,
+                assists=record.assist,
+                skillLevel=record.skillLevel,
+                faceitElo=record.faceitElo,
+            ) for record in match_records
+        ] if match_records else []
+    )
+
 class AllMatchHistoryItem(BaseModel):
     matchId: str = Field(..., description="比赛 ID")
     timeStamp: int = Field(..., description="比赛时间戳")
     mode: str = Field(..., description="比赛模式")
     mapName: str = Field(..., description="比赛地图")
     isGP: bool = Field(..., description="是否为官匹")
+    matchType: str = Field(..., description="比赛来源: pw/gp/faceit")
     team1Score: int = Field(..., description="队伍 1 分数")
     team2Score: int = Field(..., description="队伍 2 分数")
     team1Player: list[str] = Field(..., description="队伍 1 玩家 Steam ID 列表")
@@ -1108,6 +1268,7 @@ async def get_all_match_history(
                 mode=record['mode'],
                 mapName=record['mapName'],
                 isGP=record['isGP'],
+                matchType=record.get('matchType', 'gp' if record['isGP'] else 'pw'),
                 team1Score=record['score1'],
                 team2Score=record['score2'],
                 team1Player=record['team1'],
@@ -1367,6 +1528,7 @@ class PlayerUpdateResponse(BaseModel):
     nickname: str = Field(..., description="玩家昵称")
     matchCount: int = Field(..., description="更新的比赛数量")
     matchgpCount: int = Field(..., description="更新的官匹比赛数量")
+    faceitCount: int = Field(..., description="更新的 FACEIT 比赛数量")
 
 @app.post("/api/player/update",
     response_model=PlayerUpdateResponse,
@@ -1387,7 +1549,8 @@ async def update_player_data(steamId: str = Body(..., embed=True), _ = Depends(g
     return PlayerUpdateResponse(
         nickname=res[0],
         matchCount=len(res[1]),
-        matchgpCount=len(res[2])
+        matchgpCount=len(res[2]),
+        faceitCount=len(res[3])
     )
 
 class TimeResponse(BaseModel):

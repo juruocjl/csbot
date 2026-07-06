@@ -85,10 +85,10 @@ class DataManager:
                 is_retry_later = False
                 try:
                     logger.info(f"开始更新玩家数据: {steamid}")
-                    nickname, pwlist, gplist = await db_upd.update_stats(steamid)
+                    nickname, pwlist, gplist, faceitlist = await db_upd.update_stats(steamid)
                     logger.info(f"玩家数据更新成功: {steamid} {nickname}")
-                    if len(pwlist) + len(gplist) < 5:
-                        await sendMatches(pwlist, gplist)
+                    if len(pwlist) + len(gplist) + len(faceitlist) < 5:
+                        await sendMatches(pwlist, gplist, faceitlist)
                 except LockingError:
                     is_locking_error = True
                     logger.warning(f"数据库被锁定，保留在队列中: {steamid}")
@@ -110,7 +110,7 @@ class DataManager:
                 logger.error(f"队列处理异常: {e}")
                 await asyncio.sleep(1)
 
-async def sendMatches(pwlist, gplist):
+async def sendMatches(pwlist, gplist, faceitlist):
     bot = get_bot()
     if isinstance(bot, Bot):
         for gid in config.cs_group_list:
@@ -121,6 +121,10 @@ async def sendMatches(pwlist, gplist):
                     await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
             for mid in gplist:
                 screenshot = await get_screenshot(f"/match-gp?id={mid}", token)
+                if screenshot:
+                    await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
+            for mid in faceitlist:
+                screenshot = await get_screenshot(f"/match-faceit?id={mid}", token)
                 if screenshot:
                     await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
     else:

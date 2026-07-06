@@ -49,6 +49,16 @@ class MemberSteamID(Base):
     uid: Mapped[str] = mapped_column(String(20), primary_key=True)
     steamid: Mapped[str] = mapped_column(String(20))
 
+class SteamFaceitID(Base):
+    __tablename__ = "steam_faceit_ids"
+
+    steamid: Mapped[str] = mapped_column(String(20), primary_key=True)
+    player_id: Mapped[str] = mapped_column(String(50), unique=True)
+    nickname: Mapped[str] = mapped_column(String(100))
+    skill_level: Mapped[int] = mapped_column(Integer)
+    faceit_elo: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(BigInteger)
+
 # 完美比赛数据
 class MatchStatsPW(Base):
     __tablename__ = "matches"
@@ -209,6 +219,36 @@ class MatchStatsGPExtra(Base):
     fetchCount: Mapped[int] = mapped_column(Integer)
 
 # Steam 用户基础信息
+class MatchStatsFaceit(Base):
+    __tablename__ = "matches_faceit"
+
+    mid: Mapped[str] = mapped_column(String(60), primary_key=True)
+    player_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    steamid: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    nickname: Mapped[str] = mapped_column(String(100))
+
+    mapName: Mapped[str] = mapped_column(String(50))
+    team: Mapped[int] = mapped_column(Integer)
+    winTeam: Mapped[int] = mapped_column(Integer)
+    score1: Mapped[int] = mapped_column(Integer)
+    score2: Mapped[int] = mapped_column(Integer)
+    timeStamp: Mapped[int] = mapped_column(BigInteger)
+    mode: Mapped[str] = mapped_column(String(100))
+    competitionName: Mapped[str] = mapped_column(String(200))
+    region: Mapped[str] = mapped_column(String(20))
+
+    kill: Mapped[int] = mapped_column(Integer)
+    death: Mapped[int] = mapped_column(Integer)
+    assist: Mapped[int] = mapped_column(Integer)
+    adr: Mapped[float] = mapped_column(Float)
+    rating: Mapped[float] = mapped_column(Float)
+    kdRatio: Mapped[float] = mapped_column(Float)
+    headshots: Mapped[int] = mapped_column(Integer)
+    headshotsPct: Mapped[int] = mapped_column(Integer)
+    mvp: Mapped[int] = mapped_column(Integer)
+    skillLevel: Mapped[int] = mapped_column(Integer)
+    faceitElo: Mapped[int] = mapped_column(Integer)
+
 class SteamBaseInfo(Base):
     __tablename__ = "steamid_baseinfo_v2"
 

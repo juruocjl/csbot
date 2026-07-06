@@ -67,6 +67,10 @@ bind = on_command("绑定", priority=10, block=True)
 
 unbind = on_command("解绑", priority=10, block=True)
 
+bindfaceit = on_command("faceit绑定", priority=10, block=True)
+
+unbindfaceit = on_command("faceit解绑", priority=10, block=True)
+
 update = on_command("更新数据", priority=10, block=True)
 
 show = on_command("查看数据", priority=10, block=True)
@@ -103,6 +107,32 @@ async def unbind_function(message: MessageEvent):
     await db_upd.unbind(uid)
     await unbind.finish(f"解绑成功。")
 
+@bindfaceit.handle()
+async def bind_faceit_function(message: MessageEvent, args: Message = CommandArg()):
+    uid = message.get_user_id()
+    player_id = args.extract_plain_text().strip()
+    if not player_id:
+        await bindfaceit.finish("请输入 FACEIT player_id。用法：/faceit绑定 <player_id>")
+    steamid = await db_val.get_steamid(uid)
+    if steamid is None:
+        await bindfaceit.finish("请先使用 /绑定 steamid64 绑定 SteamID")
+    try:
+        record = await db_upd.bind_faceit(steamid, player_id)
+    except Exception as e:
+        await bindfaceit.finish(f"FACEIT 绑定失败：{e}")
+    await bindfaceit.finish(
+        f"FACEIT 绑定成功：{record.nickname}，Level {record.skill_level}，ELO {record.faceit_elo}"
+    )
+
+@unbindfaceit.handle()
+async def unbind_faceit_function(message: MessageEvent):
+    uid = message.get_user_id()
+    steamid = await db_val.get_steamid(uid)
+    if steamid is None:
+        await unbindfaceit.finish("请先使用 /绑定 steamid64 绑定 SteamID")
+    await db_upd.unbind_faceit(steamid)
+    await unbindfaceit.finish("FACEIT 解绑成功。")
+
 @update.handle()
 async def update_function(message: MessageEvent):
     uid = message.get_user_id()
@@ -116,7 +146,7 @@ async def update_function(message: MessageEvent):
             result = await db_upd.update_stats(steamid)
         except Exception as e:
             await update.finish(f"更新失败：{e}")
-        await update.send(f"{result[0]} 成功更新 {len(result[1])} 场完美数据, {len(result[2])} 场官匹数据")
+        await update.send(f"{result[0]} 成功更新 {len(result[1])} 场完美数据, {len(result[2])} 场官匹数据, {len(result[3])} 场 FACEIT 数据")
         baseinfo = await db_val.get_base_info(steamid)
         detailinfo = await db_val.get_detail_info(steamid)
         if baseinfo is None or detailinfo is None:
@@ -322,14 +352,16 @@ async def updateall_function():
     await updateall.send("开始更新所有数据")
     cntwm = 0
     cntgp = 0
+    cntfaceit = 0
     for steamid in await db_val.get_all_steamid():
         try:
             result = await db_upd.update_stats(steamid)
             cntwm += len(result[1])
             cntgp += len(result[2])
+            cntfaceit += len(result[3])
         except Exception as e:
             logger.error(f"更新{steamid}失败：{e}")
-    await updateall.finish(f"更新完成 {cntwm} 场完美数据 {cntgp} 场官匹数据")
+    await updateall.finish(f"更新完成 {cntwm} 场完美数据 {cntgp} 场官匹数据 {cntfaceit} 场 FACEIT 数据")
 
 @matchteammate.handle()
 async def matchteammate_function(message: MessageEvent, args: Message = CommandArg()):

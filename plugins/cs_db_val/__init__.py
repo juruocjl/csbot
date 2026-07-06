@@ -20,7 +20,7 @@ require("utils")
 from ..utils import async_session_factory
 from ..utils import get_today_start_timestamp
 require("models")
-from ..models import MemberSteamID, GroupMember, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra
+from ..models import MemberSteamID, GroupMember, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, SteamFaceitID, MatchStatsFaceit
 
 from .config import Config
 
@@ -144,6 +144,16 @@ class DataManager:
             record = await session.get(MemberSteamID, uid)
             
             return record.steamid if record else None
+
+    async def get_faceit_bind(self, steamid: str) -> SteamFaceitID | None:
+        async with async_session_factory() as session:
+            return await session.get(SteamFaceitID, steamid)
+
+    async def get_faceit_bind_by_uid(self, uid: str) -> SteamFaceitID | None:
+        steamid = await self.get_steamid(uid)
+        if steamid is None:
+            return None
+        return await self.get_faceit_bind(steamid)
 
     async def is_user(self, steamid: str) -> bool:
         """是否是群友"""
@@ -465,6 +475,51 @@ class DataManager:
         async with async_session_factory() as session:
             return await session.get(MatchStatsGPExtra, mid)
 
+    async def get_matches_faceit(self, steamid: str, time_type: str, limit: int = 20, offset: int = 0) -> list[MatchStatsFaceit] | None:
+        assert time_type in gp_time, "时间类型错误"
+        async with async_session_factory() as session:
+            stmt = (
+                select(MatchStatsFaceit)
+                .where(MatchStatsFaceit.steamid == steamid)
+                .where(text(get_time_sql(time_type)))
+                .order_by(MatchStatsFaceit.timeStamp.desc())
+                .limit(limit).offset(offset)
+            )
+            result = await session.execute(stmt)
+            matches = list(result.scalars().all())
+            return matches if matches else None
+
+    async def get_matches_faceit_count(self, steamid: str, time_type: str) -> int:
+        assert time_type in gp_time, "时间类型错误"
+        async with async_session_factory() as session:
+            stmt = (
+                select(func.count(MatchStatsFaceit.mid))
+                .where(MatchStatsFaceit.steamid == steamid)
+                .where(text(get_time_sql(time_type)))
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one()
+
+    async def get_match_faceit_detail(self, mid: str) -> list[MatchStatsFaceit] | None:
+        async with async_session_factory() as session:
+            stmt = select(MatchStatsFaceit).where(MatchStatsFaceit.mid == mid)
+            result = await session.execute(stmt)
+            matches = list(result.scalars().all())
+            return matches if matches else None
+
+    async def get_latest_faceit_match_time(self, steamid: str) -> int:
+        async with async_session_factory() as session:
+            stmt = select(func.max(MatchStatsFaceit.timeStamp)).where(MatchStatsFaceit.steamid == steamid)
+            result = await session.execute(stmt)
+            value = result.scalar_one_or_none()
+            return int(value or 0)
+
+    async def get_faceit_steamid(self, player_id: str) -> str | None:
+        async with async_session_factory() as session:
+            stmt = select(SteamFaceitID.steamid).where(SteamFaceitID.player_id == player_id).limit(1)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
     async def get_all_matches_count(self) -> int:
         """
         获取包含群成员的比赛总场次（去重后的 mid 数量）。
@@ -473,16 +528,19 @@ class DataManager:
             # 1. 构建联合表 (CTE)
             # 为了性能，这里只需要查 mid 和 steamid，不需要查 map, time, team 等详细信息
             stats_union = union_all(
-                select(MatchStatsPW.mid, MatchStatsPW.steamid),
-                select(MatchStatsGP.mid, MatchStatsGP.steamid)
+                select(MatchStatsPW.mid, MatchStatsPW.steamid, literal("pw").label("matchType")),
+                select(MatchStatsGP.mid, MatchStatsGP.steamid, literal("gp").label("matchType")),
+                select(MatchStatsFaceit.mid, MatchStatsFaceit.steamid, literal("faceit").label("matchType"))
             ).cte("stats_union")
 
             # 2. 构建查询
             # 逻辑：在联合表中，连接 MemberSteamID 表，统计不重复的 mid 数量
-            stmt = (
-                select(func.count(func.distinct(stats_union.c.mid)))
+            grouped = (
+                select(stats_union.c.mid, stats_union.c.matchType)
                 .join(MemberSteamID, stats_union.c.steamid == MemberSteamID.steamid)
-            )
+                .group_by(stats_union.c.mid, stats_union.c.matchType)
+            ).subquery("grouped_matches")
+            stmt = select(func.count()).select_from(grouped)
 
             # 3. 执行查询
             # scalar() 会返回查询结果的第一行第一列，即 count 的数值
@@ -509,7 +567,8 @@ class DataManager:
                     MatchStatsPW.winTeam,
                     MatchStatsPW.score1,
                     MatchStatsPW.score2,
-                    literal(0).label("isGP")
+                    literal(0).label("isGP"),
+                    literal("pw").label("matchType")
                 ),
                 select(
                     MatchStatsGP.mid, 
@@ -521,16 +580,30 @@ class DataManager:
                     MatchStatsGP.winTeam,
                     MatchStatsGP.score1,
                     MatchStatsGP.score2,
-                    literal(1).label("isGP")
+                    literal(1).label("isGP"),
+                    literal("gp").label("matchType")
+                ),
+                select(
+                    MatchStatsFaceit.mid,
+                    MatchStatsFaceit.steamid,
+                    MatchStatsFaceit.timeStamp,
+                    MatchStatsFaceit.mapName,
+                    MatchStatsFaceit.mode,
+                    MatchStatsFaceit.team,
+                    MatchStatsFaceit.winTeam,
+                    MatchStatsFaceit.score1,
+                    MatchStatsFaceit.score2,
+                    literal(0).label("isGP"),
+                    literal("faceit").label("matchType")
                 )
             ).cte("stats_union")
 
             # 2. 分页子查询：获取目标页的 mid 列表
             # 逻辑：找出最近的 N 场比赛，且这些比赛里必须包含至少一个群成员
             paged_mids_subq = (
-                select(stats_union.c.mid, stats_union.c.timeStamp)
+                select(stats_union.c.mid, stats_union.c.matchType, stats_union.c.timeStamp)
                 .join(unique_members_subq, stats_union.c.steamid == unique_members_subq.c.steamid) # 过滤：只看有群友的比赛
-                .group_by(stats_union.c.mid, stats_union.c.timeStamp)
+                .group_by(stats_union.c.mid, stats_union.c.matchType, stats_union.c.timeStamp)
                 .order_by(desc(stats_union.c.timeStamp)) # 按时间倒序
                 .limit(limit)
                 .offset(offset)
@@ -544,15 +617,16 @@ class DataManager:
                     stats_union.c.mapName,
                     stats_union.c.mode,
                     stats_union.c.isGP,
+                    stats_union.c.matchType,
                     stats_union.c.steamid,
                     stats_union.c.team,
                     stats_union.c.winTeam,
                     stats_union.c.score1,
                     stats_union.c.score2
                 )
-                .join(paged_mids_subq, stats_union.c.mid == paged_mids_subq.c.mid) # 锁定这几场比赛
+                .join(paged_mids_subq, (stats_union.c.mid == paged_mids_subq.c.mid) & (stats_union.c.matchType == paged_mids_subq.c.matchType)) # 锁定这几场比赛
                 .join(unique_members_subq, stats_union.c.steamid == unique_members_subq.c.steamid) # 锁定只显示群友
-                .order_by(desc(paged_mids_subq.c.timeStamp)) # 保持比赛间的时间顺序
+                .order_by(desc(paged_mids_subq.c.timeStamp), stats_union.c.matchType, stats_union.c.mid) # 保持比赛间的时间顺序
             )
 
             result = await session.execute(stmt)
@@ -563,7 +637,7 @@ class DataManager:
             
             # groupby 需要数据已排序，SQL 中已经 order_by desc(timestamp)，也就是隐式按 mid 分组了(如果timestamp不重复)
             # 为了保险，通常建议 key 取 mid
-            for mid, group in groupby(rows, key=lambda x: x.mid):
+            for (match_type, mid), group in groupby(rows, key=lambda x: (x.matchType, x.mid)):
                 group_rows = list(group)
                 if not group_rows:
                     continue
@@ -576,6 +650,7 @@ class DataManager:
                     "mapName": first.mapName,
                     "mode": first.mode,
                     "isGP": first.isGP,
+                    "matchType": match_type,
                     "winTeam": first.winTeam, # int: 1 或 2
                     "score1": first.score1,
                     "score2": first.score2,
