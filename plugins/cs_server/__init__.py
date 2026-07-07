@@ -981,22 +981,8 @@ class WatchStageManager:
             return None, None
         if not isinstance(rows, list):
             return None, None
-        current = next((row for row in rows if isinstance(row, dict) and row.get("season") == config.cs_season_id), None)
-        if current and self._optional_int(current.get("score")):
-            selected = current
-        else:
-            selected = next(
-                (
-                    row for row in sorted(
-                        [row for row in rows if isinstance(row, dict)],
-                        key=lambda item: str(item.get("startTime") or ""),
-                        reverse=True,
-                    )
-                    if self._optional_int(row.get("score"))
-                ),
-                None,
-            )
-        if not selected:
+        selected = next((row for row in rows if isinstance(row, dict) and row.get("season") == config.cs_season_id), None)
+        if not selected or not self._optional_int(selected.get("score")):
             return None, None
         return self._optional_int(selected.get("score")), self._optional_int(selected.get("currSStars") or 0)
 
