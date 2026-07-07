@@ -104,6 +104,10 @@ async def init_session():
     global session
     session = aiohttp.ClientSession()
 
+    if os.getenv("CS_SKIP_SCHEMA_CHECK") == "1":
+        logger.info("skip database schema check")
+        return
+
     logger.info("正在检查数据库结构与模型定义是否一致...")
     
     # 定义同步检查函数

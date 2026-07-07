@@ -22,6 +22,7 @@ from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
 from pyppeteer import launch
 from ..major_hw.playoff_homework import (
@@ -35,9 +36,9 @@ require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
-from ..utils import async_session_factory, local_storage
+from ..utils import async_session_factory, local_storage, get_session
 require("models")
-from ..models import AuthSession, MajorHWSnapshot, UserInfo
+from ..models import AuthSession, GroupMember, MajorHWSnapshot, MemberSteamID, SteamBaseInfo, SteamExtraInfo, UserInfo
 from ..models import MatchStatsPW, MatchStatsGP, MatchStatsFaceit
 require("cs_db_val")
 from ..cs_db_val import db as db_val
@@ -255,17 +256,16 @@ async def get_user_name(uid: str, interval: int = config.user_name_cache_expirat
     user = await db.get_user(uid)
     if user != None and user.last_update_time and (int(time.time()) - user.last_update_time) < interval:
         return user.nickname
-    bot = get_bot()
-    assert isinstance(bot, Bot)
-    username = "未知用户"
+    username = user.nickname if user else "未知用户"
     try:
+        bot = get_bot()
+        assert isinstance(bot, Bot)
         username = (await bot.get_stranger_info(user_id=int(uid), no_cache=True))["nickname"]
     except:
         pass
     await db.set_user_name(uid, username)
     result = await db.get_user(uid)
-    assert result is not None
-    return result.nickname
+    return result.nickname if result else username
 
 LOCAL_URL = "http://localhost:1234"
 
@@ -436,6 +436,637 @@ async def get_display_pvp_score(player: MatchStatsPW) -> tuple[int | None, bool]
         )
         return max(1, int(round(display_score))), True
 
+
+class WatchStageLivePlayer(BaseModel):
+    steamId: str = Field(..., description="Steam ID")
+    side: str = Field(..., description="CT/TERRORIST")
+    kill: int = Field(0, description="本场击杀")
+    death: int = Field(0, description="本场死亡")
+    assist: int = Field(0, description="本场助攻")
+    score: int = Field(0, description="本场分数")
+    adr: float = Field(0.0, description="本场 ADR")
+    headshot: str | None = Field(None, description="本场爆头率")
+    alive: bool = Field(False, description="是否存活")
+
+
+class WatchStagePlayerProfile(BaseModel):
+    steamId: str = Field(..., description="Steam ID")
+    nickname: str | None = Field(None, description="昵称")
+    avatar: str | None = Field(None, description="头像")
+    pvpScore: int | None = Field(None, description="完美天梯分")
+    pvpStars: int | None = Field(None, description="完美天梯星数")
+    legacyScore: float | None = Field(None, description="底蕴分")
+    avgRt: float | None = Field(None, description="平均 rating")
+    avgWe: float | None = Field(None, description="平均 WE")
+    faceitElo: int | None = Field(None, description="FACEIT ELO")
+    faceitLevel: int | None = Field(None, description="FACEIT Level")
+    status: str = Field("missing", description="missing/updating/limited/ready/failed")
+    message: str | None = Field(None, description="补充状态")
+    updatedAt: int | None = Field(None, description="资料更新时间")
+
+
+class WatchStageSnapshot(BaseModel):
+    status: str = Field(..., description="pending/running/no_active_match/closed")
+    requestedSteamId: str = Field(..., description="查询的 Steam ID")
+    connectionId: str | None = Field(None, description="后端 WS 连接 ID")
+    message: str | None = Field(None, description="状态说明")
+    matchId: str | None = Field(None, description="比赛 ID")
+    map: str | None = Field(None, description="地图")
+    ctScore: int | None = Field(None, description="CT 分数")
+    terroristScore: int | None = Field(None, description="T 分数")
+    duration: str | None = Field(None, description="比赛时长")
+    warmUpStatus: bool | None = Field(None, description="是否热身")
+    updatedAt: int | None = Field(None, description="快照更新时间")
+    players: list[WatchStageLivePlayer] = Field(default_factory=list, description="本场实时数据")
+    profiles: dict[str, WatchStagePlayerProfile] = Field(default_factory=dict, description="玩家基础数据")
+
+
+class WatchStageConnection:
+    def __init__(self, manager: "WatchStageManager", connection_id: str, seed_steam_id: str, platform: str, websocket_url: str):
+        self.manager = manager
+        self.id = connection_id
+        self.seed_steam_id = seed_steam_id
+        self.platform = platform
+        self.websocket_url = websocket_url
+        self.player_ids: set[str] = {seed_steam_id}
+        self.match_id: str | None = None
+        self.created_at = int(time.time())
+        self.last_message_at = self.created_at
+        self.closed = False
+        self.task: asyncio.Task | None = None
+        self.ws: aiohttp.ClientWebSocketResponse | None = None
+        self.first_update = asyncio.Event()
+        self.no_data_since: int | None = None
+        self.close_status = "closed"
+        self.close_message = "观将台连接已关闭"
+
+    async def start(self) -> None:
+        self.task = asyncio.create_task(self.run())
+
+    async def close(self) -> None:
+        self.closed = True
+        if self.ws and not self.ws.closed:
+            await self.ws.close()
+
+    async def subscribe(self) -> None:
+        if self.ws is None or self.ws.closed:
+            return
+        await self.ws.send_str(json.dumps({
+            "messageType": 10001,
+            "messageData": {"steam_id": self.seed_steam_id}
+        }))
+
+    async def run(self) -> None:
+        headers = {
+            "Origin": "https://news.wmpvp.com",
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 EsportsApp Version=4.1.0",
+        }
+        try:
+            async with get_session().ws_connect(self.websocket_url, headers=headers, heartbeat=30) as ws:
+                self.ws = ws
+                await ws.send_str("ping")
+                while not self.closed:
+                    try:
+                        msg = await ws.receive(timeout=60)
+                    except asyncio.TimeoutError:
+                        logger.info(f"watch stage ws timeout connection={self.id}")
+                        break
+
+                    if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        break
+
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        continue
+
+                    self.last_message_at = int(time.time())
+                    text = msg.data
+                    if text == "pong":
+                        await self.subscribe()
+                        continue
+
+                    try:
+                        payload = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+
+                    message_type = payload.get("messageType")
+                    if message_type == 10002 and isinstance(payload.get("messageData"), dict):
+                        self.no_data_since = None
+                        await self.manager.handle_match_data(self, payload["messageData"])
+                        self.first_update.set()
+                    elif message_type == 10003:
+                        self.close_status = "no_active_match"
+                        self.close_message = "该玩家当前没有可展示的观将台比赛"
+                        await self.manager.handle_no_active_match(self)
+                        self.first_update.set()
+                        break
+        except Exception:
+            logger.exception(f"watch stage ws failed connection={self.id} seed={self.seed_steam_id}")
+        finally:
+            await self.manager.drop_connection(self.id)
+
+
+class WatchStageManager:
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.player_to_connection: dict[str, str] = {}
+        self.connections: dict[str, WatchStageConnection] = {}
+        self.latest_snapshots: dict[str, WatchStageSnapshot] = {}
+        self.profile_cache: dict[str, WatchStagePlayerProfile] = {}
+        self.external_profiles: dict[str, dict[str, Any]] = {}
+        self.profile_update_tasks: set[str] = set()
+        self.profile_retry_after: dict[str, int] = {}
+        self.profile_update_lock = asyncio.Lock()
+
+    async def subscribe(self, steam_id: str) -> WatchStageSnapshot:
+        if not re.match(r"^\d{17}$", steam_id):
+            raise HTTPException(status_code=400, detail="Invalid Steam ID")
+
+        first_no_active: WatchStageSnapshot | None = None
+        for platform in ("2", "1"):
+            snapshot = await self._subscribe_platform(steam_id, platform)
+            if snapshot.status != "no_active_match":
+                return snapshot
+            first_no_active = first_no_active or snapshot
+        return first_no_active or WatchStageSnapshot(
+            status="no_active_match",
+            requestedSteamId=steam_id,
+            message="该玩家当前没有可展示的观将台比赛",
+        )
+
+    async def _subscribe_platform(self, steam_id: str, platform: str) -> WatchStageSnapshot:
+        async with self.lock:
+            existing = self._get_connection_for_player(steam_id)
+            if existing:
+                if existing.platform != platform:
+                    await existing.close()
+                else:
+                    snapshot = self._snapshot_for_player(steam_id)
+                    if snapshot:
+                        return snapshot
+                    return self._pending_snapshot(steam_id, existing.id)
+
+            snapshot = self.latest_snapshots.get(steam_id)
+            if snapshot and snapshot.status == "running":
+                return self._snapshot_for_player(steam_id) or snapshot
+            if snapshot and snapshot.status == "no_active_match" and getattr(snapshot, "platform", None) == platform:
+                return snapshot
+
+            websocket_url = await self._get_websocket_url(steam_id, platform)
+            connection_id = uuid.uuid4().hex
+            connection = WatchStageConnection(self, connection_id, steam_id, platform, websocket_url)
+            self.connections[connection_id] = connection
+            self.player_to_connection[steam_id] = connection_id
+            await connection.start()
+
+        try:
+            await asyncio.wait_for(connection.first_update.wait(), timeout=3)
+        except asyncio.TimeoutError:
+            pass
+
+        return self._snapshot_for_player(steam_id) or self._pending_snapshot(steam_id, connection_id)
+
+    async def snapshot(self, steam_id: str) -> WatchStageSnapshot:
+        async with self.lock:
+            connection = self._get_connection_for_player(steam_id)
+            if connection:
+                snapshot = self._snapshot_for_player(steam_id)
+                if snapshot:
+                    return snapshot
+                return self._pending_snapshot(steam_id, connection.id)
+            snapshot = self.latest_snapshots.get(steam_id)
+            if snapshot and snapshot.updatedAt and int(time.time()) - snapshot.updatedAt < 30:
+                return snapshot
+        return WatchStageSnapshot(
+            status="closed",
+            requestedSteamId=steam_id,
+            message="观将台连接未建立或已关闭",
+        )
+
+    async def handle_match_data(self, connection: WatchStageConnection, match_data: dict[str, Any]) -> None:
+        player_rows = match_data.get("playerList") if isinstance(match_data.get("playerList"), list) else []
+        player_ids = {str(player.get("steamId")) for player in player_rows if player.get("steamId")}
+        if not player_ids:
+            return
+
+        connection.player_ids = player_ids
+        connection.match_id = str(match_data.get("matchId") or "")
+        stats_profiles = await self._fetch_team_statistics(match_data, connection.platform)
+        now = int(time.time())
+
+        players = [
+            WatchStageLivePlayer(
+                steamId=str(player.get("steamId")),
+                side=str(player.get("side") or ""),
+                kill=int(player.get("kill") or 0),
+                death=int(player.get("death") or 0),
+                assist=int(player.get("assist") or 0),
+                score=int(player.get("score") or 0),
+                adr=float(player.get("adr") or 0),
+                headshot=player.get("headshot"),
+                alive=bool(player.get("alive")),
+            )
+            for player in player_rows
+            if player.get("steamId")
+        ]
+
+        for steam_id, external in stats_profiles.items():
+            self.external_profiles[steam_id] = external
+
+        profiles = await self._profiles_for_players(player_ids)
+        for steam_id in player_ids:
+            self._ensure_profile_update(steam_id)
+
+        snapshot = WatchStageSnapshot(
+            status="running",
+            requestedSteamId=connection.seed_steam_id,
+            connectionId=connection.id,
+            matchId=str(match_data.get("matchId") or ""),
+            map=match_data.get("map"),
+            ctScore=self._optional_int(match_data.get("ctScore")),
+            terroristScore=self._optional_int(match_data.get("terroristScore")),
+            duration=str(match_data.get("duration")) if match_data.get("duration") is not None else None,
+            warmUpStatus=bool(match_data.get("warmUpStatus")),
+            updatedAt=now,
+            players=players,
+            profiles=profiles,
+        )
+
+        async with self.lock:
+            duplicate_connections = {
+                existing_id
+                for steam_id in player_ids
+                for existing_id in [self.player_to_connection.get(steam_id)]
+                if existing_id and existing_id != connection.id
+            }
+            for existing_id in duplicate_connections:
+                existing = self.connections.get(existing_id)
+                if existing:
+                    await existing.close()
+            self.connections[connection.id] = connection
+            for steam_id in player_ids:
+                self.player_to_connection[steam_id] = connection.id
+                self.latest_snapshots[steam_id] = snapshot.copy(update={"requestedSteamId": steam_id})
+
+    async def handle_no_active_match(self, connection: WatchStageConnection) -> None:
+        async with self.lock:
+            self.latest_snapshots[connection.seed_steam_id] = WatchStageSnapshot(
+                status="no_active_match",
+                requestedSteamId=connection.seed_steam_id,
+                connectionId=connection.id,
+                message="该玩家当前没有可展示的观将台比赛",
+            )
+
+    async def drop_connection(self, connection_id: str) -> None:
+        async with self.lock:
+            connection = self.connections.pop(connection_id, None)
+            if not connection:
+                return
+            connection.closed = True
+            for steam_id, existing_id in list(self.player_to_connection.items()):
+                if existing_id == connection_id:
+                    self.player_to_connection.pop(steam_id, None)
+                    snapshot = self.latest_snapshots.get(steam_id)
+                    if snapshot:
+                        self.latest_snapshots[steam_id] = snapshot.copy(update={
+                            "status": connection.close_status,
+                            "connectionId": None,
+                            "message": connection.close_message,
+                        })
+
+    def _get_connection_for_player(self, steam_id: str) -> WatchStageConnection | None:
+        connection_id = self.player_to_connection.get(steam_id)
+        if not connection_id:
+            return None
+        connection = self.connections.get(connection_id)
+        if not connection or connection.closed:
+            self.player_to_connection.pop(steam_id, None)
+            return None
+        return connection
+
+    def _snapshot_for_player(self, steam_id: str) -> WatchStageSnapshot | None:
+        snapshot = self.latest_snapshots.get(steam_id)
+        if not snapshot:
+            return None
+        return snapshot.copy(update={
+            "requestedSteamId": steam_id,
+            "profiles": {
+                player.steamId: self.profile_cache.get(player.steamId)
+                or WatchStagePlayerProfile(
+                    steamId=player.steamId,
+                    status="updating" if player.steamId in self.profile_update_tasks else "missing",
+                )
+                for player in snapshot.players
+            }
+        })
+
+    def _pending_snapshot(self, steam_id: str, connection_id: str) -> WatchStageSnapshot:
+        return WatchStageSnapshot(
+            status="pending",
+            requestedSteamId=steam_id,
+            connectionId=connection_id,
+            message="正在连接观将台",
+        )
+
+    async def _get_websocket_url(self, steam_id: str, platform: str) -> str:
+        params = {"steamId": steam_id, "platform": platform}
+        headers = {
+            "Origin": "https://news.wmpvp.com",
+            "Referer": "https://news.wmpvp.com/",
+            "X-Requested-With": "XMLHttpRequest",
+            "platform": "h5_web",
+            "appversion": "4.1.0",
+            "appTheme": "0",
+            "Accept": "application/json, text/plain, */*",
+        }
+        async with get_session().get(
+            "https://appactivity.wmpvp.com/steamcn/match/watchStage/getWebsocketInfo",
+            params=params,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status >= 400:
+                raise HTTPException(status_code=502, detail="观将台地址获取失败")
+            data = await response.json()
+        websocket_url = data.get("result", {}).get("websocketUrl")
+        if not websocket_url:
+            raise HTTPException(status_code=502, detail="观将台未返回 WebSocket 地址")
+        return websocket_url
+
+    async def _fetch_team_statistics(self, match_data: dict[str, Any], platform: str) -> dict[str, dict[str, Any]]:
+        player_rows = match_data.get("playerList") if isinstance(match_data.get("playerList"), list) else []
+        ct_ids = [str(player.get("steamId")) for player in player_rows if player.get("side") == "CT" and player.get("steamId")]
+        t_ids = [str(player.get("steamId")) for player in player_rows if player.get("side") == "TERRORIST" and player.get("steamId")]
+        if not ct_ids and not t_ids:
+            return {}
+        headers = {
+            "Origin": "https://news.wmpvp.com",
+            "Referer": "https://news.wmpvp.com/",
+            "X-Requested-With": "XMLHttpRequest",
+            "platform": "h5_web",
+            "appversion": "4.1.0",
+            "appTheme": "0",
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+        }
+        payload = {
+            "ctTeamSteamIds": ct_ids,
+            "teTeamSteamIds": t_ids,
+            "map": match_data.get("map"),
+        }
+        try:
+            statistics_url = (
+                "https://appactivity.wmpvp.com/steamcn/match/watchStage/getMatchTeamStatisticsData"
+                if platform == "1"
+                else "https://appactivity.wmpvp.com/steamcn/match/watchStage/getPvPMatchTeamStatisticsData"
+            )
+            async with get_session().post(
+                statistics_url,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status >= 400:
+                    return {}
+                data = await response.json()
+        except Exception:
+            logger.exception("watch stage team statistics request failed")
+            return {}
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, dict):
+            return {}
+        profiles: dict[str, dict[str, Any]] = {}
+        player_keys = (
+            ("ctTeamPlayInfoList", "teTeamPlayInfoList")
+            if platform == "1"
+            else ("ctPlayerStatsDTOList", "tplayerStatsDTOList")
+        )
+        for key in player_keys:
+            rows = result.get(key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                steam_id = str(row.get("steamId") or "")
+                if steam_id:
+                    profiles[steam_id] = row
+        return profiles
+
+    def _ensure_profile_update(self, steam_id: str) -> None:
+        if steam_id in self.profile_update_tasks:
+            return
+        retry_after = self.profile_retry_after.get(steam_id, 0)
+        if retry_after > int(time.time()):
+            return
+        profile = self.profile_cache.get(steam_id) or self._profile_from_external(steam_id)
+        if (
+            profile
+            and profile.status == "ready"
+            and profile.legacyScore is not None
+            and profile.updatedAt
+            and int(time.time()) - profile.updatedAt < 3600
+        ):
+            return
+        self.profile_update_tasks.add(steam_id)
+        self.profile_cache[steam_id] = (profile or WatchStagePlayerProfile(steamId=steam_id)).copy(update={
+            "status": "updating",
+            "message": "基础数据抓取中",
+        })
+        asyncio.create_task(self._refresh_profile(steam_id))
+
+    def _profile_from_external(self, steam_id: str) -> WatchStagePlayerProfile:
+        cached = self.profile_cache.get(steam_id)
+        if cached:
+            return cached
+        external = self.external_profiles.get(steam_id, {})
+        profile = WatchStagePlayerProfile(
+            steamId=steam_id,
+            nickname=external.get("nickname"),
+            avatar=external.get("avatar"),
+            pvpScore=self._optional_int(external.get("pvpScore")),
+            pvpStars=None,
+            legacyScore=None,
+            avgRt=self._optional_float(external.get("ratingPro")),
+            avgWe=self._optional_float(external.get("we")),
+            faceitElo=None,
+            faceitLevel=None,
+            status="missing",
+            message="等待基础数据抓取",
+            updatedAt=None,
+        )
+        self.profile_cache[steam_id] = profile
+        return profile
+
+    async def _profiles_for_players(self, steam_ids: set[str]) -> dict[str, WatchStagePlayerProfile]:
+        profiles = {steam_id: self._profile_from_external(steam_id) for steam_id in steam_ids}
+        try:
+            async with async_session_factory() as session:
+                base_rows = list((await session.execute(
+                    select(SteamBaseInfo).where(SteamBaseInfo.steamid.in_(steam_ids))
+                )).scalars().all())
+                detail_rows = list((await session.execute(
+                    select(SteamDetailInfo)
+                    .where(SteamDetailInfo.steamid.in_(steam_ids))
+                    .where(SteamDetailInfo.seasonId == config.cs_season_id)
+                )).scalars().all())
+                extra_rows = list((await session.execute(
+                    select(SteamExtraInfo).where(SteamExtraInfo.steamid.in_(steam_ids))
+                )).scalars().all())
+        except SQLAlchemyError as exc:
+            logger.warning(f"watch stage existing profile query skipped: {exc.__class__.__name__}")
+            return profiles
+
+        base_by_id = {row.steamid: row for row in base_rows}
+        detail_by_id = {row.steamid: row for row in detail_rows}
+        extra_by_id: dict[str, SteamExtraInfo] = {}
+        for row in extra_rows:
+            existing = extra_by_id.get(row.steamid)
+            if existing is None or row.timeStamp > existing.timeStamp:
+                extra_by_id[row.steamid] = row
+
+        now = int(time.time())
+        for steam_id in steam_ids:
+            profile = profiles[steam_id]
+            base_info = base_by_id.get(steam_id)
+            detail_info = detail_by_id.get(steam_id)
+            extra_info = extra_by_id.get(steam_id)
+            ladder_score, ladder_stars = self._ladder_score_from_base(base_info)
+            if not base_info and not detail_info and not extra_info:
+                continue
+            profiles[steam_id] = profile.copy(update={
+                "nickname": profile.nickname or (base_info.name if base_info else None),
+                "avatar": profile.avatar or (base_info.avatarlink if base_info else None),
+                "pvpScore": self._optional_int((detail_info.pvpScore if detail_info else None) or profile.pvpScore or ladder_score),
+                "pvpStars": self._optional_int((detail_info.pvpStars if detail_info else None) or profile.pvpStars or ladder_stars),
+                "legacyScore": float(extra_info.legacyScore) if extra_info else profile.legacyScore,
+                "avgRt": self._optional_float((detail_info.pwRating if detail_info else None) or profile.avgRt),
+                "avgWe": self._optional_float((detail_info.we if detail_info else None) or profile.avgWe),
+                "status": "ready" if extra_info else profile.status,
+                "message": None if extra_info else profile.message,
+                "updatedAt": now if extra_info else profile.updatedAt,
+            })
+            self.profile_cache[steam_id] = profiles[steam_id]
+        return profiles
+
+    def _ladder_score_from_base(self, base_info: SteamBaseInfo | None) -> tuple[int | None, int | None]:
+        if not base_info or not base_info.ladderScore:
+            return None, None
+        try:
+            rows = json.loads(base_info.ladderScore)
+        except (TypeError, json.JSONDecodeError):
+            return None, None
+        if not isinstance(rows, list):
+            return None, None
+        current = next((row for row in rows if isinstance(row, dict) and row.get("season") == config.cs_season_id), None)
+        if current and self._optional_int(current.get("score")):
+            selected = current
+        else:
+            selected = next(
+                (
+                    row for row in sorted(
+                        [row for row in rows if isinstance(row, dict)],
+                        key=lambda item: str(item.get("startTime") or ""),
+                        reverse=True,
+                    )
+                    if self._optional_int(row.get("score"))
+                ),
+                None,
+            )
+        if not selected:
+            return None, None
+        return self._optional_int(selected.get("score")), self._optional_int(selected.get("currSStars") or 0)
+
+    async def _refresh_profile(self, steam_id: str) -> None:
+        try:
+            async with self.profile_update_lock:
+                try:
+                    await asyncio.wait_for(db_upd.update_stats(steam_id), timeout=90)
+                except TooFrequentError as exc:
+                    logger.info(f"watch stage profile limited steamid={steam_id} wait={exc.wait_time}s")
+                    self.profile_retry_after[steam_id] = int(time.time()) + max(30, exc.wait_time)
+                    self.profile_cache[steam_id] = (await self._get_profile(steam_id)).copy(update={
+                        "status": "limited",
+                        "message": f"基础数据限频，约 {exc.wait_time}s 后可继续更新",
+                    })
+                    return
+                except LockingError as exc:
+                    self.profile_retry_after[steam_id] = int(time.time()) + 60
+                    self.profile_cache[steam_id] = (await self._get_profile(steam_id)).copy(update={
+                        "status": "limited",
+                        "message": str(exc),
+                    })
+                    return
+                except asyncio.TimeoutError:
+                    self.profile_retry_after[steam_id] = int(time.time()) + 300
+                    self.profile_cache[steam_id] = (await self._get_profile(steam_id)).copy(update={
+                        "status": "failed",
+                        "message": "基础数据抓取超时，稍后重试",
+                    })
+                    return
+            self.profile_cache[steam_id] = await self._get_profile(steam_id, force_ready=True)
+        except Exception as exc:
+            logger.exception(f"watch stage profile refresh failed steamid={steam_id}")
+            self.profile_retry_after[steam_id] = int(time.time()) + 300
+            self.profile_cache[steam_id] = (await self._get_profile(steam_id)).copy(update={
+                "status": "failed",
+                "message": str(exc),
+            })
+        finally:
+            self.profile_update_tasks.discard(steam_id)
+
+    async def _get_profile(self, steam_id: str, force_ready: bool = False) -> WatchStagePlayerProfile:
+        external = self.external_profiles.get(steam_id, {})
+        base_info = await self._safe_profile_query("base_info", steam_id, db_val.get_base_info)
+        detail_info = await self._safe_profile_query("detail_info", steam_id, db_val.get_detail_info)
+        extra_info = await self._safe_profile_query("extra_info", steam_id, db_val.get_extra_info)
+        faceit_bind = await self._safe_profile_query("faceit_bind", steam_id, db_val.get_faceit_bind)
+        ladder_score, ladder_stars = self._ladder_score_from_base(base_info)
+        status = "ready" if force_ready or base_info or detail_info or extra_info else "missing"
+        if steam_id in self.profile_update_tasks:
+            status = "updating"
+        profile = WatchStagePlayerProfile(
+            steamId=steam_id,
+            nickname=external.get("nickname") or (base_info.name if base_info else None),
+            avatar=external.get("avatar") or (base_info.avatarlink if base_info else None),
+            pvpScore=self._optional_int((detail_info.pvpScore if detail_info else None) or external.get("pvpScore") or ladder_score),
+            pvpStars=self._optional_int((detail_info.pvpStars if detail_info else None) or ladder_stars),
+            legacyScore=float(extra_info.legacyScore) if extra_info else None,
+            avgRt=self._optional_float((detail_info.pwRating if detail_info else None) or external.get("ratingPro")),
+            avgWe=self._optional_float((detail_info.we if detail_info else None) or external.get("we")),
+            faceitElo=faceit_bind.faceit_elo if faceit_bind else None,
+            faceitLevel=faceit_bind.skill_level if faceit_bind else None,
+            status=status,
+            message=None if status == "ready" else "等待基础数据抓取",
+            updatedAt=int(time.time()) if status == "ready" else None,
+        )
+        self.profile_cache[steam_id] = profile
+        return profile
+
+    async def _safe_profile_query(self, label: str, steam_id: str, query_func):
+        try:
+            return await query_func(steam_id)
+        except SQLAlchemyError as exc:
+            logger.warning(f"watch stage profile query skipped label={label} steamid={steam_id}: {exc.__class__.__name__}")
+            return None
+
+    def _optional_int(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _optional_float(self, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+
+watch_stage_manager = WatchStageManager()
+
 db = DataMannager()
 
 verify = on_command("验证", aliases={"verify"}, priority=10)
@@ -471,6 +1102,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if not auth_session:
         raise HTTPException(status_code=401, detail="Invalid token")
     return auth_session
+
+
+class WatchStageRequest(BaseModel):
+    steamId: str = Field(..., description="Steam ID")
+
+
+@app.post("/api/watch-stage/snapshot", response_model=WatchStageSnapshot)
+async def get_watch_stage_snapshot(request: WatchStageRequest, _ = Depends(get_current_user)):
+    return await watch_stage_manager.subscribe(request.steamId)
 
 class InitTokenResponse(BaseModel):
     token: str = Field(..., description="用于 API 认证的 Token")
@@ -1611,19 +2251,32 @@ class UserResponse(BaseModel):
     description="获取当前认证 Token 所在群组的绑定用户列表。"
 )
 async def get_bound_users(info: AuthSession = Depends(get_current_user)):
-    assert info.group_id is not None
-    qqs = await db_val.get_group_member(info.group_id)
-    users: list[UserQQItem] = [] 
-    for qq in qqs:
-        if steamid := await db_val.get_steamid(qq):
-            base_info = await db_val.get_base_info(steamid)
-            if base_info is not None:
-                users.append(UserQQItem(
-                    qq=qq,
-                    qqNickname=await get_user_name(qq),
-                    steamId=steamid,
-                    nickname=base_info.name
-                ))
+    if info.group_id is None:
+        return UserResponse(users=[])
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                GroupMember.uid,
+                MemberSteamID.steamid,
+                SteamBaseInfo.name,
+                UserInfo.nickname,
+            )
+            .join(MemberSteamID, MemberSteamID.uid == GroupMember.uid)
+            .join(SteamBaseInfo, SteamBaseInfo.steamid == MemberSteamID.steamid)
+            .outerjoin(UserInfo, UserInfo.user_id == GroupMember.uid)
+            .where(GroupMember.gid == info.group_id)
+            .order_by(UserInfo.nickname, SteamBaseInfo.name)
+        )
+        rows = list((await session.execute(stmt)).all())
+    users = [
+        UserQQItem(
+            qq=str(qq),
+            qqNickname=qq_nickname or "未知用户",
+            steamId=str(steam_id),
+            nickname=nickname,
+        )
+        for qq, steam_id, nickname, qq_nickname in rows
+    ]
     return UserResponse(
         users=users
     )

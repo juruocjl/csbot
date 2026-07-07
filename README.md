@@ -47,3 +47,43 @@ grep -n "MAJOR_STAGE" ~/csbot/.env.prod
 grep -n "CS_EVENT_GROUP_LIST" ~/csbot/.env.prod
 curl -sI http://127.0.0.1:1234/major-homework | head
 ```
+
+## Local delivery check
+
+Use the remote test database `csbot_backup` and the existing test token `dinner123321`.
+Do not create a new token for local delivery checks. Provide the real remote database URL through
+`CS_DATABASE`; it should point at `csbot_backup`.
+If the remote PostgreSQL is reached through SSH, forward it locally first and rewrite the host/port
+in `CS_DATABASE` to the forwarded address.
+
+Backend:
+
+```powershell
+cd C:\Users\cjlqwq\Documents\csbot\csbot
+# Example shape only; use the real testing credential.
+$env:CS_DATABASE="postgresql+asyncpg://<user>:<password>@<host>:5432/csbot_backup"
+$env:CS_SERVER_SKIP_STARTUP_CACHE="1"
+$env:CS_SKIP_SCHEMA_CHECK="1"
+uv run python bot_minimal.py
+```
+
+Frontend:
+
+```powershell
+cd C:\Users\cjlqwq\Documents\csbot\csbot-front
+$env:VITE_API_BASE_URL="http://127.0.0.1:1234"
+cmd /c npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Smoke-test a protected API with:
+
+```powershell
+curl.exe -H "Authorization: Bearer dinner123321" -H "Content-Type: application/json" `
+  -d "{\"steamId\":\"76561199388088405\"}" `
+  http://127.0.0.1:1234/api/watch-stage/snapshot
+```
+
+For watch-stage delivery, verify that the response is not `401`, contains a `status`, and returns
+running match data when the tested Steam ID is currently in a watch-stage match. The profile fields
+such as `legacyScore` may be `null` on the first response because player base data is crawled
+asynchronously and rate-limited.
