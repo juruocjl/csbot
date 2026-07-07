@@ -1004,7 +1004,7 @@ class WatchStageManager:
         try:
             async with self.profile_update_lock:
                 try:
-                    await asyncio.wait_for(self._refresh_profile_base_info(steam_id), timeout=30)
+                    await asyncio.wait_for(self._refresh_profile_base_info(steam_id), timeout=10)
                 except TooFrequentError as exc:
                     logger.info(f"watch stage profile limited steamid={steam_id} wait={exc.wait_time}s")
                     self.profile_retry_after[steam_id] = int(time.time()) + max(30, exc.wait_time)
