@@ -2056,11 +2056,20 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
     base_info = await db_val.get_base_info(steamId)
     if not detail_info:
         raise HTTPException(status_code=404, detail="Player detail info not found")
-    assert base_info is not None
-    if detail_info.seasonId not in SEASON_STATS_CACHE:
-        raise HTTPException(status_code=500, detail="Season stats cache not initialized")
-    else:
-        global_stats = SEASON_STATS_CACHE[detail_info.seasonId]
+    if not base_info:
+        raise HTTPException(status_code=404, detail="Player base info not found")
+
+    global_stats = SEASON_STATS_CACHE.get(detail_info.seasonId)
+    if global_stats is None:
+        logger.info(f"season stats cache miss, calculating on demand season={detail_info.seasonId}")
+        global_stats = await _calculate_global_stats(detail_info.seasonId)
+        SEASON_STATS_CACHE[detail_info.seasonId] = global_stats
+
+    try:
+        ladder_score = json.loads(base_info.ladderScore or "[]")
+    except (TypeError, json.JSONDecodeError):
+        logger.warning(f"invalid ladderScore for steam_id={steamId}")
+        ladder_score = []
     
     # 使用全局统计数据计算个人的 PlayerDetailItem
     stats_data = _get_player_stats(detail_info, global_stats)
@@ -2074,11 +2083,12 @@ async def get_player_detail(steamId: str = Body(..., embed=True), _ = Depends(ge
         winRate=stats_data['winRate'],
         ladderHistory=[
             LadderItem(
-                seasonId=data['season'],
-                pvpScore=data['score'],
-                pvpStars=data['currSStars'] if data['currSStars'] else 0
+                seasonId=data.get('season', ''),
+                pvpScore=data.get('score', 0),
+                pvpStars=data.get('currSStars') or 0
             )
-            for data in json.loads(base_info.ladderScore)
+            for data in ladder_score
+            if isinstance(data, dict)
         ],
         baseRating=BaseRatingDetail(
             pwRating=stats_data['pwRating'],
