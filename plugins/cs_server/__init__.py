@@ -1004,7 +1004,7 @@ class WatchStageManager:
         try:
             async with self.profile_update_lock:
                 try:
-                    await asyncio.wait_for(db_upd.update_stats(steam_id), timeout=90)
+                    await asyncio.wait_for(self._refresh_profile_base_info(steam_id), timeout=30)
                 except TooFrequentError as exc:
                     logger.info(f"watch stage profile limited steamid={steam_id} wait={exc.wait_time}s")
                     self.profile_retry_after[steam_id] = int(time.time()) + max(30, exc.wait_time)
@@ -1037,6 +1037,24 @@ class WatchStageManager:
             })
         finally:
             self.profile_update_tasks.discard(steam_id)
+
+    async def _refresh_profile_base_info(self, steam_id: str) -> None:
+        try:
+            async with async_session_factory() as session:
+                async with session.begin():
+                    await db_upd._update_stats_card(steam_id, session)
+        except TooFrequentError:
+            try:
+                async with async_session_factory() as session:
+                    async with session.begin():
+                        await db_upd._update_extra_info(steam_id, session)
+            except Exception as exc:
+                logger.info(f"watch stage extra info refresh after rate limit skipped steamid={steam_id} error={exc}")
+            raise
+
+        async with async_session_factory() as session:
+            async with session.begin():
+                await db_upd._update_extra_info(steam_id, session)
 
     async def _get_profile(self, steam_id: str, force_ready: bool = False) -> WatchStagePlayerProfile:
         external = self.external_profiles.get(steam_id, {})
