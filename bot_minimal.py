@@ -23,6 +23,8 @@ def _set_default_env() -> None:
         "CS_AI_MODEL": "deepseek-v4-flash",
         "CS_DOMAIN": "http://127.0.0.1:1234",
         "CS_SERVER_SKIP_STARTUP_CACHE": "1",
+        "CS_DISABLE_BACKGROUND_JOBS": "1",
+        "CS_WATCH_STAGE_ENABLE_PROFILE_REFRESH": "0",
         "CS_BOTID": "0",
         "CS_MYSTEAM_ID": "0",
         "CS_WMTOKEN": "test-token",

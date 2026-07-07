@@ -64,8 +64,14 @@ cd C:\Users\cjlqwq\Documents\csbot\csbot
 $env:CS_DATABASE="postgresql+asyncpg://<user>:<password>@<host>:5432/csbot_backup"
 $env:CS_SERVER_SKIP_STARTUP_CACHE="1"
 $env:CS_SKIP_SCHEMA_CHECK="1"
+$env:CS_DISABLE_BACKGROUND_JOBS="1"
+$env:CS_WATCH_STAGE_ENABLE_PROFILE_REFRESH="0"
 uv run python bot_minimal.py
 ```
+
+Remote watch-stage test instances should keep background crawling disabled. Only set
+`CS_WATCH_STAGE_ENABLE_PROFILE_REFRESH=1` for a run where the explicit purpose is to verify
+watch-stage-triggered player profile crawling.
 
 Frontend:
 

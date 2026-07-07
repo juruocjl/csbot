@@ -78,6 +78,18 @@ config = get_plugin_config(Config)
 if not config.mute_api_token:
     logger.warning("Mute API disabled: MUTE_API_TOKEN not configured")
 
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _background_jobs_disabled() -> bool:
+    return _env_flag("CS_DISABLE_BACKGROUND_JOBS")
+
+
+def _watch_stage_profile_refresh_enabled() -> bool:
+    return _env_flag("CS_WATCH_STAGE_ENABLE_PROFILE_REFRESH")
+
 # 全局缓存配置
 from typing import Any
 from sqlalchemy import select
@@ -134,6 +146,9 @@ async def _calculate_global_stats(seasonId: str) -> dict[str, tuple[float, float
 @scheduler.scheduled_job("interval", minutes=30, id="update_season_stats_cache")
 async def update_season_stats_cache():
     """定时更新赛季统计缓存"""
+    if _background_jobs_disabled():
+        logger.info("skip season stats cache job: background jobs disabled")
+        return
     global SEASON_STATS_CACHE
     for season_id in [config.cs_season_id, ]:
         SEASON_STATS_CACHE[season_id] = await _calculate_global_stats(season_id)
@@ -142,6 +157,9 @@ driver = get_driver()
 
 @driver.on_startup
 async def _():
+    if _background_jobs_disabled():
+        logger.info("skip season stats cache warmup: background jobs disabled")
+        return
     if os.getenv("CS_SERVER_SKIP_STARTUP_CACHE") == "1":
         logger.info("skip season stats cache warmup")
         return
@@ -852,6 +870,13 @@ class WatchStageManager:
         return profiles
 
     def _ensure_profile_update(self, steam_id: str) -> None:
+        if not _watch_stage_profile_refresh_enabled():
+            profile = self.profile_cache.get(steam_id) or self._profile_from_external(steam_id)
+            self.profile_cache[steam_id] = profile.copy(update={
+                "status": "missing" if profile.status in {"missing", "updating"} else profile.status,
+                "message": profile.message or "watch stage profile refresh disabled",
+            })
+            return
         if steam_id in self.profile_update_tasks:
             return
         retry_after = self.profile_retry_after.get(steam_id, 0)
