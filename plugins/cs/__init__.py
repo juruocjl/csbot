@@ -223,18 +223,51 @@ async def rank_function(message: GroupMessageEvent, args: Message = CommandArg()
     await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可选 [选项]：{valid_rank}\n可用 (时间)：{valid_time}")
 
 
-async def _wait_watch_stage_snapshot(steamid: str, timeout: float = 8.0):
-    snapshot = await watch_stage_manager.subscribe(steamid)
-    if snapshot.status != "pending":
-        return snapshot
+def _watch_stage_player_signature(snapshot) -> tuple[str, ...]:
+    return tuple(sorted(player.steamId for player in snapshot.players))
 
-    deadline = asyncio.get_running_loop().time() + timeout
+
+async def _wait_watch_stage_snapshot(
+    steamid: str,
+    connect_timeout: float = 8.0,
+    stable_timeout: float = 12.0,
+):
+    snapshot = await watch_stage_manager.subscribe(steamid)
+
+    deadline = asyncio.get_running_loop().time() + connect_timeout
     while asyncio.get_running_loop().time() < deadline:
+        if snapshot.status != "pending":
+            break
         await asyncio.sleep(0.8)
         snapshot = await watch_stage_manager.snapshot(steamid)
-        if snapshot.status != "pending":
+
+    if snapshot.status != "running":
+        return snapshot
+
+    best_snapshot = snapshot
+    last_signature: tuple[str, ...] = ()
+    stable_count = 0
+    deadline = asyncio.get_running_loop().time() + stable_timeout
+    while asyncio.get_running_loop().time() < deadline:
+        signature = _watch_stage_player_signature(snapshot)
+        if len(signature) > len(_watch_stage_player_signature(best_snapshot)):
+            best_snapshot = snapshot
+
+        if len(signature) >= 10:
+            if signature == last_signature:
+                stable_count += 1
+            else:
+                last_signature = signature
+                stable_count = 1
+            if stable_count >= 2:
+                return snapshot
+
+        await asyncio.sleep(1.0)
+        snapshot = await watch_stage_manager.snapshot(steamid)
+        if snapshot.status != "running":
             return snapshot
-    return snapshot
+
+    return best_snapshot
 
 
 @watchstage.handle()
