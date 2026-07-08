@@ -12,6 +12,7 @@ class Config(BaseModel):
 
     cs_domain: str = "https://cs.example.com"  # CS服务器域名
     cs_steam_monitor_url: str = "http://127.0.0.1:5555/api/friends/status"  # Steam 在线状态监控接口 URL
+    cs_watch_stage_enable_profile_refresh: bool = False  # 观将台触发玩家基础资料补抓
     cs_botid: int # 机器人的 qq 号
     mute_api_token: str | None = Field(
         None,

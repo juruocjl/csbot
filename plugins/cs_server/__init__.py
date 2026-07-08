@@ -88,7 +88,7 @@ def _background_jobs_disabled() -> bool:
 
 
 def _watch_stage_profile_refresh_enabled() -> bool:
-    return _env_flag("CS_WATCH_STAGE_ENABLE_PROFILE_REFRESH")
+    return _env_flag("CS_WATCH_STAGE_ENABLE_PROFILE_REFRESH") or bool(config.cs_watch_stage_enable_profile_refresh)
 
 # 全局缓存配置
 from typing import Any
