@@ -20,12 +20,14 @@ from ..cs_db_upd import db as db_upd
 require("cs_server")
 from ..cs_server import db as db_server
 from ..cs_server import get_screenshot
+from ..cs_server import watch_stage_manager
 
 from .config import Config
 config = get_plugin_config(Config)
 
 import re
 import os
+import asyncio
 from io import BytesIO
 from datetime import datetime
 import matplotlib
@@ -84,6 +86,8 @@ matches = on_command("记录", priority=10, block=True)
 matchteammate = on_command("缘分", priority=10, block=True)
 
 scoretrend = on_command("分数变化", priority=10, block=True)
+
+watchstage = on_command("观战", priority=10, block=True)
 
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
@@ -217,6 +221,51 @@ async def rank_function(message: GroupMessageEvent, args: Message = CommandArg()
                 await rank.finish(str(e))
 
     await rank.finish(f"请使用 /排名 [选项] (时间) 生成排名。\n可选 [选项]：{valid_rank}\n可用 (时间)：{valid_time}")
+
+
+async def _wait_watch_stage_snapshot(steamid: str, timeout: float = 8.0):
+    snapshot = await watch_stage_manager.subscribe(steamid)
+    if snapshot.status != "pending":
+        return snapshot
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.8)
+        snapshot = await watch_stage_manager.snapshot(steamid)
+        if snapshot.status != "pending":
+            return snapshot
+    return snapshot
+
+
+@watchstage.handle()
+async def watchstage_function(message: GroupMessageEvent, args: Message = CommandArg()):
+    target_uids, text_tokens = parse_target_args(args)
+    if text_tokens or not target_uids:
+        await watchstage.finish("用法：/观战 @玩家")
+
+    target_uid = target_uids[0]
+    steamid = await db_val.get_steamid(target_uid)
+    if not steamid:
+        await watchstage.finish("该用户未绑定")
+
+    try:
+        snapshot = await _wait_watch_stage_snapshot(steamid)
+    except Exception:
+        logger.exception(f"watch stage command failed to subscribe steamid={steamid}")
+        await watchstage.finish("连接观将台失败，请稍后再试")
+
+    if snapshot.status == "running":
+        token = await db_server.get_bot_token(str(message.group_id))
+        screenshot = await get_screenshot(f"/watch-stage?steamId={steamid}", token, width=1280)
+        if screenshot:
+            await watchstage.finish(MessageSegment.image(screenshot))
+        await watchstage.finish("生成观战截图失败，请稍后再试")
+
+    if snapshot.status == "pending":
+        await watchstage.finish("正在连接观将台，暂时还没有收到本场数据，请稍后再试")
+
+    await watchstage.finish(snapshot.message or "该玩家当前没有可展示的观将台比赛")
+
 
 @scoretrend.handle()
 async def scoretrend_function(message: MessageEvent, args: Message = CommandArg()):
