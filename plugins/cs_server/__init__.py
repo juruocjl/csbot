@@ -285,7 +285,7 @@ async def get_user_name(uid: str, interval: int = config.user_name_cache_expirat
     result = await db.get_user(uid)
     return result.nickname if result else username
 
-LOCAL_URL = "http://localhost:1234"
+LOCAL_URL = os.getenv("CS_SCREENSHOT_BASE_URL") or f"http://localhost:{os.getenv('PORT', '1234')}"
 
 async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | None:
     browser = None
