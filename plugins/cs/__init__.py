@@ -89,6 +89,9 @@ scoretrend = on_command("分数变化", priority=10, block=True)
 
 watchstage = on_command("观战", priority=10, block=True)
 
+_watchstage_legacy_followups: set[tuple[str, str, str]] = set()
+_watchstage_legacy_followup_lock = asyncio.Lock()
+
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
@@ -227,6 +230,46 @@ def _watch_stage_player_signature(snapshot) -> tuple[str, ...]:
     return tuple(sorted(player.steamId for player in snapshot.players))
 
 
+def _watch_stage_missing_legacy(snapshot) -> list[str]:
+    missing: list[str] = []
+    for player in snapshot.players:
+        profile = snapshot.profiles.get(player.steamId)
+        if profile is None or profile.legacyScore is None:
+            missing.append(player.steamId)
+    return missing
+
+
+def _watch_stage_followup_key(group_id: int | str, steamid: str, snapshot) -> tuple[str, str, str]:
+    page_id = snapshot.matchId or snapshot.connectionId or "unknown"
+    return (str(group_id), steamid, page_id)
+
+
+async def _try_start_watch_stage_followup(key: tuple[str, str, str]) -> bool:
+    async with _watchstage_legacy_followup_lock:
+        if key in _watchstage_legacy_followups:
+            return False
+        _watchstage_legacy_followups.add(key)
+        return True
+
+
+async def _finish_watch_stage_followup(key: tuple[str, str, str]) -> None:
+    async with _watchstage_legacy_followup_lock:
+        _watchstage_legacy_followups.discard(key)
+
+
+async def _wait_watch_stage_legacy_scores(steamid: str, snapshot, timeout: float = 45.0):
+    if snapshot.status != "running" or not snapshot.players:
+        return snapshot
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while _watch_stage_missing_legacy(snapshot) and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(1.5)
+        snapshot = await watch_stage_manager.snapshot(steamid)
+        if snapshot.status != "running":
+            return snapshot
+    return snapshot
+
+
 async def _wait_watch_stage_snapshot(
     steamid: str,
     connect_timeout: float = 8.0,
@@ -290,9 +333,29 @@ async def watchstage_function(message: GroupMessageEvent, args: Message = Comman
     if snapshot.status == "running":
         token = await db_server.get_bot_token(str(message.group_id))
         screenshot = await get_screenshot(f"/watch-stage?steamId={steamid}", token, width=1280)
-        if screenshot:
+        if not screenshot:
+            await watchstage.finish("生成观战截图失败，请稍后再试")
+
+        missing_legacy = _watch_stage_missing_legacy(snapshot)
+        if not missing_legacy:
             await watchstage.finish(MessageSegment.image(screenshot))
-        await watchstage.finish("生成观战截图失败，请稍后再试")
+
+        await watchstage.send(MessageSegment.image(screenshot))
+        followup_key = _watch_stage_followup_key(message.group_id, steamid, snapshot)
+        if not await _try_start_watch_stage_followup(followup_key):
+            await watchstage.finish()
+
+        try:
+            snapshot = await _wait_watch_stage_legacy_scores(steamid, snapshot)
+            if _watch_stage_missing_legacy(snapshot):
+                await watchstage.finish()
+
+            screenshot = await get_screenshot(f"/watch-stage?steamId={steamid}", token, width=1280)
+            if screenshot:
+                await watchstage.finish(MessageSegment.image(screenshot))
+            await watchstage.finish()
+        finally:
+            await _finish_watch_stage_followup(followup_key)
 
     if snapshot.status == "pending":
         await watchstage.finish("正在连接观将台，暂时还没有收到本场数据，请稍后再试")
