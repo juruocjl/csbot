@@ -499,6 +499,9 @@ class WatchStageSnapshot(BaseModel):
     profiles: dict[str, WatchStagePlayerProfile] = Field(default_factory=dict, description="玩家基础数据")
 
 
+WATCH_STAGE_RUNNING_TTL_SECONDS = 90
+
+
 class WatchStageConnection:
     def __init__(self, manager: "WatchStageManager", connection_id: str, seed_steam_id: str, platform: str, websocket_url: str):
         self.manager = manager
@@ -620,13 +623,20 @@ class WatchStageManager:
                     await existing.close()
                 else:
                     snapshot = self._snapshot_for_player(steam_id)
-                    if snapshot:
+                    if snapshot and self._is_running_snapshot_stale(snapshot):
+                        await existing.close()
+                        self._remove_connection_locked(existing.id)
+                    elif snapshot:
                         return snapshot
-                    return self._pending_snapshot(steam_id, existing.id)
+                    else:
+                        return self._pending_snapshot(steam_id, existing.id)
 
             snapshot = self.latest_snapshots.get(steam_id)
             if snapshot and snapshot.status == "running":
-                return self._snapshot_for_player(steam_id) or snapshot
+                if self._is_running_snapshot_stale(snapshot):
+                    self._clear_snapshot_family_locked(snapshot)
+                else:
+                    return self._snapshot_for_player(steam_id) or snapshot
             if snapshot and snapshot.status == "no_active_match" and getattr(snapshot, "platform", None) == platform:
                 return snapshot
 
@@ -649,17 +659,56 @@ class WatchStageManager:
             connection = self._get_connection_for_player(steam_id)
             if connection:
                 snapshot = self._snapshot_for_player(steam_id)
-                if snapshot:
+                if snapshot and self._is_running_snapshot_stale(snapshot):
+                    await connection.close()
+                    self._remove_connection_locked(connection.id)
+                elif snapshot:
                     return snapshot
-                return self._pending_snapshot(steam_id, connection.id)
+                else:
+                    return self._pending_snapshot(steam_id, connection.id)
             snapshot = self.latest_snapshots.get(steam_id)
             if snapshot and snapshot.updatedAt and int(time.time()) - snapshot.updatedAt < 30:
-                return snapshot
+                if self._is_running_snapshot_stale(snapshot):
+                    self._clear_snapshot_family_locked(snapshot)
+                else:
+                    return snapshot
         return WatchStageSnapshot(
             status="closed",
             requestedSteamId=steam_id,
             message="观将台连接未建立或已关闭",
         )
+
+    def _is_running_snapshot_stale(self, snapshot: WatchStageSnapshot) -> bool:
+        return (
+            snapshot.status == "running"
+            and snapshot.updatedAt is not None
+            and int(time.time()) - snapshot.updatedAt > WATCH_STAGE_RUNNING_TTL_SECONDS
+        )
+
+    def _clear_snapshot_family_locked(self, snapshot: WatchStageSnapshot) -> None:
+        for steam_id, existing in list(self.latest_snapshots.items()):
+            if (
+                (snapshot.connectionId and existing.connectionId == snapshot.connectionId)
+                or (snapshot.matchId and existing.matchId == snapshot.matchId)
+            ):
+                self.latest_snapshots.pop(steam_id, None)
+
+    def _remove_connection_locked(self, connection_id: str) -> WatchStageConnection | None:
+        connection = self.connections.pop(connection_id, None)
+        if not connection:
+            return None
+        connection.closed = True
+        for steam_id, existing_id in list(self.player_to_connection.items()):
+            if existing_id == connection_id:
+                self.player_to_connection.pop(steam_id, None)
+                snapshot = self.latest_snapshots.get(steam_id)
+                if snapshot:
+                    self.latest_snapshots[steam_id] = snapshot.copy(update={
+                        "status": connection.close_status,
+                        "connectionId": None,
+                        "message": connection.close_message,
+                    })
+        return connection
 
     async def handle_match_data(self, connection: WatchStageConnection, match_data: dict[str, Any]) -> None:
         player_rows = match_data.get("playerList") if isinstance(match_data.get("playerList"), list) else []
@@ -737,20 +786,7 @@ class WatchStageManager:
 
     async def drop_connection(self, connection_id: str) -> None:
         async with self.lock:
-            connection = self.connections.pop(connection_id, None)
-            if not connection:
-                return
-            connection.closed = True
-            for steam_id, existing_id in list(self.player_to_connection.items()):
-                if existing_id == connection_id:
-                    self.player_to_connection.pop(steam_id, None)
-                    snapshot = self.latest_snapshots.get(steam_id)
-                    if snapshot:
-                        self.latest_snapshots[steam_id] = snapshot.copy(update={
-                            "status": connection.close_status,
-                            "connectionId": None,
-                            "message": connection.close_message,
-                        })
+            self._remove_connection_locked(connection_id)
 
     def _get_connection_for_player(self, steam_id: str) -> WatchStageConnection | None:
         connection_id = self.player_to_connection.get(steam_id)
