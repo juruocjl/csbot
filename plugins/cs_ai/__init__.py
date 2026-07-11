@@ -1085,7 +1085,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     "type": "object",
                     "properties": {
                         "type": {"type": "string"},
-                        "time": {"type": "string", "default": "本赛季"},
+                        "time": {"type": "string", "description": "时间范围；省略时使用该排名项的默认范围。"},
                         "reverse": {"type": "boolean", "default": True},
                     },
                     "required": ["type"],
@@ -1279,8 +1279,11 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", f"你是一个counter strike2助手。可以使用工具获取数据，最多调用{tool_budget}次。先用工具，再给最终回答。严格禁止输出markdown，不要包含链接。每次输出前请自检：若检测到明显markdown格式，必须先重写为纯文本后再输出。请合理分配工具调用次数。")
     await add_event("system", f"当前本地时间：{current_datetime_text}。聊天记录工具的 time_start/time_end 请优先使用本地时间字符串：YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS；不要主动换算成 Unix 秒。若用户说今天、昨天、最近、上周等相对时间，请基于这个当前时间换算后再调用工具。聊天记录问题里，“最近”默认 7 天；未指定时间且问题很泛时先查最近 30 天，结果不足再查全量。")
     await add_event("system", "如果问题需要公网信息、最新新闻、外部公司/产品/赛事/价格/政策资料，或本地数据库无法回答，请调用 tavily_search。群聊记录问题仍优先调用 search_chat_spans，不要用 Tavily 查群聊内部消息。Tavily 返回结果里包含 URL，最终回答涉及外部事实时应简短说明依据来源。")
-    rank_list = [(rank, db_val.get_value_config(rank).title) for rank in valid_rank]
-    await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项以及解释：{rank_list}。\n默认时间为本赛季。所有用户输出必须使用[at:id]格式。")
+    rank_list = [
+        (rank, db_val.get_value_config(rank).title, db_val.get_value_config(rank).default_time)
+        for rank in valid_rank
+    ]
+    await add_event("system", f"可用用户：{user_labels}；\n可用时间：{valid_time}；\n可用排名项、解释和默认时间：{rank_list}。所有用户输出必须使用[at:id]格式。")
     await add_event("system", "当你需要在最终回复中提及某个QQ号时，唯一正确格式是 [at:id]（例如 [at:123456]），这样才能被正确转义为at消息。严禁使用 @id、(at:id)、（at:id）、[昵称/id] 或其他任何变体；最终回复前必须自检并把所有错误at格式改成 [at:id]。")
     await add_event("system", "涉及已记录群聊内容的问题，必须先调用 search_chat_spans。不要因为当前对话、临近消息、最近几条群聊或 AI 问答记忆里看起来已有答案，就跳过聊天记录检索；这些近期内容大家本来都能看到，只能帮助你理解问题和构造 query，不能替代检索工具作为答案证据。若结果涉及 reply，或用户问“谁回答了”“回复哪句”“后来有没有人答”，继续调用 fetch_reply_thread。若命中的 span 信息不足，调用 fetch_span_messages 或 fetch_message_context 展开。聊天记录工具只暴露 QQ 号；需要 at 时输出 [at:qq]。使用聊天记录作答时，请给出时间、QQ号和 message_id 作为依据。")
     await add_event("system", "聊天记录不是最终答案本身，而是证据材料。最终回答必须直接回答用户的问题，并把检索结果整理成结论、关系、时间线或判断；严禁只按时间复述几条聊天记录就结束任务。正确做法是先说结论，例如“以前确实有人提过/没查到更早记录/这个说法主要来自谁/数据不支持这个判断”，再用少量关键消息时间、QQ号和 message_id 说明依据。若检索结果互相矛盾或不足，应明确说明不确定和还缺什么证据。")
@@ -1450,10 +1453,11 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 if not rank_type:
                     continue
                 rank_type = rank_type[0]
-                time_type = _pick_time(fargs.get("time", "本赛季"))
                 reverse = bool(fargs.get("reverse", True))
                 try:
                     rankconfig = db_val.get_value_config(rank_type)
+                    time_value = fargs.get("time")
+                    time_type = _pick_time(time_value) if time_value else rankconfig.default_time
                     if time_type not in rankconfig.allowed_time:
                         time_type = rankconfig.default_time
                     vals = []

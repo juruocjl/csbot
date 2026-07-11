@@ -843,6 +843,24 @@ async def get_ekrate(steamid: str, time_type: str) -> tuple[float, int]:
     if result and result.cnt != 0:
         return result.firstRate, result.cnt
     raise NoValueError()
+
+@db.register("尝试突破率", "尝试突破率", "两赛季", ["本赛季", "上赛季", "两赛季"], True, Fix(0), "p1")
+async def get_first_rate(steamid: str, time_type: str) -> tuple[float, int]:
+    async with async_session_factory() as session:
+        stmt = (
+            select(
+                func.sum(MatchStatsPW.entryKill + MatchStatsPW.firstDeath),
+                func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
+                func.count(MatchStatsPW.mid),
+            )
+            .where(*get_ladder_filter(steamid, time_type))
+        )
+        row = (await session.execute(stmt)).one()
+
+    if row[2] > 0 and row[1] > 0:
+        # 尝试突破率 = 首杀与首死次数之和 / 总回合数。
+        return float(row[0]) / int(row[1]), row[2]
+    raise NoValueError()
     
 @db.register("爆头", "爆头率", "本赛季", valid_time, True, Fix(0), "p0")
 async def get_hsrate(steamid: str, time_type: str) -> tuple[float, int]:
