@@ -12,7 +12,7 @@ What it does:
 1. Verifies there are no tracked local changes.
 2. Fetches `origin/main` and refuses to deploy if the branch is behind or diverged.
 3. Pushes `main` to GitHub.
-4. Runs `git pull --ff-only origin main` on `ubuntu@cgserver:/home/ubuntu/csbot`.
+4. Runs `git pull --ff-only origin main` on `ubuntu@42.193.244.178:/home/ubuntu/csbot`.
 5. Pulls frontend build artifacts from `origin/build-output` in
    `/home/ubuntu/csbot/dist`.
 6. Restarts and verifies the `csbot` systemd service:

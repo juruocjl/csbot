@@ -1325,6 +1325,7 @@ class SteamStatusItem(BaseModel):
     party_size: str = Field(..., description="组队人数")
     rich_presence_string: str = Field(..., description="游戏状态文本")
     rich_presence: dict[str, str] = Field(..., description="游戏状态详情")
+    state_code: int = Field(..., description="Steam 在线状态码，0 为离线")
     state: str = Field(..., description="在线状态")
 
 
@@ -1406,6 +1407,7 @@ async def _get_filtered_steam_status(group_id: str) -> SteamStatusResponse:
                 party_size=party_size,
                 rich_presence_string=rich_presence_string,
                 rich_presence=rich_presence,
+                state_code=int(item.get("personaStateCode") or item.get("state_code") or 0),
                 state=state_text,
             )
         )

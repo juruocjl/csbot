@@ -1,6 +1,6 @@
 param(
     [string]$Branch = "main",
-    [string]$Remote = "ubuntu@cgserver",
+    [string]$Remote = "ubuntu@42.193.244.178",
     [string]$RemoteDir = "/home/ubuntu/csbot",
     [string]$FrontendDir = "/home/ubuntu/csbot/dist",
     [string]$FrontendBranch = "build-output",
