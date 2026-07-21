@@ -93,3 +93,12 @@ For watch-stage delivery, verify that the response is not `401`, contains a `sta
 running match data when the tested Steam ID is currently in a watch-stage match. The profile fields
 such as `legacyScore` may be `null` on the first response because player base data is crawled
 asynchronously and rate-limited.
+## 预览生产图片
+
+无需同步生产图片到本地，直接启动按需加载的本地画廊：
+
+```bash
+uv run python tools/production_image_gallery.py
+```
+
+访问 <http://127.0.0.1:8765>。本地服务只读取生产 Nginx 的目录索引，网格使用生产端按需生成并缓存的 WebP 缩略图；只有点开大图时才加载原图，不会复制整个 `imgs/pic` 目录。

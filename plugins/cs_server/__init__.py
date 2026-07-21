@@ -17,10 +17,13 @@ import aiohttp
 import psutil
 import asyncio
 import uuid
+import hashlib
 from pathlib import Path
 from fastapi import FastAPI, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
@@ -1160,6 +1163,62 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+PIC_IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
+PIC_THUMBNAIL_CACHE_VERSION = "1"
+
+
+def _generate_pic_thumbnail(source: Path, target: Path, size: int) -> None:
+    """Generate one WebP thumbnail atomically in the production-side cache."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with Image.open(source) as opened:
+            opened.seek(0)
+            image = ImageOps.exif_transpose(opened)
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+            image.thumbnail((size, size), Image.Resampling.LANCZOS)
+            image.save(temporary, format="WEBP", quality=76, method=4)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@app.get("/api/images/pic/thumbnail/{filename}")
+async def get_pic_thumbnail(filename: str, size: int = 320):
+    """Return an on-demand production-side thumbnail without exposing arbitrary files."""
+    if not 64 <= size <= 640:
+        raise HTTPException(status_code=422, detail="size must be between 64 and 640")
+    if filename != Path(filename).name or Path(filename).suffix.lower() not in PIC_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    source = (Path("imgs") / "pic" / filename).resolve()
+    image_root = (Path("imgs") / "pic").resolve()
+    try:
+        source.relative_to(image_root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if not source.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    stat = source.stat()
+    cache_key = hashlib.sha256(
+        f"{PIC_THUMBNAIL_CACHE_VERSION}\0{filename}\0{stat.st_mtime_ns}\0{stat.st_size}\0{size}".encode()
+    ).hexdigest()
+    target = Path("imgs") / "cache" / "pic-thumbnails" / f"{cache_key}.webp"
+    if not target.is_file():
+        try:
+            await asyncio.to_thread(_generate_pic_thumbnail, source, target, size)
+        except (OSError, UnidentifiedImageError) as exc:
+            logger.warning(f"无法为 {filename} 生成缩略图: {exc}")
+            raise HTTPException(status_code=415, detail="Unsupported image")
+
+    return FileResponse(
+        target,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=2592000, immutable"},
+    )
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
