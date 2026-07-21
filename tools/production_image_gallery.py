@@ -116,7 +116,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="不落盘预览生产服务器图片")
     parser.add_argument("--source", default="http://42.193.244.178:1234/imgs/pic/", help="生产图片目录索引 URL")
     parser.add_argument("--host", default="127.0.0.1", help="本地监听地址")
-    parser.add_argument("--port", type=int, default=8765, help="本地监听端口")
+    parser.add_argument("--port", type=int, default=43123, help="本地监听端口")
     return parser.parse_args()
 
 

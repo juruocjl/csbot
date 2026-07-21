@@ -101,4 +101,4 @@ asynchronously and rate-limited.
 uv run python tools/production_image_gallery.py
 ```
 
-访问 <http://127.0.0.1:8765>。本地服务只读取生产 Nginx 的目录索引，网格使用生产端按需生成并缓存的 WebP 缩略图；只有点开大图时才加载原图，不会复制整个 `imgs/pic` 目录。
+访问 <http://127.0.0.1:43123>。本地服务只读取生产 Nginx 的目录索引，网格使用生产端按需生成并缓存的 WebP 缩略图；只有点开大图时才加载原图，不会复制整个 `imgs/pic` 目录。
