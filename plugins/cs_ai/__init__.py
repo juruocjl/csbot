@@ -681,7 +681,7 @@ class DataManager:
             f"{record.score1}:{record.score2} 队伍{record.team}{result}；"
             f"KDA {record.kill}/{record.death}/{record.assist} rating {record.pwRating:.2f} WE {record.we:.1f} "
             f"ADR {record.adpr:.0f} 分数 {display_score_text} 变化{self._format_signed(record.pvpScoreChange)} "
-            f"底蕴差{self._format_signed(legacy_diff)}"
+            f"底蕴差（己方-对方）{self._format_signed(legacy_diff)}"
         )
 
     async def _format_gp_history_item(self, record: Any) -> str:
@@ -694,7 +694,7 @@ class DataManager:
             f"{self._format_match_time(record.timeStamp)} mid={record.mid} 官匹 {record.mode} {record.mapName} "
             f"{record.score1}:{record.score2} 队伍{record.team}{result}；"
             f"KDA {record.kill}/{record.death}/{record.assist} rating {record.rating:.2f} ADR {record.adpr:.0f} "
-            f"官匹等级 {record.rank} 底蕴差{self._format_signed(legacy_diff)}"
+            f"官匹等级 {record.rank} 底蕴差（己方-对方）{self._format_signed(legacy_diff)}"
         )
 
     async def _get_pw_history_records(
@@ -1096,7 +1096,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             "type": "function",
             "function": {
                 "name": "fetch_player_matches",
-                "description": "获取指定人的完美或官匹比赛记录，包含比赛结果、地图、模式、比分、个人 KDA、rating、WE/ADR、分数变化、官匹等级等。name 可传用户昵称、[at:QQ]、QQ号或 steamid。支持快捷时间 time，也支持普通时间 time_start/time_end（YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS）。",
+                "description": "获取指定人的完美或官匹比赛记录，包含比赛结果、地图、模式、比分、个人 KDA、rating、WE/ADR、分数变化、官匹等级等。底蕴差固定定义为己方队伍底蕴减对方队伍底蕴：负数表示己方更低、对方更高，正数表示己方更高、对方更低。name 可传用户昵称、[at:QQ]、QQ号或 steamid。支持快捷时间 time，也支持普通时间 time_start/time_end（YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS）。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1295,6 +1295,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     await add_event("system", "聊天记录检索的重要规则：search_chat_spans 和 fetch_chat_stats 的 users 参数只能填写 QQ 号字符串，绝不能填写昵称、群名片、Steam 名或自然语言称呼。若用户用昵称或记忆里的别名问某个人，先从可用用户列表或已有记忆中找到对应的 [at:QQ号]，再把 QQ 号放进 users；如果无法确定 QQ 号，就不要传 users，改用 query 关键词检索并在最终回答中说明未能确定具体 QQ 号。")
     await add_event("system", "聊天记录按人检索规则：如果用户问的是“某人发的消息”“某人什么时候说/去/做了什么”“某人有没有提到某事”，必须把这个人的 QQ 号放进 users 来限定发言人，query 只放要查的内容关键词。不要只把这个人的昵称、别名或 QQ 号塞进 query。只有当问题是“谁提到了某事”“哪条消息里出现了某人/某词”，才主要用 query 检索消息内容。")
     await add_event("system", "不明代词、外号和错别字处理规则：群聊里经常会用同音字、近音字、错别字或玩笑称呼指代人和概念，例如“诸神”可能是“猪神”，“基础”可能是“鸡处”。遇到这类不明称呼时，优先考虑它可能是已有记忆、可用用户列表或群聊上下文中的谐音/外号，并可用多个可能写法分别检索；但只有当检索结果或上下文能明确支持时，才把它当作某个 QQ 号或具体对象。若无法确定，最终回答必须承认“无法确定这里指的是谁/什么”，不要硬猜、不要编造映射，避免把不确定外号当事实。")
+    await add_event("system", "底蕴差的定义必须严格按公式理解：底蕴差 = 己方队伍底蕴 - 对方队伍底蕴，其中“己方”始终是所查询玩家所在的队伍。底蕴差为负数表示己方底蕴更低、对方底蕴更高；底蕴差为正数表示己方底蕴更高、对方底蕴更低；0 表示双方相同。例如底蕴差 -100 的含义是己方比对方低 100，绝不能解释成对方更低。无论分析单场记录还是“底蕴差”排名，都必须遵守这个方向。")
     await add_event("system", "你可以近似认为天梯与内战的rt分布是1.05均值，0.33标准差的正态分布，天梯的WE分布是8.8均值，2.9标准差的正态分布，官匹的rt分布是1.00均值，0.44标准差的正态分布。")
     if mem:
         await add_event(
