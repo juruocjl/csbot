@@ -1,6 +1,6 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment, GroupMessageEvent
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment, GroupMessageEvent, Bot
 from nonebot.params import CommandArg
 from nonebot import on_command
 from nonebot.permission import SUPERUSER
@@ -91,6 +91,40 @@ watchstage = on_command("观战", priority=10, block=True)
 
 _watchstage_legacy_followups: set[tuple[str, str, str]] = set()
 _watchstage_legacy_followup_lock = asyncio.Lock()
+
+
+async def _delete_watch_stage_message_later(bot: Bot, message_id: int, delay_seconds: int) -> None:
+    if delay_seconds <= 0:
+        return
+    await asyncio.sleep(delay_seconds)
+    try:
+        await bot.delete_msg(message_id=message_id)
+    except Exception:
+        logger.exception(f"failed to delete watch stage message message_id={message_id}")
+
+
+def _schedule_watch_stage_auto_delete(bot: Bot, sent_message) -> None:
+    delay_seconds = config.cs_watch_stage_auto_delete_seconds
+    if delay_seconds <= 0:
+        return
+    try:
+        message_id = int(sent_message["message_id"])
+    except (KeyError, TypeError, ValueError):
+        logger.warning(f"watch stage image send result has no message_id: {sent_message}")
+        return
+    asyncio.create_task(_delete_watch_stage_message_later(
+        bot,
+        message_id,
+        delay_seconds,
+    ))
+
+
+async def _send_watch_stage_image(bot: Bot, group_id: int | str, image: bytes) -> None:
+    sent_message = await bot.send_group_msg(
+        group_id=int(group_id),
+        message=Message(MessageSegment.image(image)),
+    )
+    _schedule_watch_stage_auto_delete(bot, sent_message)
 
 @bind.handle()
 async def bind_function(message: MessageEvent, args: Message = CommandArg()):
@@ -314,7 +348,7 @@ async def _wait_watch_stage_snapshot(
 
 
 @watchstage.handle()
-async def watchstage_function(message: GroupMessageEvent, args: Message = CommandArg()):
+async def watchstage_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     target_uids, text_tokens = parse_target_args(args)
     if text_tokens or not target_uids:
         await watchstage.finish("用法：/观战 @玩家")
@@ -338,9 +372,10 @@ async def watchstage_function(message: GroupMessageEvent, args: Message = Comman
 
         missing_legacy = _watch_stage_missing_legacy(snapshot)
         if not missing_legacy:
-            await watchstage.finish(MessageSegment.image(screenshot))
+            await _send_watch_stage_image(bot, message.group_id, screenshot)
+            await watchstage.finish()
 
-        await watchstage.send(MessageSegment.image(screenshot))
+        await _send_watch_stage_image(bot, message.group_id, screenshot)
         followup_key = _watch_stage_followup_key(message.group_id, steamid, snapshot)
         if not await _try_start_watch_stage_followup(followup_key):
             await watchstage.finish()
@@ -352,7 +387,7 @@ async def watchstage_function(message: GroupMessageEvent, args: Message = Comman
 
             screenshot = await get_screenshot(f"/watch-stage?steamId={steamid}", token, width=1280)
             if screenshot:
-                await watchstage.finish(MessageSegment.image(screenshot))
+                await _send_watch_stage_image(bot, message.group_id, screenshot)
             await watchstage.finish()
         finally:
             await _finish_watch_stage_followup(followup_key)
