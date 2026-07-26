@@ -350,13 +350,15 @@ async def _wait_watch_stage_snapshot(
 @watchstage.handle()
 async def watchstage_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     target_uids, text_tokens = parse_target_args(args)
-    if text_tokens or not target_uids:
-        await watchstage.finish("用法：/观战 @玩家")
+    if text_tokens:
+        await watchstage.finish("用法：/观战 [@玩家]")
 
-    target_uid = target_uids[0]
+    target_uid = target_uids[0] if target_uids else message.get_user_id()
     steamid = await db_val.get_steamid(target_uid)
     if not steamid:
-        await watchstage.finish("该用户未绑定")
+        if target_uids:
+            await watchstage.finish("该用户未绑定")
+        await watchstage.finish("请先使用 /绑定 steamid64 绑定")
 
     try:
         snapshot = await _wait_watch_stage_snapshot(steamid)
