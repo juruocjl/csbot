@@ -43,10 +43,8 @@ class TimeLocationLogicTest(unittest.TestCase):
             datetime(2026, 7, 15, 12, tzinfo=timezone.utc),
         )
 
-        self.assertIn("07:00:00", winter)
-        self.assertIn("EST，UTC-05:00", winter)
-        self.assertIn("08:00:00", summer)
-        self.assertIn("EDT，UTC-04:00", summer)
+        self.assertEqual(winter, "美国东部（纽约）：01-15 07:00 周四")
+        self.assertEqual(summer, "美国东部（纽约）：07-15 08:00 周三")
 
     def test_shanghai_does_not_change_offset(self) -> None:
         winter = LOGIC.format_location_time(
@@ -60,10 +58,8 @@ class TimeLocationLogicTest(unittest.TestCase):
             datetime(2026, 7, 15, 12, tzinfo=timezone.utc),
         )
 
-        self.assertIn("20:00:00", winter)
-        self.assertIn("UTC+08:00", winter)
-        self.assertIn("20:00:00", summer)
-        self.assertIn("UTC+08:00", summer)
+        self.assertEqual(winter, "中国（北京）：01-15 20:00 周四")
+        self.assertEqual(summer, "中国（北京）：07-15 20:00 周三")
 
 
 if __name__ == "__main__":

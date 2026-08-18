@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 
@@ -41,15 +41,6 @@ def select_locations(
     raise UnknownLocationError(query.strip())
 
 
-def format_utc_offset(offset: timedelta | None) -> str:
-    if offset is None:
-        return "UTC?"
-    total_minutes = int(offset.total_seconds() // 60)
-    sign = "+" if total_minutes >= 0 else "-"
-    hours, minutes = divmod(abs(total_minutes), 60)
-    return f"UTC{sign}{hours:02d}:{minutes:02d}"
-
-
 def format_location_time(
     name: str,
     zone_name: str,
@@ -61,9 +52,4 @@ def format_location_time(
         raise ValueError("now must be timezone-aware")
 
     local_time = instant.astimezone(ZoneInfo(zone_name))
-    abbreviation = local_time.tzname() or zone_name
-    offset = format_utc_offset(local_time.utcoffset())
-    return (
-        f"{name}：{local_time:%Y-%m-%d %H:%M:%S} "
-        f"{WEEKDAYS[local_time.weekday()]}（{abbreviation}，{offset}）"
-    )
+    return f"{name}：{local_time:%m-%d %H:%M} {WEEKDAYS[local_time.weekday()]}"
