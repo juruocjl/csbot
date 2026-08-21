@@ -49,6 +49,7 @@ MAX_SPAN_MESSAGES = 30
 MIN_SPAN_MESSAGES = 8
 MAX_SPAN_CHARS = 3000
 REBUILD_CHUNK_FLUSH_SIZE = 1000
+REBUILD_SPAN_FLUSH_SIZE = 1000
 LIVE_REBUILD_SECONDS = 7200
 STARTUP_REPAIR_SECONDS = 86400
 STARTUP_REPAIR_LIMIT = 5000
@@ -1018,6 +1019,7 @@ class DataManager:
                     if row.reply_to_record_id is not None:
                         reply_targets[row.reply_to_record_id].append(row)
 
+                pending_span_count = 0
                 for span_rows in _build_span_groups(rows):
                     if not span_rows:
                         continue
@@ -1056,6 +1058,13 @@ class DataManager:
                         chunk_ids=_json_dumps(chunk_ids),
                     )
                     session.add(span)
+                    pending_span_count += 1
+                    if pending_span_count >= REBUILD_SPAN_FLUSH_SIZE:
+                        await session.flush()
+                        pending_span_count = 0
+                        await asyncio.sleep(0.01)
+                if pending_span_count:
+                    await session.flush()
 
     def _message_to_dict(self, row: ChatMessageIndex, role: str | None = None) -> dict[str, Any]:
         payload = {
