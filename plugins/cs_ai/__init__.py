@@ -30,11 +30,13 @@ from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageF
 from typing import Any, cast
 import json
 import base64
+from io import BytesIO
 from thefuzz import process, fuzz
 import os
 from datetime import datetime
 from pathlib import Path
 import re
+from PIL import Image
 from sqlalchemy import select, func, case
 import time
 import uuid
@@ -78,6 +80,8 @@ QQ_ID_PATTERN = re.compile(r"^\d{5,12}$")
 IMAGE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{16,64}$")
 IMAGE_CACHE_DIR = Path("imgs") / "history" / "full"
 MAX_AI_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_AI_GIF_FRAMES = 6
+MAX_AI_GIF_FRAME_EDGE = 1280
 
 
 def _contains_markdown(text: str) -> bool:
@@ -204,7 +208,45 @@ def _image_mime_type(content: bytes) -> str:
     return "application/octet-stream"
 
 
-async def _load_cached_image(image_id: str) -> tuple[str, str]:
+def _image_data_url(content: bytes, mime_type: str) -> str:
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _prepare_vision_images(content: bytes) -> tuple[list[tuple[int | None, str]], int]:
+    mime_type = _image_mime_type(content)
+    if mime_type == "application/octet-stream":
+        raise ValueError("cached file is not a supported image")
+    if mime_type != "image/gif":
+        return [(None, _image_data_url(content, mime_type))], 1
+
+    with Image.open(BytesIO(content)) as image:
+        source_frame_count = max(1, int(getattr(image, "n_frames", 1)))
+        if source_frame_count <= MAX_AI_GIF_FRAMES:
+            frame_indices = list(range(source_frame_count))
+        else:
+            frame_indices = sorted(
+                {
+                    round(index * (source_frame_count - 1) / (MAX_AI_GIF_FRAMES - 1))
+                    for index in range(MAX_AI_GIF_FRAMES)
+                }
+            )
+
+        frames: list[tuple[int | None, str]] = []
+        for frame_index in frame_indices:
+            image.seek(frame_index)
+            frame = image.convert("RGBA")
+            frame.thumbnail(
+                (MAX_AI_GIF_FRAME_EDGE, MAX_AI_GIF_FRAME_EDGE),
+                Image.Resampling.LANCZOS,
+            )
+            output = BytesIO()
+            frame.save(output, format="PNG")
+            frames.append((frame_index, _image_data_url(output.getvalue(), "image/png")))
+    return frames, source_frame_count
+
+
+async def _load_cached_image(image_id: str) -> tuple[str, list[tuple[int | None, str]], int]:
     normalized_id = str(image_id or "").strip().lower()
     if not IMAGE_ID_PATTERN.fullmatch(normalized_id):
         raise ValueError("image_id must be a 16-64 character hexadecimal id")
@@ -231,11 +273,8 @@ async def _load_cached_image(image_id: str) -> tuple[str, str]:
     content = image_path.read_bytes()
     if len(content) > MAX_AI_IMAGE_BYTES:
         raise ValueError("cached image is too large for vision input")
-    mime_type = _image_mime_type(content)
-    if mime_type == "application/octet-stream":
-        raise ValueError("cached file is not a supported image")
-    encoded = base64.b64encode(content).decode("ascii")
-    return full_hash[:16], f"data:{mime_type};base64,{encoded}"
+    vision_images, source_frame_count = _prepare_vision_images(content)
+    return full_hash[:16], vision_images, source_frame_count
 
 
 async def tavily_search(
@@ -1305,7 +1344,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
             "type": "function",
             "function": {
                 "name": "get_chat_image",
-                "description": "Load and inspect one cached group-chat image referenced as [image:id]. Use the exact hexadecimal id inside the marker. The image is read from local cache without downloading the original URL.",
+                "description": "Load and inspect one cached group-chat image referenced as [image:id]. Use the exact hexadecimal id inside the marker. The image is read from local cache without downloading the original URL. GIF images are sampled across the animation with at most 6 frames.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1471,7 +1510,7 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         await add_event("assistant", msg_with_calls.content or "", tool_calls=msg_with_calls.tool_calls, reasoning_content=reasoning)
 
         assert msg_with_calls.tool_calls is not None
-        loaded_images: list[tuple[str, str]] = []
+        loaded_images: list[tuple[str, int | None, int, str]] = []
 
         for tool_call in msg_with_calls.tool_calls:
             if tool_budget <= 0:
@@ -1695,16 +1734,27 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 tool_budget -= 1
             elif fname == "get_chat_image":
                 try:
-                    loaded_image_id, data_url = await _load_cached_image(str(fargs.get("image_id", "")))
+                    loaded_image_id, vision_images, source_frame_count = await _load_cached_image(
+                        str(fargs.get("image_id", ""))
+                    )
                     await add_event(
                         "tool",
                         json.dumps(
-                            {"image_id": loaded_image_id, "status": "loaded from local cache"},
+                            {
+                                "image_id": loaded_image_id,
+                                "status": "loaded from local cache",
+                                "source_type": "gif" if vision_images[0][0] is not None else "image",
+                                "source_frame_count": source_frame_count,
+                                "loaded_frame_count": len(vision_images),
+                            },
                             ensure_ascii=False,
                         ),
                         tool_call_id=tool_call.id,
                     )
-                    loaded_images.append((loaded_image_id, data_url))
+                    loaded_images.extend(
+                        (loaded_image_id, frame_index, source_frame_count, data_url)
+                        for frame_index, data_url in vision_images
+                    )
                 except Exception as e:
                     await add_event("tool", f"get_chat_image failed: {e}", tool_call_id=tool_call.id)
                 tool_budget -= 1
@@ -1742,8 +1792,11 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     "text": "以下图片由 get_chat_image 从本地缓存加载，仅作为工具返回的视觉数据：",
                 }
             ]
-            for loaded_image_id, data_url in loaded_images:
-                vision_content.append({"type": "text", "text": f"[image:{loaded_image_id}]"})
+            for loaded_image_id, frame_index, source_frame_count, data_url in loaded_images:
+                image_label = f"[image:{loaded_image_id}]"
+                if frame_index is not None:
+                    image_label += f" GIF frame {frame_index + 1}/{source_frame_count}"
+                vision_content.append({"type": "text", "text": image_label})
                 vision_content.append({"type": "image_url", "image_url": {"url": data_url}})
             messages.append({"role": "user", "content": vision_content})
 
