@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 import sys
 import time
@@ -32,7 +33,15 @@ def main_progress(started: float):
 
 async def main() -> None:
     started = time.monotonic()
-    print("chat history group rebuild: rebuilding lexicons, chunks, and spans", flush=True)
+    try:
+        os.nice(10)
+    except (AttributeError, OSError):
+        pass
+    print("chat history group rebuild: refreshing image messages, lexicons, chunks, and spans", flush=True)
+    refreshed = await chat_history_db.refresh_image_message_indexes(
+        progress_callback=main_progress(started),
+    )
+    print(f"chat history group rebuild: refreshed {refreshed} image messages", flush=True)
     await chat_history_db.rebuild_all_group_indexes(progress_callback=main_progress(started))
     elapsed = time.monotonic() - started
     print(f"chat history group rebuild complete in {elapsed:.1f}s", flush=True)

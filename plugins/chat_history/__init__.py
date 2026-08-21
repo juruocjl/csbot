@@ -48,6 +48,7 @@ CHUNK_GAP_SECONDS = 600
 MAX_SPAN_MESSAGES = 30
 MIN_SPAN_MESSAGES = 8
 MAX_SPAN_CHARS = 3000
+REBUILD_CHUNK_FLUSH_SIZE = 1000
 LIVE_REBUILD_SECONDS = 7200
 STARTUP_REPAIR_SECONDS = 86400
 STARTUP_REPAIR_LIMIT = 5000
@@ -686,6 +687,49 @@ class DataManager:
         await self.rebuild_all_reply_edges(batch_size=batch_size, progress_callback=progress_callback)
         return count
 
+    async def refresh_image_message_indexes(
+        self,
+        batch_size: int = 1000,
+        progress_callback: ProgressCallback | None = None,
+    ) -> int:
+        batch_size = max(100, int(batch_size))
+        count = 0
+        last_id = 0
+        async with async_session_factory() as session:
+            total = await session.scalar(
+                select(func.count())
+                .select_from(ChatMessageIndex)
+                .where(ChatMessageIndex.has_image == True)
+            ) or 0
+        if progress_callback:
+            progress_callback("image_messages", 0, total)
+        while True:
+            async with async_session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        select(GroupMsg)
+                        .join(ChatMessageIndex, ChatMessageIndex.record_id == GroupMsg.id)
+                        .where(
+                            GroupMsg.id > last_id,
+                            ChatMessageIndex.has_image == True,
+                        )
+                        .order_by(GroupMsg.id.asc())
+                        .limit(batch_size)
+                    )
+                    messages = list(result.scalars().all())
+                    if not messages:
+                        break
+                    for msg in messages:
+                        row = self._index_row_from_group_msg(msg)
+                        if row is not None:
+                            await session.merge(row)
+                    last_id = messages[-1].id
+                    count += len(messages)
+                    if progress_callback:
+                        progress_callback("image_messages", count, total)
+            await asyncio.sleep(0.05)
+        return count
+
     async def rebuild_all_reply_edges(
         self,
         batch_size: int = 1000,
@@ -932,6 +976,24 @@ class DataManager:
                 rows = list(result.scalars().all())
                 msg_by_id = {row.record_id: row for row in rows}
 
+                pending_chunks: list[tuple[ChatChunkIndex, list[ChatMessageIndex]]] = []
+
+                async def flush_pending_chunks() -> None:
+                    if not pending_chunks:
+                        return
+                    await session.flush()
+                    for pending_chunk, pending_rows in pending_chunks:
+                        for order, pending_row in enumerate(pending_rows):
+                            pending_row.primary_chunk_id = pending_chunk.id
+                            session.add(ChatChunkMessage(
+                                chunk_id=pending_chunk.id,
+                                message_id=pending_row.record_id,
+                                role="core",
+                                message_order=order,
+                            ))
+                    pending_chunks.clear()
+                    await asyncio.sleep(0.01)
+
                 for group in _build_core_groups(rows):
                     if not group:
                         continue
@@ -946,15 +1008,10 @@ class DataManager:
                         participant_uids=_json_dumps(_participants(group)),
                     )
                     session.add(chunk)
-                    await session.flush()
-                    for order, row in enumerate(group):
-                        row.primary_chunk_id = chunk.id
-                        session.add(ChatChunkMessage(
-                            chunk_id=chunk.id,
-                            message_id=row.record_id,
-                            role="core",
-                            message_order=order,
-                        ))
+                    pending_chunks.append((chunk, group))
+                    if len(pending_chunks) >= REBUILD_CHUNK_FLUSH_SIZE:
+                        await flush_pending_chunks()
+                await flush_pending_chunks()
 
                 reply_targets: defaultdict[int, list[ChatMessageIndex]] = defaultdict(list)
                 for row in rows:
