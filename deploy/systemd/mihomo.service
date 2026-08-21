@@ -1,0 +1,16 @@
+[Unit]
+Description=Mihomo proxy for CSBot services
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/clashctl
+ExecStart=/home/ubuntu/clashctl/bin/mihomo -d /home/ubuntu/clashctl/resources -f /home/ubuntu/clashctl/resources/runtime.yaml
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
