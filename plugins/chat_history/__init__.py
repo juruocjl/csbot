@@ -7,6 +7,7 @@ from functools import lru_cache
 import asyncio
 import json
 import math
+import msgpack
 import re
 from typing import Any, Callable, Iterable
 
@@ -108,6 +109,7 @@ KEYWORD_STOP_WORDS = {
     "怎么这",
 }
 PINYIN_TOKEN_PREFIX = "__py:"
+IMAGE_ID_LENGTH = 16
 ProgressCallback = Callable[[str, int, int | None], None]
 
 
@@ -135,6 +137,13 @@ def _json_loads_list(value: str | None) -> list[Any]:
         return result if isinstance(result, list) else []
     except Exception:
         return []
+
+
+def image_id_from_hash(hash_value: Any) -> str | None:
+    value = str(hash_value or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        return None
+    return value[:IMAGE_ID_LENGTH]
 
 
 def group_id_from_sid(sid: str) -> str:
@@ -371,12 +380,13 @@ def parse_message_segments(segments: Iterable[Any]) -> ParsedMessage:
                     reply_to_mid = None
         elif seg_type == "imagev2":
             has_image = True
+            image_id = image_id_from_hash(raw_seg[1] if len(raw_seg) >= 2 else None)
             summary = str(raw_seg[3]).replace("\x00", " ") if len(raw_seg) >= 4 and raw_seg[3] else ""
             if summary:
                 image_summaries.append(summary)
-                text_parts.append(f"[image:{summary}]")
-            else:
-                text_parts.append("[image]")
+            text_parts.append(f"[image:{image_id}]" if image_id else "[image:unavailable]")
+            if summary:
+                text_parts.append(f"(图片摘要：{summary})")
         elif seg_type == "face" and len(raw_seg) >= 2:
             text_parts.append(f"[face:{raw_seg[1]}]")
         else:
@@ -1097,6 +1107,56 @@ class DataManager:
         order = {message_id: idx for idx, message_id in enumerate(ids)}
         rows = sorted(rows, key=lambda row: order.get(row.record_id, 10**9))
         return _json_dumps({"records": [self._message_to_dict(row) for row in rows]})
+
+    async def fetch_message(self, group_id: str, message_id: int) -> str:
+        async with async_session_factory() as session:
+            raw_row = await session.get(GroupMsg, int(message_id))
+            if raw_row is None or not raw_row.sid.startswith(f"group_{group_id}_"):
+                return _json_dumps({"record": None, "error": "message not found"})
+            index_row = await session.get(ChatMessageIndex, int(message_id))
+        parsed = parse_message_segments(msgpack.loads(raw_row.data))
+        return _json_dumps({
+            "record": {
+                "message_id": raw_row.id,
+                "qq": user_id_from_sid(raw_row.sid),
+                "timestamp": raw_row.timestamp,
+                "time": datetime.fromtimestamp(raw_row.timestamp).strftime("%Y-%m-%d %H:%M:%S"),
+                "text": parsed.plain_text,
+                "mentioned_uids": parsed.mentioned_uids,
+                "reply_to_message_id": parsed.reply_to_record_id,
+                "reply_to_mid": parsed.reply_to_mid,
+                "has_image": parsed.has_image,
+                "image_summaries": parsed.image_summaries,
+                "primary_chunk_id": index_row.primary_chunk_id if index_row is not None else None,
+            }
+        })
+
+    async def get_message_reference_by_mid(self, group_id: str, mid: int) -> dict[str, Any] | None:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(GroupMsg)
+                .where(
+                    GroupMsg.mid == int(mid),
+                    GroupMsg.sid.like(f"group_{group_id}_%"),
+                )
+                .order_by(GroupMsg.timestamp.desc(), GroupMsg.id.desc())
+                .limit(1)
+            )
+            raw_row = result.scalar_one_or_none()
+        if raw_row is None:
+            return None
+        parsed = parse_message_segments(msgpack.loads(raw_row.data))
+        return {
+            "message_id": raw_row.id,
+            "qq": user_id_from_sid(raw_row.sid),
+            "text": parsed.plain_text,
+        }
+
+    async def get_message_image_ids_by_mid(self, group_id: str, mid: int) -> list[str]:
+        reference = await self.get_message_reference_by_mid(group_id, mid)
+        if reference is None:
+            return []
+        return re.findall(r"\[image:([0-9a-f]{16})\]", str(reference["text"]))
 
     async def fetch_chunk_messages(self, group_id: str, chunk_id: int) -> str:
         async with async_session_factory() as session:
