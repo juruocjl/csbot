@@ -89,16 +89,26 @@ Steam Monitor 应显示 `healthy`，其 `/api/health` 应包含 `loggedOn=true` 
 
 ## 索引维护
 
-历史聊天索引重建会降低进程优先级，并批量写入。仍应在业务低峰执行：
+历史聊天索引重建会降低进程优先级，并批量写入。生产环境必须使用 transient systemd service 限制资源，仍应在业务低峰执行：
 
 ```bash
-cd /home/ubuntu/csbot
-nohup .venv/bin/python scripts/rebuild_chat_history_groups.py > /tmp/chat_history_group_rebuild.log 2>&1 < /dev/null &
+sudo systemd-run \
+  --unit=csbot-chat-index-rebuild \
+  --description='Low-impact CSBot chat image index rebuild' \
+  --property=WorkingDirectory=/home/ubuntu/csbot \
+  --property=Nice=15 \
+  --property=CPUQuota=80% \
+  --property=MemoryHigh=1300M \
+  --property=MemoryMax=1500M \
+  --property=IOWeight=10 \
+  /home/ubuntu/csbot/.venv/bin/python \
+  /home/ubuntu/csbot/scripts/rebuild_chat_history_groups.py
 ```
 
-通过以下命令观察进度，不要并行启动第二个重建任务：
+通过以下命令观察进度和前端响应，不要并行启动第二个重建任务：
 
 ```bash
-pgrep -af '[r]ebuild_chat_history_groups.py'
-tail -f /tmp/chat_history_group_rebuild.log
+systemctl status csbot-chat-index-rebuild.service --no-pager
+journalctl -fu csbot-chat-index-rebuild.service
+curl -sS -o /dev/null -w 'http=%{http_code} total=%{time_total}s\n' --max-time 10 http://127.0.0.1:1234/ai-chat
 ```
