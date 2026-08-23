@@ -43,6 +43,12 @@ import uuid
 import aiohttp
 
 from .config import Config
+from .output_guard import (
+    QQ_GUARD_FAILED_TEXT,
+    QQOutputGuardResult,
+    build_qq_guard_messages,
+    parse_qq_guard_response,
+)
 
 __plugin_meta__ = PluginMetadata(
     name="cs_ai",
@@ -132,6 +138,16 @@ def _split_forward_text(text: str, max_chars: int = AI_FORWARD_NODE_MAX_CHARS) -
     if current.strip():
         chunks.append(current.rstrip())
     return chunks or [text]
+
+
+async def _guard_qq_output(client: AsyncOpenAI, draft: str) -> QQOutputGuardResult:
+    guard_model = config.cs_ai_guard_model.strip() or config.cs_ai_model
+    response = await client.chat.completions.create(
+        model=guard_model,
+        messages=cast(list[ChatCompletionMessageParam], build_qq_guard_messages(draft)),
+    )
+    raw_result = response.choices[0].message.content or ""
+    return parse_qq_guard_response(raw_result, draft)
 
 
 async def _send_ai_forward_result(
@@ -1841,11 +1857,31 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                 },
             ]
     final_reasoning = getattr(final_msg, "reasoning_content", None)
+    remember_output = True
+    if config.cs_ai_output_guard_enabled:
+        try:
+            guard_result = await _guard_qq_output(client, output)
+            if _contains_markdown(guard_result.text):
+                raise ValueError("guarded output contains markdown")
+            output = guard_result.text
+            if guard_result.decision != "allow":
+                final_reasoning = None
+            if guard_result.decision == "block":
+                remember_output = False
+            logger.info(
+                f"QQ output guard decision={guard_result.decision} reason={guard_result.reason or 'none'}"
+            )
+        except Exception as e:
+            logger.warning(f"QQ output guard failed closed: {e}")
+            output = QQ_GUARD_FAILED_TEXT
+            final_reasoning = None
+            remember_output = False
     await add_event("assistant", output, reasoning_content=final_reasoning, is_end=True)
-    try:
-        await db.remember_ai_qa(sid, persona, text, output)
-    except Exception as e:
-        logger.warning(f"remember recent ai qa failed: {e}")
+    if remember_output:
+        try:
+            await db.remember_ai_qa(sid, persona, text, output)
+        except Exception as e:
+            logger.warning(f"remember recent ai qa failed: {e}")
     
     end_time = time.time()
     duration = int(end_time - start_time)
