@@ -21,11 +21,11 @@ class QQOutputGuardLogicTest(unittest.TestCase):
 
     def test_rewrite_uses_guarded_text(self):
         result = GUARD.parse_qq_guard_response(
-            '{"decision":"rewrite","text":"已隐去私人凭据。","reason":"credential"}',
+            '{"decision":"rewrite","text":"已去除高风险推广和引流内容。","reason":"platform-risk-promotion"}',
             "草稿",
         )
         self.assertEqual(result.decision, "rewrite")
-        self.assertEqual(result.text, "已隐去私人凭据。")
+        self.assertEqual(result.text, "已去除高风险推广和引流内容。")
 
     def test_block_uses_fixed_message(self):
         result = GUARD.parse_qq_guard_response(
