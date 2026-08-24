@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import json
+import re
 from typing import Literal
 
 
@@ -32,6 +33,25 @@ class QQOutputGuardResult:
     decision: GuardDecision
     text: str
     reason: str
+
+
+def normalize_qq_plain_text(text: str) -> str:
+    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"```[^\n]*\n?", "", normalized)
+    normalized = re.sub(r"`([^`\n]+)`", r"\1", normalized)
+    normalized = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", normalized)
+    normalized = re.sub(r"https?://\S+", "[链接已省略]", normalized)
+
+    lines: list[str] = []
+    for line in normalized.splitlines():
+        line = re.sub(r"^\s{0,3}#{1,6}\s+", "", line)
+        line = re.sub(r"^\s{0,3}[-*+]\s+", "• ", line)
+        line = re.sub(r"^\s{0,3}(\d+)\.\s+", r"\1、", line)
+        line = re.sub(r"^\s{0,3}>\s+", "", line)
+        if re.fullmatch(r"\s{0,3}---+\s*", line):
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
 
 
 def build_qq_guard_messages(draft: str) -> list[dict[str, str]]:

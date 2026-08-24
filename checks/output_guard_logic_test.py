@@ -46,6 +46,14 @@ class QQOutputGuardLogicTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             GUARD.parse_qq_guard_response("可以发送", "草稿")
 
+    def test_plain_text_normalization_preserves_slashes(self):
+        draft = "## 符号区别\n- `／` 是全角\n- `/` 是半角\n1. 参考 [说明](https://example.com)"
+        result = GUARD.normalize_qq_plain_text(draft)
+        self.assertEqual(
+            result,
+            "符号区别\n• ／ 是全角\n• / 是半角\n1、参考 说明",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

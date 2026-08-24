@@ -47,6 +47,7 @@ from .output_guard import (
     QQ_GUARD_FAILED_TEXT,
     QQOutputGuardResult,
     build_qq_guard_messages,
+    normalize_qq_plain_text,
     parse_qq_guard_response,
 )
 
@@ -1856,14 +1857,13 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
                     "content": f"仍检测到markdown，请继续重写为纯文本：\n{rewritten}",
                 },
             ]
+    output = normalize_qq_plain_text(output)
     final_reasoning = getattr(final_msg, "reasoning_content", None)
     remember_output = True
     if config.cs_ai_output_guard_enabled:
         try:
             guard_result = await _guard_qq_output(client, output)
-            if _contains_markdown(guard_result.text):
-                raise ValueError("guarded output contains markdown")
-            output = guard_result.text
+            output = normalize_qq_plain_text(guard_result.text)
             if guard_result.decision != "allow":
                 final_reasoning = None
             if guard_result.decision == "block":
