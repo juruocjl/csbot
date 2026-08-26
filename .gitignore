@@ -12,4 +12,5 @@ result.txt
 log
 imgs
 win_matrix.csv
-mymigrations/versions
+mymigrations/versions/*
+!mymigrations/versions/*.py

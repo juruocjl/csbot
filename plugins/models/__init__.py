@@ -581,6 +581,15 @@ class StorageItem(Base):
     key: Mapped[str] = mapped_column(String(255), primary_key=True)
     val: Mapped[str] = mapped_column(Text)
 
+# 可在运行时修改的应用配置
+class RuntimeConfig(Base):
+    __tablename__ = "runtime_config"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[int] = mapped_column(BigInteger)
+    updated_by: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
 # 直播状态记录
 class LiveStatus(Base):
     __tablename__ = "live_status"

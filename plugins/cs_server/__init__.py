@@ -40,6 +40,8 @@ from nonebot_plugin_apscheduler import scheduler
 
 require("utils")
 from ..utils import async_session_factory, local_storage, get_session
+require("runtime_config")
+from ..runtime_config import RuntimeConfigValue, runtime_config
 require("models")
 from ..models import AuthSession, GroupMember, MajorHWSnapshot, MemberSteamID, SteamBaseInfo, SteamExtraInfo, UserInfo
 from ..models import MatchStatsPW, MatchStatsGP, MatchStatsFaceit
@@ -1228,6 +1230,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return auth_session
 
 
+def is_admin_user(info: AuthSession) -> bool:
+    superusers = {str(user_id) for user_id in get_driver().config.superusers}
+    return info.user_id is not None and str(info.user_id) in superusers
+
+
+async def get_current_admin(info: AuthSession = Depends(get_current_user)) -> AuthSession:
+    if not is_admin_user(info):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return info
+
+
 class WatchStageRequest(BaseModel):
     steamId: str = Field(..., description="Steam ID")
 
@@ -1270,14 +1283,73 @@ async def init_token():
 
 class VerifyTokenResponse(BaseModel):
     isVerified: bool = Field(..., description="Token 是否有效")
+    isAdmin: bool = Field(..., description="当前用户是否为管理员")
 
 @app.post("/api/auth/verify",
     response_model=VerifyTokenResponse,
     summary="验证认证 Token",
     description="验证提供的 Token 是否有效。"
 )
-async def verify_token(_ = Depends(get_current_user)):
-    return VerifyTokenResponse(isVerified=True)
+async def verify_token(info: AuthSession = Depends(get_current_user)):
+    return VerifyTokenResponse(isVerified=True, isAdmin=is_admin_user(info))
+
+
+class RuntimeConfigItemResponse(BaseModel):
+    key: str
+    name: str
+    description: str
+    valueType: str
+    editor: str
+    value: Any
+    defaultValue: Any
+    updatedAt: int | None
+    updatedBy: str | None
+
+
+class RuntimeConfigListResponse(BaseModel):
+    items: list[RuntimeConfigItemResponse]
+
+
+class RuntimeConfigUpdateRequest(BaseModel):
+    value: Any
+
+
+def runtime_config_response(item: RuntimeConfigValue) -> RuntimeConfigItemResponse:
+    return RuntimeConfigItemResponse(
+        key=item.key,
+        name=item.name,
+        description=item.description,
+        valueType=item.value_type,
+        editor=item.editor,
+        value=item.value,
+        defaultValue=item.default_value,
+        updatedAt=item.updated_at,
+        updatedBy=item.updated_by,
+    )
+
+
+@app.get("/api/admin/runtime-config", response_model=RuntimeConfigListResponse)
+async def get_runtime_config_items(
+    _: AuthSession = Depends(get_current_admin),
+) -> RuntimeConfigListResponse:
+    items = await runtime_config.list_values()
+    return RuntimeConfigListResponse(items=[runtime_config_response(item) for item in items])
+
+
+@app.put("/api/admin/runtime-config/{key}", response_model=RuntimeConfigItemResponse)
+async def update_runtime_config_item(
+    key: str,
+    request: RuntimeConfigUpdateRequest,
+    info: AuthSession = Depends(get_current_admin),
+) -> RuntimeConfigItemResponse:
+    assert info.user_id is not None
+    try:
+        item = await runtime_config.set(key, request.value, info.user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return runtime_config_response(item)
 
 class InfoNameResponse(BaseModel):
     showName: str = Field(..., description="显示名称")

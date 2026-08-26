@@ -11,6 +11,9 @@ from nonebot_plugin_apscheduler import scheduler
 require("utils")
 from ..utils import local_storage
 
+require("runtime_config")
+from ..runtime_config import runtime_config
+
 event_update = require("major_hw").event_update
 
 
@@ -36,7 +39,8 @@ updategame = on_command("更新比赛", priority=10, block=True)
 @updategame.handle()
 async def update_events() -> None:
     bot = get_bot()
-    for event in config.hltv_event_id_list:
+    event_ids: list[int] = await runtime_config.get("hltv_event_id_list")
+    for event in event_ids:
         logger.info(f"start get {event}")
         title, newres = await get_matches(event)
         stored_results: list[tuple[str, str, str, str]] = json.loads(await local_storage.get(f"hltvresult{event}", default="[]"))

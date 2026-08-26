@@ -97,6 +97,7 @@ def main() -> None:
         "blocker",
         "models",
         "utils",
+        "runtime_config",
         "major_hw",
         "cs_db_val",
         "cs_db_upd",
