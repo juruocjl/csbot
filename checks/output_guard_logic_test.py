@@ -54,6 +54,14 @@ class QQOutputGuardLogicTest(unittest.TestCase):
             "符号区别\n• ／ 是全角\n• / 是半角\n1、参考 说明",
         )
 
+    def test_guard_tool_requires_structured_decision(self):
+        parameters = GUARD.QQ_OUTPUT_GUARD_TOOL["function"]["parameters"]
+        self.assertEqual(
+            parameters["properties"]["decision"]["enum"],
+            ["allow", "rewrite", "block"],
+        )
+        self.assertEqual(parameters["required"], ["decision", "text", "reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ import aiohttp
 from .config import Config
 from .output_guard import (
     QQ_GUARD_FAILED_TEXT,
+    QQ_OUTPUT_GUARD_TOOL,
     QQOutputGuardResult,
     build_qq_guard_messages,
     normalize_qq_plain_text,
@@ -143,12 +144,45 @@ def _split_forward_text(text: str, max_chars: int = AI_FORWARD_NODE_MAX_CHARS) -
 
 async def _guard_qq_output(client: AsyncOpenAI, draft: str) -> QQOutputGuardResult:
     guard_model = config.cs_ai_guard_model.strip() or config.cs_ai_model
-    response = await client.chat.completions.create(
-        model=guard_model,
-        messages=cast(list[ChatCompletionMessageParam], build_qq_guard_messages(draft)),
-    )
-    raw_result = response.choices[0].message.content or ""
-    return parse_qq_guard_response(raw_result, draft)
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            guard_messages = build_qq_guard_messages(draft)
+            if attempt:
+                guard_messages.append(
+                    {
+                        "role": "system",
+                        "content": "上一次返回格式无效。必须调用 submit_qq_guard_decision，不要输出普通文本。",
+                    }
+                )
+            response = await client.chat.completions.create(
+                model=guard_model,
+                messages=cast(list[ChatCompletionMessageParam], guard_messages),
+                tools=cast(Any, [QQ_OUTPUT_GUARD_TOOL]),
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": "submit_qq_guard_decision"},
+                },
+            )
+            message = response.choices[0].message
+            raw_result = message.content or ""
+            if message.tool_calls:
+                matching_call = next(
+                    (
+                        tool_call
+                        for tool_call in message.tool_calls
+                        if tool_call.function.name == "submit_qq_guard_decision"
+                    ),
+                    None,
+                )
+                if matching_call is not None:
+                    raw_result = matching_call.function.arguments
+            return parse_qq_guard_response(raw_result, draft)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"QQ output guard attempt {attempt + 1} failed: {e}")
+    assert last_error is not None
+    raise last_error
 
 
 async def _send_ai_forward_result(
