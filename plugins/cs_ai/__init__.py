@@ -163,6 +163,7 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str) -> QQOutputGuardResu
                     "type": "function",
                     "function": {"name": "submit_qq_guard_decision"},
                 },
+                extra_body={"thinking": {"type": "disabled"}},
             )
             message = response.choices[0].message
             raw_result = message.content or ""
