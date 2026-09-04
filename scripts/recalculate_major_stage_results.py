@@ -26,8 +26,6 @@ def init_nonebot(args: argparse.Namespace) -> None:
         major_stage=args.major_stage,
         major_event_id=args.event_id,
         cs_group_list=json.loads(os.getenv("CS_GROUP_LIST", "[]")),
-        cs_season_id=os.getenv("CS_SEASON_ID", "S21"),
-        cs_last_season_id=os.getenv("CS_LAST_SEASON_ID", "S20"),
         cs_mysteam_id=int(os.getenv("CS_MYSTEAM_ID", "0")),
         cs_wmtoken=os.getenv("CS_WMTOKEN", "debug"),
         cs_ai_url=os.getenv("CS_AI_URL", "http://127.0.0.1"),

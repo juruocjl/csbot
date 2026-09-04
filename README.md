@@ -5,6 +5,20 @@
 1. `uv sync` .
 4. `uv run nb run` .
 
+## Runtime configuration
+
+Administrators (`SUPERUSERS`) can edit database-backed configuration at `/admin/config`.
+The registered keys include `hltv_event_id_list`, `cs_season_id` (current season),
+and `cs_last_season_id` (previous season). Season values are JSON strings such as
+`"S21"` and `"S20"`; these are the initial defaults from the example configuration,
+not automatically detected seasons. Set the appropriate values in the admin page.
+The old season environment variables are no longer read.
+
+Startup inserts missing configuration rows without overwriting saved values; adding
+these two keys does not require a schema migration. Subsequent queries and refresh
+jobs read the database. An already-running player refresh retains its season pair
+until it finishes, so one refresh cannot mix different configurations.
+
 ## Deploy
 
 Use the backend deploy runbook in [`scripts/DEPLOY.md`](scripts/DEPLOY.md).

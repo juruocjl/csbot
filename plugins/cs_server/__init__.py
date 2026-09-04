@@ -155,8 +155,8 @@ async def update_season_stats_cache():
         logger.info("skip season stats cache job: background jobs disabled")
         return
     global SEASON_STATS_CACHE
-    for season_id in [config.cs_season_id, ]:
-        SEASON_STATS_CACHE[season_id] = await _calculate_global_stats(season_id)
+    season_id = await runtime_config.get("cs_season_id")
+    SEASON_STATS_CACHE[season_id] = await _calculate_global_stats(season_id)
 
 driver = get_driver()
 
@@ -599,6 +599,7 @@ class WatchStageManager:
         self.connections: dict[str, WatchStageConnection] = {}
         self.latest_snapshots: dict[str, WatchStageSnapshot] = {}
         self.profile_cache: dict[str, WatchStagePlayerProfile] = {}
+        self.profile_season: str | None = None
         self.external_profiles: dict[str, dict[str, Any]] = {}
         self.profile_update_tasks: set[str] = set()
         self.profile_retry_after: dict[str, int] = {}
@@ -627,7 +628,7 @@ class WatchStageManager:
                 if existing.platform != platform:
                     await existing.close()
                 else:
-                    snapshot = self._snapshot_for_player(steam_id)
+                    snapshot = await self._snapshot_for_player(steam_id)
                     if snapshot and self._is_running_snapshot_stale(snapshot):
                         await existing.close()
                         self._remove_connection_locked(existing.id)
@@ -641,7 +642,7 @@ class WatchStageManager:
                 if self._is_running_snapshot_stale(snapshot):
                     self._clear_snapshot_family_locked(snapshot)
                 else:
-                    return self._snapshot_for_player(steam_id) or snapshot
+                    return await self._snapshot_for_player(steam_id) or snapshot
             if snapshot and snapshot.status == "no_active_match" and getattr(snapshot, "platform", None) == platform:
                 return snapshot
 
@@ -657,13 +658,13 @@ class WatchStageManager:
         except asyncio.TimeoutError:
             pass
 
-        return self._snapshot_for_player(steam_id) or self._pending_snapshot(steam_id, connection_id)
+        return await self._snapshot_for_player(steam_id) or self._pending_snapshot(steam_id, connection_id)
 
     async def snapshot(self, steam_id: str) -> WatchStageSnapshot:
         async with self.lock:
             connection = self._get_connection_for_player(steam_id)
             if connection:
-                snapshot = self._snapshot_for_player(steam_id)
+                snapshot = await self._snapshot_for_player(steam_id)
                 if snapshot and self._is_running_snapshot_stale(snapshot):
                     await connection.close()
                     self._remove_connection_locked(connection.id)
@@ -803,20 +804,13 @@ class WatchStageManager:
             return None
         return connection
 
-    def _snapshot_for_player(self, steam_id: str) -> WatchStageSnapshot | None:
+    async def _snapshot_for_player(self, steam_id: str) -> WatchStageSnapshot | None:
         snapshot = self.latest_snapshots.get(steam_id)
         if not snapshot:
             return None
         return snapshot.copy(update={
             "requestedSteamId": steam_id,
-            "profiles": {
-                player.steamId: self.profile_cache.get(player.steamId)
-                or WatchStagePlayerProfile(
-                    steamId=player.steamId,
-                    status="updating" if player.steamId in self.profile_update_tasks else "missing",
-                )
-                for player in snapshot.players
-            }
+            "profiles": await self._profiles_for_players({player.steamId for player in snapshot.players}),
         })
 
     def _pending_snapshot(self, steam_id: str, connection_id: str) -> WatchStageSnapshot:
@@ -939,6 +933,12 @@ class WatchStageManager:
         })
         asyncio.create_task(self._refresh_profile(steam_id))
 
+    def _use_profile_season(self, season_id: str) -> None:
+        if self.profile_season != season_id:
+            self.profile_cache.clear()
+            self.profile_retry_after.clear()
+            self.profile_season = season_id
+
     def _profile_from_external(self, steam_id: str) -> WatchStagePlayerProfile:
         cached = self.profile_cache.get(steam_id)
         if cached:
@@ -963,6 +963,11 @@ class WatchStageManager:
         return profile
 
     async def _profiles_for_players(self, steam_ids: set[str]) -> dict[str, WatchStagePlayerProfile]:
+        if not steam_ids:
+            return {}
+        season_id = await runtime_config.get("cs_season_id")
+        # 切换赛季后不再复用旧赛季缓存；同赛季的非赛季资料仍然保留。
+        self._use_profile_season(season_id)
         profiles = {steam_id: self._profile_from_external(steam_id) for steam_id in steam_ids}
         try:
             async with async_session_factory() as session:
@@ -972,7 +977,7 @@ class WatchStageManager:
                 detail_rows = list((await session.execute(
                     select(SteamDetailInfo)
                     .where(SteamDetailInfo.steamid.in_(steam_ids))
-                    .where(SteamDetailInfo.seasonId == config.cs_season_id)
+                    .where(SteamDetailInfo.seasonId == season_id)
                 )).scalars().all())
                 extra_rows = list((await session.execute(
                     select(SteamExtraInfo).where(SteamExtraInfo.steamid.in_(steam_ids))
@@ -995,7 +1000,7 @@ class WatchStageManager:
             base_info = base_by_id.get(steam_id)
             detail_info = detail_by_id.get(steam_id)
             extra_info = extra_by_id.get(steam_id)
-            ladder_score, ladder_stars = self._ladder_score_from_base(base_info)
+            ladder_score, ladder_stars = self._ladder_score_from_base(base_info, season_id)
             if not base_info and not detail_info and not extra_info:
                 continue
             profiles[steam_id] = profile.copy(update={
@@ -1006,14 +1011,15 @@ class WatchStageManager:
                 "legacyScore": float(extra_info.legacyScore) if extra_info else profile.legacyScore,
                 "avgRt": self._optional_float((detail_info.pwRating if detail_info else None) or profile.avgRt),
                 "avgWe": self._optional_float((detail_info.we if detail_info else None) or profile.avgWe),
-                "status": "ready" if extra_info else profile.status,
-                "message": None if extra_info else profile.message,
+                "status": "ready" if extra_info and detail_info else profile.status,
+                "message": None if extra_info and detail_info else profile.message,
                 "updatedAt": now if extra_info else profile.updatedAt,
             })
-            self.profile_cache[steam_id] = profiles[steam_id]
+            if self.profile_season == season_id:
+                self.profile_cache[steam_id] = profiles[steam_id]
         return profiles
 
-    def _ladder_score_from_base(self, base_info: SteamBaseInfo | None) -> tuple[int | None, int | None]:
+    def _ladder_score_from_base(self, base_info: SteamBaseInfo | None, season_id: str) -> tuple[int | None, int | None]:
         if not base_info or not base_info.ladderScore:
             return None, None
         try:
@@ -1022,7 +1028,7 @@ class WatchStageManager:
             return None, None
         if not isinstance(rows, list):
             return None, None
-        selected = next((row for row in rows if isinstance(row, dict) and row.get("season") == config.cs_season_id), None)
+        selected = next((row for row in rows if isinstance(row, dict) and row.get("season") == season_id), None)
         if not selected or not self._optional_int(selected.get("score")):
             return None, None
         return self._optional_int(selected.get("score")), self._optional_int(selected.get("currSStars") or 0)
@@ -1066,30 +1072,35 @@ class WatchStageManager:
             self.profile_update_tasks.discard(steam_id)
 
     async def _refresh_profile_base_info(self, steam_id: str) -> None:
+        seasons = await runtime_config.get_seasons()
         try:
             async with async_session_factory() as session:
                 async with session.begin():
-                    await db_upd._update_stats_card(steam_id, session)
+                    await db_upd._update_stats_card(steam_id, session, seasons=seasons)
         except TooFrequentError:
             try:
                 async with async_session_factory() as session:
                     async with session.begin():
-                        await db_upd._update_extra_info(steam_id, session)
+                        await db_upd._update_extra_info(steam_id, session, seasons=seasons)
             except Exception as exc:
                 logger.info(f"watch stage extra info refresh after rate limit skipped steamid={steam_id} error={exc}")
             raise
 
         async with async_session_factory() as session:
             async with session.begin():
-                await db_upd._update_extra_info(steam_id, session)
+                await db_upd._update_extra_info(steam_id, session, seasons=seasons)
 
     async def _get_profile(self, steam_id: str, force_ready: bool = False) -> WatchStagePlayerProfile:
+        season_id = await runtime_config.get("cs_season_id")
+        self._use_profile_season(season_id)
         external = self.external_profiles.get(steam_id, {})
         base_info = await self._safe_profile_query("base_info", steam_id, db_val.get_base_info)
-        detail_info = await self._safe_profile_query("detail_info", steam_id, db_val.get_detail_info)
+        detail_info = await self._safe_profile_query(
+            "detail_info", steam_id, lambda sid: db_val.get_detail_info(sid, season_id)
+        )
         extra_info = await self._safe_profile_query("extra_info", steam_id, db_val.get_extra_info)
         faceit_bind = await self._safe_profile_query("faceit_bind", steam_id, db_val.get_faceit_bind)
-        ladder_score, ladder_stars = self._ladder_score_from_base(base_info)
+        ladder_score, ladder_stars = self._ladder_score_from_base(base_info, season_id)
         status = "ready" if force_ready or base_info or detail_info or extra_info else "missing"
         if steam_id in self.profile_update_tasks:
             status = "updating"
@@ -1108,6 +1119,9 @@ class WatchStageManager:
             message=None if status == "ready" else "等待基础数据抓取",
             updatedAt=int(time.time()) if status == "ready" else None,
         )
+        if self.profile_season != season_id:
+            # 配置在查询中途被另一请求切换，避免后台抓取把旧赛季资料重新放回缓存。
+            return await self._get_profile(steam_id, force_ready=force_ready)
         self.profile_cache[steam_id] = profile
         return profile
 

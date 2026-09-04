@@ -12,6 +12,8 @@ require("utils")
 from ..utils import avatar_dir
 from ..utils import async_session_factory
 from ..utils import get_session
+require("runtime_config")
+from ..runtime_config import SeasonConfig, runtime_config
 
 require("models")
 from ..models import MemberSteamID, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, SteamFaceitID, MatchStatsFaceit
@@ -41,9 +43,6 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 
-
-SeasonId = config.cs_season_id
-lastSeasonId = config.cs_last_season_id
 
 class TooFrequentError(Exception):
     def __init__(self, wait_time: int):
@@ -738,13 +737,18 @@ class DataManager:
 
         await session.merge(detail_info)
 
-    async def _update_stats_card(self, steamid: str, session: AsyncSession, interval: int = 600):
+    async def _update_stats_card(
+        self, steamid: str, session: AsyncSession, interval: int = 600,
+        *, seasons: SeasonConfig | None = None,
+    ):
+        if seasons is None:
+            seasons = await runtime_config.get_seasons()
         logger.info(f"获取具体信息 for SteamID: {steamid}")
         url = "https://api.wmpvp.com/api/csgo/home/pvp/detailStats/v2"
         payload = {
             "mySteamId": config.cs_mysteam_id,
             "toSteamId": steamid,
-            "csgoSeasonId": SeasonId,
+            "csgoSeasonId": seasons.current,
         }
         header = {
             "appversion": "3.5.4.172",
@@ -794,12 +798,12 @@ class DataManager:
         await session.merge(result_info)
         await self._insert_detail_info(data["data"], session)
         await asyncio.sleep(0.2)
-        result_detail: SteamDetailInfo | None = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
+        result_detail: SteamDetailInfo | None = await session.get(SteamDetailInfo, (steamid, seasons.previous))
         if result_detail == None:
             payload = {
                 "mySteamId": config.cs_mysteam_id,
                 "toSteamId": steamid,
-                "csgoSeasonId": lastSeasonId,
+                "csgoSeasonId": seasons.previous,
             }
             async with get_session().post(url,headers=header,json=payload) as result:
                 data = await result.json()
@@ -808,11 +812,15 @@ class DataManager:
             await self._insert_detail_info(data["data"], session)
             await asyncio.sleep(0.2)
     
-    async def _update_extra_info(self, steamid: str, session: AsyncSession):
+    async def _update_extra_info(
+        self, steamid: str, session: AsyncSession, *, seasons: SeasonConfig | None = None,
+    ):
+        if seasons is None:
+            seasons = await runtime_config.get_seasons()
         logger.info(f"计算 extra_info for SteamID: {steamid}")
         base_info = await session.get(SteamBaseInfo, steamid)
-        detail_info = await session.get(SteamDetailInfo, (steamid, SeasonId))
-        detail_info_last = await session.get(SteamDetailInfo, (steamid, lastSeasonId))
+        detail_info = await session.get(SteamDetailInfo, (steamid, seasons.current))
+        detail_info_last = await session.get(SteamDetailInfo, (steamid, seasons.previous))
         if base_info is None or detail_info is None or detail_info_last is None:
             return
         ladderHistory = json.loads(base_info.ladderScore)
@@ -886,14 +894,16 @@ class DataManager:
             raise LockingError()
         
         try:
+            # 同一次抓取固定使用一个赛季快照；下次抓取再读取数据库的新值。
+            seasons = await runtime_config.get_seasons()
             try:
                 async with async_session_factory() as session:
                     async with session.begin():
                         logger.info(f"update_stats stage=stats_card steamid={steamid}")
-                        await self._update_stats_card(steamid, session)
+                        await self._update_stats_card(steamid, session, seasons=seasons)
                     async with session.begin():
                         logger.info(f"update_stats stage=extra_info steamid={steamid}")
-                        await self._update_extra_info(steamid, session)
+                        await self._update_extra_info(steamid, session, seasons=seasons)
             except TooFrequentError as e:
                 logger.info(f"update_stats stage=stats_card skipped too frequent steamid={steamid} wait={e.wait_time}s")
             except RuntimeError as e:
@@ -921,7 +931,7 @@ class DataManager:
             async def _work(session: AsyncSession) -> None:
                 nonlocal newLastTime
                 nonlocal addMatchesList
-                for SeasonID in [SeasonId, lastSeasonId]:
+                for SeasonID in [seasons.current, seasons.previous]:
                     logger.info(f"update_stats stage=match_list season={SeasonID} steamid={steamid}")
                     page = 1
                     while True:
@@ -1061,7 +1071,7 @@ async def handle_debug_update_match(args: Message = CommandArg()):
         timestamp = int(argv[1]) if len(argv) >= 2 else int(time.time())
     except ValueError:
         await debug_update_match.finish("timestamp 必须为整数")
-    season = argv[2] if len(argv) >= 3 else SeasonId
+    season = argv[2] if len(argv) >= 3 else await runtime_config.get("cs_season_id")
     async with async_session_factory() as session:
         async with session.begin():
             changed = await db._update_match(mid, timestamp, season, session)

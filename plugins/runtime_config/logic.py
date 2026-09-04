@@ -3,9 +3,18 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import ConfigDict, PositiveInt, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, PositiveInt, TypeAdapter, ValidationError
+
+
+SeasonId = Annotated[str, Field(pattern=r"^S[1-9][0-9]*$", max_length=20)]
+
+
+@dataclass(frozen=True)
+class SeasonConfig:
+    current: str
+    previous: str
 
 
 @dataclass(frozen=True)
@@ -27,6 +36,22 @@ class RuntimeConfigDefinition:
 
 
 DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
+    "cs_season_id": RuntimeConfigDefinition(
+        key="cs_season_id",
+        name="当前赛季",
+        description='当前完美赛季编号，例如 JSON 字符串 "S21"。保存后下一次查询或抓取时生效。',
+        annotation=SeasonId,
+        default="S21",
+        value_type="string",
+    ),
+    "cs_last_season_id": RuntimeConfigDefinition(
+        key="cs_last_season_id",
+        name="上一个赛季",
+        description='上一个完美赛季编号，例如 JSON 字符串 "S20"。保存后下一次查询或抓取时生效。',
+        annotation=SeasonId,
+        default="S20",
+        value_type="string",
+    ),
     "hltv_event_id_list": RuntimeConfigDefinition(
         key="hltv_event_id_list",
         name="监视的比赛",

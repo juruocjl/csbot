@@ -626,7 +626,7 @@ class DataManager:
                     func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
                     func.count(MatchStatsPW.mid)
                 )
-                .where(*get_ladder_filter(steamid, time_type))
+                .where(*await get_ladder_filter(steamid, time_type))
             )
             return (await session.execute(stmt)).one()
 
@@ -657,7 +657,7 @@ class DataManager:
                     func.sum(MatchStatsPW.score1 + MatchStatsPW.score2),
                     func.count(MatchStatsPW.mid)
                 )
-                .where(*get_ladder_filter(steamid, time_type))
+                .where(*await get_ladder_filter(steamid, time_type))
                 .where(MatchStatsPW.mid.in_(subquery))
             )
             return (await session.execute(stmt)).one()

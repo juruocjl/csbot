@@ -13,7 +13,7 @@ require("utils")
 
 from ..models import RuntimeConfig
 from ..utils import async_session_factory
-from .logic import DEFINITIONS, decode_value, encode_value, get_definition
+from .logic import DEFINITIONS, SeasonConfig, decode_value, encode_value, get_definition
 
 
 __plugin_meta__ = PluginMetadata(
@@ -37,6 +37,19 @@ class RuntimeConfigValue:
 
 
 class RuntimeConfigManager:
+    async def get_seasons(self) -> SeasonConfig:
+        """在同一次数据库查询中读取赛季对，供一次业务操作固定使用。"""
+        keys = ("cs_season_id", "cs_last_season_id")
+        async with async_session_factory() as session:
+            result = await session.execute(select(RuntimeConfig).where(RuntimeConfig.key.in_(keys)))
+            stored = {item.key: item.value for item in result.scalars().all()}
+        values = {
+            key: decode_value(get_definition(key), stored[key])
+            if key in stored else get_definition(key).default_value()
+            for key in keys
+        }
+        return SeasonConfig(current=values[keys[0]], previous=values[keys[1]])
+
     async def ensure_defaults(self) -> None:
         async with async_session_factory() as session:
             async with session.begin():
