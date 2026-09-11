@@ -11,6 +11,9 @@ from nonebot import logger
 require("utils")
 from ..utils import async_session_factory, get_session
 
+require("runtime_config")
+from ..runtime_config import runtime_config
+
 require("models")
 from ..models import AIMemory, AIChatRecord, ImgCacheInfo, MatchStatsGP, MatchStatsPW
 
@@ -60,6 +63,7 @@ __plugin_meta__ = PluginMetadata(
 )
 
 config = get_plugin_config(Config)
+runtime_config.register_default("cs_ai_model", config.cs_ai_model)
 
 AI_TOOL_BUDGET = 40
 GROUP_RANKING_RESULT_LIMIT = 10
@@ -143,7 +147,7 @@ def _split_forward_text(text: str, max_chars: int = AI_FORWARD_NODE_MAX_CHARS) -
 
 
 async def _guard_qq_output(client: AsyncOpenAI, draft: str) -> QQOutputGuardResult:
-    guard_model = config.cs_ai_guard_model.strip() or config.cs_ai_model
+    guard_model = config.cs_ai_guard_model.strip() or await runtime_config.get("cs_ai_model")
     last_error: Exception | None = None
     for attempt in range(2):
         try:
@@ -543,7 +547,7 @@ class DataManager:
         )
         prompt = "\n".join(entries)
         response = await client.chat.completions.create(
-            model=config.cs_ai_model,
+            model=await runtime_config.get("cs_ai_model"),
             messages=[
                 {
                     "role": "system",
@@ -1148,9 +1152,8 @@ aiasktmr = on_command("aitmr", priority=10, block=True)
 aimem = on_command("ai记忆", priority=10, block=True)
 
 
-model_name = config.cs_ai_model
-
 async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_id: str | None) -> str:
+    model_name: str = await runtime_config.get("cs_ai_model")
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
     client = AsyncOpenAI(
@@ -2065,6 +2068,7 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
             MessageSegment.at(uid) + " 请输入要加入记忆的内容。"
         )
     try:
+        model_name: str = await runtime_config.get("cs_ai_model")
         # 创建聊天完成请求
         client = AsyncOpenAI(
             api_key=config.cs_ai_api_key,

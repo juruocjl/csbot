@@ -100,6 +100,8 @@ class SeasonRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):
             for model in (RuntimeConfig, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW):
                 await connection.run_sync(model.__table__.create)
         self.manager = settings.RuntimeConfigManager()
+        self.manager.register_default("cs_ai_model", "environment-model")
+        self.manager.register_default("cs_time_locations", {"测试地点": "Etc/UTC"})
         await self.manager.ensure_defaults()
         await self.manager.set("cs_season_id", "S41", "admin")
         await self.manager.set("cs_last_season_id", "S40", "admin")
@@ -114,6 +116,8 @@ class SeasonRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):
         items = {item.key: item.value for item in await self.manager.list_values()}
         self.assertEqual(items["cs_season_id"], "S41")
         self.assertEqual(items["cs_last_season_id"], "S40")
+        self.assertEqual(items["cs_ai_model"], "environment-model")
+        self.assertEqual(items["cs_time_locations"], {"测试地点": "Etc/UTC"})
 
     async def test_runtime_changes_refresh_filters_and_default_detail_season(self):
         async with self.sessions.begin() as session:
@@ -149,6 +153,28 @@ class SeasonRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.manager.set("cs_season_id", "invalid", "admin")
         self.assertEqual(await self.manager.get("cs_season_id"), "S41")
+
+    async def test_model_and_time_locations_update_without_reseeding(self):
+        self.assertEqual(await self.manager.get("cs_ai_model"), "environment-model")
+        self.assertEqual(
+            await self.manager.get("cs_time_locations"),
+            {"测试地点": "Etc/UTC"},
+        )
+
+        await self.manager.set("cs_ai_model", "hot-model", "admin")
+        await self.manager.set(
+            "cs_time_locations",
+            {"北京": "Asia/Shanghai", "纽约": "America/New_York"},
+            "admin",
+        )
+        self.manager.register_default("cs_ai_model", "changed-environment-model")
+        await self.manager.ensure_defaults()
+
+        self.assertEqual(await self.manager.get("cs_ai_model"), "hot-model")
+        self.assertEqual(
+            await self.manager.get("cs_time_locations"),
+            {"北京": "Asia/Shanghai", "纽约": "America/New_York"},
+        )
 
     async def test_watch_stage_snapshot_does_not_reuse_previous_season_profile(self):
         code = load_watch_stage_code(self.sessions, self.manager)

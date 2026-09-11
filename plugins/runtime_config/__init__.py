@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,6 +38,20 @@ class RuntimeConfigValue:
 
 
 class RuntimeConfigManager:
+    def __init__(self) -> None:
+        self._default_overrides: dict[str, Any] = {}
+
+    def register_default(self, key: str, value: Any) -> None:
+        """Use an existing startup setting only when the database row is first created."""
+        definition = get_definition(key)
+        validated, _ = encode_value(definition, value)
+        self._default_overrides[key] = deepcopy(validated)
+
+    def _default_value(self, key: str) -> Any:
+        if key in self._default_overrides:
+            return deepcopy(self._default_overrides[key])
+        return get_definition(key).default_value()
+
     async def get_seasons(self) -> SeasonConfig:
         """在同一次数据库查询中读取赛季对，供一次业务操作固定使用。"""
         keys = ("cs_season_id", "cs_last_season_id")
@@ -45,7 +60,7 @@ class RuntimeConfigManager:
             stored = {item.key: item.value for item in result.scalars().all()}
         values = {
             key: decode_value(get_definition(key), stored[key])
-            if key in stored else get_definition(key).default_value()
+            if key in stored else self._default_value(key)
             for key in keys
         }
         return SeasonConfig(current=values[keys[0]], previous=values[keys[1]])
@@ -57,7 +72,7 @@ class RuntimeConfigManager:
                     item = await session.get(RuntimeConfig, definition.key)
                     if item is not None:
                         continue
-                    _, encoded = encode_value(definition, definition.default_value())
+                    _, encoded = encode_value(definition, self._default_value(definition.key))
                     session.add(
                         RuntimeConfig(
                             key=definition.key,
@@ -73,7 +88,7 @@ class RuntimeConfigManager:
             item = await session.get(RuntimeConfig, key)
         if item is None:
             logger.warning(f"热配置项 {key} 尚未写入数据库，使用注册默认值")
-            return definition.default_value()
+            return self._default_value(key)
         return decode_value(definition, item.value)
 
     async def list_values(self) -> list[RuntimeConfigValue]:
@@ -96,9 +111,9 @@ class RuntimeConfigManager:
                     value=(
                         decode_value(definition, item.value)
                         if item is not None
-                        else definition.default_value()
+                        else self._default_value(definition.key)
                     ),
-                    default_value=definition.default_value(),
+                    default_value=self._default_value(definition.key),
                     updated_at=item.updated_at if item is not None and item.updated_at else None,
                     updated_by=item.updated_by if item is not None else None,
                 )
@@ -126,7 +141,7 @@ class RuntimeConfigManager:
             value_type=definition.value_type,
             editor=definition.editor,
             value=validated,
-            default_value=definition.default_value(),
+            default_value=self._default_value(definition.key),
             updated_at=updated_at,
             updated_by=updated_by,
         )

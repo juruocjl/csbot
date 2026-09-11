@@ -5,10 +5,14 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from pydantic import ConfigDict, Field, PositiveInt, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, PositiveInt, StringConstraints, TypeAdapter, ValidationError
 
 
 SeasonId = Annotated[str, Field(pattern=r"^S[1-9][0-9]*$", max_length=20)]
+AIModelName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+TimeLocationName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+TimeZoneName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+TimeLocations = Annotated[dict[TimeLocationName, TimeZoneName], Field(max_length=50)]
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,30 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
         annotation=list[PositiveInt],
         default=[],
         value_type="integer_list",
+    ),
+    "cs_time_locations": RuntimeConfigDefinition(
+        key="cs_time_locations",
+        name="时间地点与时区",
+        description=(
+            "“/时间”命令显示的地点与 IANA 时区映射，例如 "
+            '{"中国（北京）":"Asia/Shanghai"}。保存后下一次命令生效。'
+        ),
+        annotation=TimeLocations,
+        default={
+            "中国（北京）": "Asia/Shanghai",
+            "美国东部（纽约）": "America/New_York",
+            "美国中部（芝加哥）": "America/Chicago",
+            "美国西部（洛杉矶）": "America/Los_Angeles",
+        },
+        value_type="string_map",
+    ),
+    "cs_ai_model": RuntimeConfigDefinition(
+        key="cs_ai_model",
+        name="AI 模型",
+        description="AI 对话、记忆整理和自动摘要使用的主模型。保存后下一次 AI 请求生效。",
+        annotation=AIModelName,
+        default="deepseek-v4-flash-vision-exp",
+        value_type="string",
     ),
 }
 

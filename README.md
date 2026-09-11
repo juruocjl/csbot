@@ -9,15 +9,17 @@
 
 Administrators (`SUPERUSERS`) can edit database-backed configuration at `/admin/config`.
 The registered keys include `hltv_event_id_list`, `cs_season_id` (current season),
-and `cs_last_season_id` (previous season). Season values are JSON strings such as
-`"S21"` and `"S20"`; these are the initial defaults from the example configuration,
-not automatically detected seasons. Set the appropriate values in the admin page.
-The old season environment variables are no longer read.
+`cs_last_season_id` (previous season), `cs_time_locations`, and `cs_ai_model`.
+Season values are JSON strings such as `"S21"` and `"S20"`; these are the initial
+defaults from the example configuration, not automatically detected seasons. Set
+the appropriate values in the admin page. The old season environment variables are
+no longer read. The model and time-location environment values seed their database
+rows on first startup; later changes are made through the admin page.
 
 Startup inserts missing configuration rows without overwriting saved values; adding
-these two keys does not require a schema migration. Subsequent queries and refresh
-jobs read the database. An already-running player refresh retains its season pair
-until it finishes, so one refresh cannot mix different configurations.
+registered keys does not require a schema migration. Subsequent queries and refresh
+jobs read the database. An already-running player refresh or AI request retains its
+configuration snapshot until it finishes, so one operation cannot mix values.
 
 ## Deploy
 

@@ -9,6 +9,11 @@ from nonebot.adapters.onebot.v11 import Bot, Message
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 
+from nonebot import require
+
+require("runtime_config")
+from ..runtime_config import runtime_config
+
 from .config import Config
 from .logic import UnknownLocationError, format_location_time, select_locations
 
@@ -21,6 +26,7 @@ __plugin_meta__ = PluginMetadata(
 )
 
 config = get_plugin_config(Config)
+runtime_config.register_default("cs_time_locations", config.cs_time_locations)
 
 time_location = on_command(
     "时间",
@@ -66,7 +72,7 @@ async def _send_temporary(bot: Bot, message: str) -> None:
 @time_location.handle()
 async def show_time(bot: Bot, args: Message = CommandArg()) -> None:
     query = args.extract_plain_text().strip()
-    locations = config.cs_time_locations
+    locations: dict[str, str] = await runtime_config.get("cs_time_locations")
     if not locations:
         await _send_temporary(bot, "尚未配置可查询的地点。")
         return

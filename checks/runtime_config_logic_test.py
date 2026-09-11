@@ -55,6 +55,37 @@ class RuntimeConfigLogicTest(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         LOGIC.encode_value(definition, value)
 
+    def test_ai_model_round_trip_strips_outer_whitespace(self) -> None:
+        definition = LOGIC.get_definition("cs_ai_model")
+        value, encoded = LOGIC.encode_value(definition, "  model-v2  ")
+
+        self.assertEqual(value, "model-v2")
+        self.assertEqual(encoded, '"model-v2"')
+        self.assertEqual(LOGIC.decode_value(definition, encoded), "model-v2")
+
+    def test_empty_ai_model_is_rejected(self) -> None:
+        definition = LOGIC.get_definition("cs_ai_model")
+        for value in ("", "   ", 123, None, ["model"]):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    LOGIC.encode_value(definition, value)
+
+    def test_time_locations_round_trip(self) -> None:
+        definition = LOGIC.get_definition("cs_time_locations")
+        locations = {" 北京 ": " Asia/Shanghai ", "纽约": "America/New_York"}
+
+        value, encoded = LOGIC.encode_value(definition, locations)
+
+        self.assertEqual(value, {"北京": "Asia/Shanghai", "纽约": "America/New_York"})
+        self.assertEqual(LOGIC.decode_value(definition, encoded), value)
+
+    def test_invalid_time_locations_are_rejected(self) -> None:
+        definition = LOGIC.get_definition("cs_time_locations")
+        for value in ({"北京": 8}, {"": "Asia/Shanghai"}, [], "Asia/Shanghai"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    LOGIC.encode_value(definition, value)
+
 
 if __name__ == "__main__":
     unittest.main()
