@@ -13,6 +13,8 @@ AIModelName = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 TimeLocationName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 TimeZoneName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 TimeLocations = Annotated[dict[TimeLocationName, TimeZoneName], Field(max_length=50)]
+LiveWatchId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+LiveWatchList = Annotated[list[LiveWatchId], Field(max_length=200)]
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,17 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
         annotation=AIModelName,
         default="deepseek-v4-flash-vision-exp",
         value_type="string",
+    ),
+    "live_watch_list": RuntimeConfigDefinition(
+        key="live_watch_list",
+        name="直播监视列表",
+        description=(
+            "定时检查的直播间 ID 列表，当前支持 dy_房间号 和 bili_房间号。"
+            "保存后下一轮监视任务生效；设为空数组可暂停监视。"
+        ),
+        annotation=LiveWatchList,
+        default=[],
+        value_type="string_list",
     ),
 }
 

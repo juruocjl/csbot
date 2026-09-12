@@ -15,6 +15,9 @@ require("utils")
 from ..utils import async_session_factory
 from ..utils import get_session
 
+require("runtime_config")
+from ..runtime_config import runtime_config
+
 require("models")
 from ..models import LiveStatus
 
@@ -28,6 +31,7 @@ __plugin_meta__ = PluginMetadata(
 )
 
 config = get_plugin_config(Config)
+runtime_config.register_default("live_watch_list", config.live_watch_list)
 
 
 class DataManager:
@@ -83,7 +87,8 @@ now_live_state = "无数据"
 async def live_watcher():
     bot = get_bot()
     new_live_state = ""
-    for liveid in config.live_watch_list:
+    live_watch_list: list[str] = await runtime_config.get("live_watch_list")
+    for liveid in live_watch_list:
         try:
             live_status = await get_live_status(liveid)
         except asyncio.CancelledError:

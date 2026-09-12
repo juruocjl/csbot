@@ -86,6 +86,23 @@ class RuntimeConfigLogicTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     LOGIC.encode_value(definition, value)
 
+    def test_live_watch_list_round_trip(self) -> None:
+        definition = LOGIC.get_definition("live_watch_list")
+        value, encoded = LOGIC.encode_value(
+            definition,
+            [" dy_6657 ", "bili_1883358196"],
+        )
+
+        self.assertEqual(value, ["dy_6657", "bili_1883358196"])
+        self.assertEqual(LOGIC.decode_value(definition, encoded), value)
+
+    def test_invalid_live_watch_list_is_rejected(self) -> None:
+        definition = LOGIC.get_definition("live_watch_list")
+        for value in ([""], [123], {}, "dy_6657"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    LOGIC.encode_value(definition, value)
+
 
 if __name__ == "__main__":
     unittest.main()

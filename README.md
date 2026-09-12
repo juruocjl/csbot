@@ -10,11 +10,12 @@
 Administrators (`SUPERUSERS`) can edit database-backed configuration at `/admin/config`.
 The registered keys include `hltv_event_id_list`, `cs_season_id` (current season),
 `cs_last_season_id` (previous season), `cs_time_locations`, and `cs_ai_model`.
+The live-stream monitor list is available as `live_watch_list`.
 Season values are JSON strings such as `"S21"` and `"S20"`; these are the initial
 defaults from the example configuration, not automatically detected seasons. Set
 the appropriate values in the admin page. The old season environment variables are
-no longer read. The model and time-location environment values seed their database
-rows on first startup; later changes are made through the admin page.
+no longer read. The model, time-location, and live-monitor environment values seed
+their database rows on first startup; later changes are made through the admin page.
 
 Startup inserts missing configuration rows without overwriting saved values; adding
 registered keys does not require a schema migration. Subsequent queries and refresh
