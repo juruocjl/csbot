@@ -101,6 +101,19 @@ class StateStore:
         rows = self.rows("SELECT * FROM runs WHERE id=?", (key,))
         return rows[0] if rows else None
 
+    def conversations(self, gid: str, uid: str, before: int | None = None):
+        if not gid or not uid:
+            raise ValueError('group and user identity required')
+        if before is not None and (type(before) is not int or not 0 < before < 2**63):
+            raise ValueError('invalid list cursor')
+        rows = self.rows("""SELECT rowid AS cursor,id,substr(request,1,300) AS request,status,channel,created_at
+            FROM runs WHERE group_id=? AND (channel IN ('qq','report') OR (channel='web' AND user_id=?))
+            AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT 31""", (gid, uid, before, before))
+        page = rows[:30]
+        cursor = page[-1]['cursor'] if len(rows)>30 else None
+        for row in page: row.pop('cursor')
+        return {'records': page, 'nextCursor': cursor}
+
     def can_read(self, key: str, gid: str, uid: str) -> bool:
         row = self.get_run(key)
         return bool(row and row["group_id"] == gid and (row["channel"] != "web" or row["user_id"] == uid))

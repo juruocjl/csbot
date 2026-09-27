@@ -3177,6 +3177,17 @@ class AIAskResponse(BaseModel):
     chatId: str = Field(..., description="AI chat id")
 
 
+@app.post("/api/ai/conversations", summary="有权限查看的AI对话列表")
+async def ai_conversations(before: int | None=Body(None,embed=True),info: AuthSession=Depends(get_current_user)):
+    from ai_runtime.store import state_store
+    if not info.user_id or not info.group_id:
+        raise HTTPException(status_code=401, detail="未绑定 QQ 或群")
+    try:
+        return state_store().conversations(info.group_id,info.user_id,before)
+    except ValueError:
+        raise HTTPException(status_code=400,detail="无效的列表游标") from None
+
+
 @app.post("/api/ai/history",summary="个人会话最近对话")
 async def personal_ai_history(conversation: str=Body("default",embed=True),info: AuthSession=Depends(get_current_user)):
     from ai_runtime.runner import scope_key
