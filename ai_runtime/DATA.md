@@ -88,3 +88,36 @@ print(csdata.image("消息里[image:...]的ID"))
 需要把图实际交给用户时，使用 `csdata.artifact("chart.png", send=True, caption="每月胜率")`。只有成功执行脚本、验证通过的 PNG/JPEG 才会提交，每轮最多 4 张。QQ 会随本轮回复实际发送并归档，网页显示有权限的图片；不要只回复本地文件路径或声称尚未提交的图已发出。普通 `artifact()` 只导出供检查，不会自动发送。
 
 生成图的原图与群聊原图共享 1 GiB LRU 预算，缩略图保留；网页个人图存于私有目录，不能通过公开静态图片地址访问。原图被淘汰时页面明确提示并展示缩略图，不能假装高清图仍存在。
+
+## 群友、头像、复读点数与管理员
+
+这些是群功能，不需要先绑定 Steam。常用查询仍走 `csdata.call()`，`catalog()['group_calls']` 列出实时调用的参数；不增加模型工具。所有群号由服务端身份决定，不能传入其他群号；只有查资料，没有禁言、设管理员、改名或加点的操作。
+
+```python
+import csdata
+print(csdata.call('group_members', search='昵称片段', limit=20))
+print(csdata.call('member_info', uid='这里填明确的QQ号'))
+print(csdata.call('member_avatar', uid='这里填明确的QQ号'))
+print(csdata.call('group_admins'))
+print(csdata.call('election_rules'))
+print(csdata.call('points_today', uid='这里填明确的QQ号'))
+print(csdata.call('points_today', day=1))
+print(csdata.call('point_history', uid='这里填明确的QQ号', since=0, limit=50))
+```
+
+- `group_members(search='',offset=0,limit=50)` 返回当前群成员，搜索 QQ/QQ昵称/群名片，`limit` 最大100；`total/truncated` 提示继续分页。昵称重复时不要任意挑人。`member_info(uid)` 返回 `member.uid/nickname/card/role/avatar_url`；称呼优先群名片，再昵称。每轮第一次查询重新从 OneBot 拉成员列表，其余调用复用本轮快照；`fetched_at` 是快照时间，不是改名时间。QQ连接失败时明确报错；不能拿数据库旧昵称说成当前昵称。
+- `member_avatar(uid)` 先验证目标属于本群，再从固定 QQ 头像地址取不超过2MiB、400万像素的图片。返回 `full_status/full_path/thumbnail_path`，继续用 `read_image` 看实际图像；**仅拿到地址不等于看过**。头像也进入原图1GiB LRU与永久缩略图链路，并在本轮受限只读授权中注册；不自动向群发送头像。获取失败如实说明，不猜图像内容。此处指QQ头像，不是Steam头像。
+- `group_admins()` 的 `qq_roles` 是QQ实际群主(owner)/管理员(admin)，`roles_complete=false` 表示部分角色未知；`election_state` 是机器人竞选记录。两者不同可以是手动任免、调用失败或旧记录，应说明差异，不能混称。`election_state` 模板/逻辑表仅开放三个本群键：selected_uid（最后记录的竞选管理员，可能已下放）、active（字符串1才表示记录在位）、transfer_excluded_uids（JSON转让排除名单）；缺失不代表QQ没有管理员。
+- `election_rules()` 返回当前部署规则和本群启用状态。每日23:55按权重随机抽取，权重不是单纯点数，不能把点数榜当当选概率。候选要求当天发言、绑定Steam，排除上位记录及转让排除名单；具体时间口径见返回的 windows。概率公式中的惩罚次数是触发次数，禁言未启用时仍可能增加。
+- `points_today(uid可省略,day=0)` 使用与复读功能相同的服务器本地时区23:55业务日，返回明确 `window_start/window_end`。day=1为上一业务日，最大365。指定uid先确认当前群成员，无流水返回0；不传uid按常规点、奖励点排序，只列该业务日有流水者（可能含已退群者），不是完整成员榜。结果有截断时不能当作全群统计。
+- 常规点 `regular_points`、奖励点 `reward_points`、惩罚触发次数 `punishment_triggers` 分开。奖励点参与竞选、不参与禁言/下放概率。下次触发的禁言分钟数是当业务日触发次数+1，但还取决于本群是否开启禁言。
+
+自写SQL可查逻辑表：
+
+| 表 | 字段与语义 |
+| --- | --- |
+| `group_people` | uid、nickname、updated_at；数据库成员与缓存QQ昵称，不是实时群名片。未绑定Steam也可出现；数据库成员表可能过期。 |
+| `points` | id、uid（纯QQ）、timestamp、point、point_type；服务端从完整 group_群号_QQ 会话键精确限定本群，0常规/1奖励；常规point=0是惩罚触发事件。 |
+| `election_state` | key、value；仅上文3个本群状态键，不能读取完整local_storage。 |
+
+例如指定区间累计：`csdata.query('SELECT uid,SUM(point) AS total FROM points WHERE point_type=1 AND timestamp>=:start AND timestamp<:end GROUP BY uid', {'start': 起始Unix秒, 'end': 结束Unix秒})`。SQL与模板同样按群隔离。当前昵称、点数、管理员和规则均可能变化，重新查询后回答，不作为永不过期的长期事实写入Mneme。

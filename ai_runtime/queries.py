@@ -1,6 +1,6 @@
 """Public query surface. SQL definitions are trusted; all caller SQL is compiled.
 
-No auth/config/user_info/raw message blobs are exposed. Group identity is supplied
+No auth/secrets/raw message blobs are exposed; user_info is limited to scoped names. Group identity is supplied
 by the authenticated invocation, never by the model or a script.
 """
 from dataclasses import dataclass
@@ -22,6 +22,12 @@ class Table:
 MEMBERS = "SELECT uid FROM public.group_members WHERE gid = :__group"
 STEAMIDS = f"SELECT steamid FROM public.members_steamid WHERE uid IN ({MEMBERS})"
 TABLES = {
+    "group_people": Table(f"SELECT g.uid,u.nickname,u.last_update_time AS updated_at FROM public.group_members g LEFT JOIN public.user_info u ON u.user_id=g.uid WHERE g.gid=:__group",
+                          "本群数据库成员及缓存 QQ 昵称（不是群名片，可能过期）；实时成员/名片/角色用 group_members/member_info。"),
+    "points": Table("SELECT id,split_part(uid,'_',3) AS uid,\"timeStamp\" AS timestamp,point,\"pointType\" AS point_type FROM public.fudu_points WHERE uid ~ ('^group_' || :__group || '_[0-9]+$')",
+                    "本群复读点数流水：point_type=0 常规、1 奖励；常规 point=0 是惩罚触发记录，不保证实际执行了禁言。业务日23:55切换，默认汇总用 points_today。"),
+    "election_state": Table("SELECT CASE key WHEN 'adminqq'||:__group THEN 'selected_uid' WHEN 'adminqqalive'||:__group THEN 'active' WHEN 'admin_transfer_banned'||:__group THEN 'transfer_excluded_uids' END AS key,val AS value FROM public.local_storage WHERE key IN ('adminqq'||:__group,'adminqqalive'||:__group,'admin_transfer_banned'||:__group)",
+                           "仅本群竞选3个状态键；不是QQ实时权限。active=1也须 group_admins 核验。不可访问其他local_storage配置。"),
     "settings": Table("SELECT key,value FROM public.runtime_config WHERE key IN ('cs_season_id','cs_last_season_id','cs_time_locations')",
                       "已保存的赛季与时间地点配置；value 是 JSON 文本，脚本用 json.loads 解码。不能用旧环境变量推断当前赛季。"),
     "profiles": Table(f'SELECT steamid,name,"updateTime" AS updated_at,"updateMatchTime" AS matches_updated_at FROM public.steamid_baseinfo_v2 WHERE steamid IN ({STEAMIDS})',
@@ -43,6 +49,9 @@ TABLES = {
 }
 
 TEMPLATES = {
+    "group_people": ("main", "SELECT * FROM group_people ORDER BY uid", {}, "本群缓存QQ昵称，包括未绑定Steam的成员；实时资料用member_info"),
+    "election_state": ("main", "SELECT * FROM election_state ORDER BY key", {}, "机器人竞选的持久状态；QQ实际管理员用group_admins"),
+    "point_history": ("main", "SELECT * FROM points WHERE uid=:uid AND timestamp>=:since ORDER BY timestamp DESC,id DESC LIMIT :limit", {"since":0,"limit":50}, "指定QQ的本群复读点数流水"),
     "settings": ("main", "SELECT * FROM settings", {}, "当前已保存的赛季和时区配置"),
     "profiles": ("main", "SELECT m.uid,p.* FROM members m LEFT JOIN profiles p ON m.steamid=p.steamid ORDER BY m.uid", {}, "本群 QQ/SteamID/昵称与数据新鲜度"),
     "members": ("main", "SELECT * FROM members ORDER BY uid", {}, "本群 QQ 与 SteamID 绑定"),

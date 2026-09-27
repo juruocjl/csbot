@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from .context import catch_up,fetch_block
 from .data import DataBroker
+from .group import GroupKnowledge, CALLS as GROUP_CALLS
 from .media import media_cache
 from .runner import run_dsh,scope_key
 from .store import state_store
@@ -77,10 +78,22 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
         try:
             await archive(chat_id,"user",prompt,None,None,False)
             broker=DataBroker(factory,gid,Path(os.environ["CS_AI_GAME_DB"]) if os.getenv("CS_AI_GAME_DB") else None)
+            group=GroupKnowledge(broker,cache=media_cache())
             with ExitStack() as leases:
                 pinned=set()
+                def pin_image(image):
+                    digest=image['image_id']
+                    if image['full_path'] and digest not in pinned:
+                        if len(pinned)>=8: raise ValueError('image budget exhausted (8 per turn)')
+                        leases.enter_context(media_cache().lease(digest)); pinned.add(digest)
+                    return image
                 async def dispatch(request):
                     method=request.get("method")
+                    if method=='catalog':
+                        return (await broker.dispatch(request)) | {'group_calls': GROUP_CALLS}
+                    if method=='call' and request.get('name') in GROUP_CALLS:
+                        result=await group.call(request['name'],request.get('params',{}))
+                        return pin_image(result) if request['name']=='member_avatar' else result
                     if method=="search":
                         allowed={"users","time_start","time_end","strict_time_end","limit"}
                         filters=request.get("filters",{})
@@ -89,11 +102,7 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     if method=="block": return await fetch_block(factory,store,gid,request["id"])
                     if method=="image":
                         image=await authorized_image(factory,gid,request["id"])
-                        digest=image["image_id"]
-                        if image["full_path"] and digest not in pinned:
-                            if len(pinned)>=8: raise ValueError("image budget exhausted (8 per turn)")
-                            leases.enter_context(media_cache().lease(digest)); pinned.add(digest)
-                        return image
+                        return pin_image(image)
                     return await broker.dispatch(request)
                 if channel=="qq":
                     context,cutoff=await catch_up(factory,store,gid,scope)
