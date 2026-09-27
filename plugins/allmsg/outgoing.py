@@ -18,6 +18,7 @@ from nonebot.adapters.onebot.v11 import Bot, Message, MessageSegment
 from nonebot.adapters.onebot.v11.exception import ActionFailed
 
 from ai_runtime.store import state_store
+from ai_runtime.image_archive import MARKER, validate_metadata
 
 current_run = contextvars.ContextVar("csbot_outgoing_run", default=None)
 _installed = False
@@ -30,6 +31,9 @@ def freeze_message(value) -> list:
     for raw in message:
         kind = raw.type if hasattr(raw, "type") else raw["type"]
         data = dict(raw.data if hasattr(raw, "data") else raw["data"])
+        if kind == "image" and MARKER in data:
+            frozen.append({"type": "image_meta", "data": validate_metadata(data[MARKER])})
+            continue
         if kind in {"image", "record", "video"}:
             file = data.get("file")
             if isinstance(file, Path):
@@ -50,6 +54,22 @@ def freeze_message(value) -> list:
     if len(json.dumps(frozen).encode())>48*1024**2:
         raise ValueError("outgoing message exceeds archive byte limit")
     return frozen
+
+
+def wire_message(value):
+    """Keep private archive descriptors out of platform requests, including nodes."""
+    if isinstance(value, str):
+        return value
+    message = Message(value) if isinstance(value, MessageSegment) else value
+    result = []
+    for raw in message:
+        kind = raw.type if hasattr(raw, 'type') else raw['type']
+        data = dict(raw.data if hasattr(raw, 'data') else raw['data'])
+        data.pop(MARKER, None)
+        if kind == 'node' and 'content' in data:
+            data['content'] = wire_message(data['content'])
+        result.append({'type': kind, 'data': data})
+    return result
 
 
 def searchable_message(payload: list) -> Message:
@@ -108,6 +128,9 @@ def install():
         payload = freeze_message(raw)
         store = state_store()
         key = store.stage(str(self.self_id), str(gid), api, payload, current_run.get())
+        data = dict(data)
+        field = 'messages' if 'messages' in data else 'message'
+        data[field] = wire_message(data.get(field, []))
         try:
             result = await original(self, api, **data)
         except Exception as exc:

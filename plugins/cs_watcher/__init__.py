@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_plugin_config
 from nonebot import require
 from nonebot import on_command
@@ -118,15 +119,15 @@ async def sendMatches(pwlist, gplist, faceitlist):
             for mid in pwlist:
                 screenshot = await get_screenshot(f"/match?id={mid}", token)
                 if screenshot:
-                    await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
+                    await bot.send_group_msg(group_id=gid, message=Message(image_segment(screenshot)))
             for mid in gplist:
                 screenshot = await get_screenshot(f"/match-gp?id={mid}", token)
                 if screenshot:
-                    await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
+                    await bot.send_group_msg(group_id=gid, message=Message(image_segment(screenshot)))
             for mid in faceitlist:
                 screenshot = await get_screenshot(f"/match-faceit?id={mid}", token)
                 if screenshot:
-                    await bot.send_group_msg(group_id=gid, message=Message(MessageSegment.image(screenshot)))
+                    await bot.send_group_msg(group_id=gid, message=Message(image_segment(screenshot)))
     else:
         logger.error("无法获取 Bot 实例，无法发送比赛通知")
         

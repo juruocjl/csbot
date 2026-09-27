@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_driver, get_plugin_config
 from nonebot import get_app, get_bot
 from nonebot import on_command
@@ -345,7 +346,12 @@ async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | Non
         }""")
         
         # 截图
-        screenshot = await page.screenshot({'fullPage': True})
+        from ai_runtime.image_archive import capture_page_image, page_source
+        source = page_source(path)
+        if source is not None:
+            screenshot = await capture_page_image(page, {'fullPage': True}, title='群内分享 '+source['page'], source=source, selector='.content')
+        else:
+            screenshot = await page.screenshot({'fullPage': True})
             
     finally:
         # 确保浏览器被关闭
@@ -1579,7 +1585,7 @@ async def handle_steam_status(event: GroupMessageEvent):
     token = await db.get_bot_token(str(event.group_id))
     screenshot = await get_screenshot("/steam-status", token, width=600)
     if screenshot:
-        await steam_status_cmd.finish(MessageSegment.image(screenshot))
+        await steam_status_cmd.finish(image_segment(screenshot))
     await steam_status_cmd.finish("生成 Steam 状态图片失败，请稍后再试")
 
 class MuteRequest(BaseModel):
@@ -1659,7 +1665,7 @@ async def send_page_image(path: str = Body(..., embed=True), info: AuthSession =
         # 发送消息
         await bot.send_group_msg(
             group_id=int(info.group_id),
-            message=Message(MessageSegment.image(screenshot))
+            message=Message(image_segment(screenshot))
         )
         
         await bot.send_group_msg(

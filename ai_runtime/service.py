@@ -54,11 +54,17 @@ async def authorized_image(factory,gid,image_id):
             WHERE m.group_id=:gid AND m.has_image=true AND m.plain_text LIKE :pattern LIMIT 50'''),
             {"gid":gid,"pattern":f"%[image:{short}]%"})
         hashes=set()
+        metadata={}
         for blob in result.scalars():
             for segment in msgpack.unpackb(blob,raw=False):
                 if segment[0]=="imagev2" and str(segment[1]).startswith(value): hashes.add(str(segment[1]))
-    if len(hashes)!=1:
+                if segment[0]=="image_meta" and str(segment[1].get('image_id','')).startswith(value):
+                    metadata[segment[1]['image_id']]=segment[1]
+    if len(hashes)+len(metadata)!=1:
         raise ValueError("image not found or identifier ambiguous in this group")
+    if metadata:
+        from .image_archive import resource_info
+        return await asyncio.to_thread(resource_info,next(iter(metadata.values())))
     return media_cache().info(hashes.pop())
 
 
@@ -85,7 +91,9 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     digest=image['image_id']
                     if image['full_path'] and digest not in pinned:
                         if len(pinned)>=8: raise ValueError('image budget exhausted (8 per turn)')
-                        leases.enter_context(media_cache().lease(digest)); pinned.add(digest)
+                        if image.get('storage') != 'resource':
+                            leases.enter_context(media_cache().lease(digest))
+                        pinned.add(digest)
                     return image
                 async def dispatch(request):
                     method=request.get("method")

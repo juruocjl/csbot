@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, GroupMessageEvent, MessageSegment
@@ -369,7 +370,7 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     gid = message.get_session_id().split('_')[1]
     screenshot = await _get_major_rank_screenshot(gid)
     if screenshot:
-        await hwrank.finish(MessageSegment.image(screenshot))
+        await hwrank.finish(image_segment(screenshot))
 
     res = await db.get_all_hw(major_stage_name)
     res = sorted(res, key=lambda x: x.winrate, reverse=True)
@@ -393,7 +394,7 @@ async def hwdetail_function(bot: Bot, message: GroupMessageEvent):
 
     screenshot = await _get_major_detail_screenshot(gid, uid)
     if screenshot:
-        await hwdetail.finish(MessageSegment.image(screenshot))
+        await hwdetail.finish(image_segment(screenshot))
     await hwdetail.finish("生成作业详情截图失败，请稍后重试")
 
 @hwupd.handle()
@@ -460,7 +461,7 @@ async def _send_major_rank_groups(bot: Bot, title: str):
             await bot.send_msg(
                 message_type="group",
                 group_id=groupid,
-                message=Message([MessageSegment.text(title + "\n"), MessageSegment.image(screenshot)]),
+                message=Message([MessageSegment.text(title + "\n"), image_segment(screenshot)]),
             )
         else:
             await bot.send_msg(

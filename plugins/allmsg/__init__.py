@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, GroupMessageEvent, MessageSegment
@@ -234,6 +235,11 @@ async def get_image(file: str, url: str) -> bytes:
         return bytes(content)
 
 async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: Message, *, strict_index: bool = False) -> str:
+    # A platform echo must not re-download images already archived semantically.
+    existing = await db.get_id_by_mid(mid, sid.split('_')[1])
+    if existing > 0:
+        await chat_history_db.index_group_message(existing)
+        return hashlib.sha256(str(existing).encode()).hexdigest()
     msglist = []
     mhs: str | None = None
     for seg in message:
@@ -246,6 +252,9 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
             msglist.append(["at", seg.data["qq"]])
         elif seg.type == "face":
             msglist.append(["face", seg.data["id"]])
+        elif seg.type == "image_meta" and strict_index:
+            from ai_runtime.image_archive import validate_metadata
+            msglist.append(["image_meta", validate_metadata(seg.data)])
         elif seg.type == "image":
             # print(seg.data)
             try:
@@ -298,6 +307,12 @@ myallmsg = MyDecorator()
 async def allmsg_function(bot: Bot, message: GroupMessageEvent) -> None:
     assert(message.get_session_id().startswith("group"))
     is_bot = message.get_user_id() == str(bot.self_id)
+    if is_bot:
+        # The durable send wrapper is authoritative even if echo beats send ACK.
+        # Draining retries indexing only; it never resends a platform message.
+        from .outgoing import drain
+        await drain(bot)
+        return
     if not is_bot:
         await db.touch_group_member(str(message.group_id), message.get_user_id())
     mhs = await insert_message(
@@ -372,7 +387,11 @@ async def talk_trend_function(event: GroupMessageEvent, args: Message = CommandA
     finally:
         plt.close(fig)
 
-    await talk_trend.finish(MessageSegment.image(image))
+    from ai_runtime.image_archive import snapshot_image
+    image = snapshot_image(image, '最近30天发言统计', {'series': [
+        {'qq': uid, 'nickname': display_names[uid], 'daily_counts': [[day.isoformat(), count] for day, count in history]}
+        for uid, history in uid_histories]})
+    await talk_trend.finish(image_segment(image))
 
 @report.handle()
 async def report_function(bot: Bot, message: GroupMessageEvent) -> None:

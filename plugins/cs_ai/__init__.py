@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment, GroupMessageEvent
@@ -1111,7 +1112,7 @@ async def ai_ask2(
         for image in generated:
             try:
                 with media_cache().lease(image['digest']) as image_path:
-                    ai_message+=MessageSegment.image(image_path.read_bytes())
+                    ai_message+=image_segment(image_path.read_bytes())
             except FileNotFoundError:
                 ai_message+='\n生成的原图已淘汰，未发送低清替代图；可让我重新生成。'
 

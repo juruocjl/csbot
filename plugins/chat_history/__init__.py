@@ -381,6 +381,15 @@ def parse_message_segments(segments: Iterable[Any]) -> ParsedMessage:
                     reply_to_mid = int(raw_seg[2])
                 except Exception:
                     reply_to_mid = None
+        elif seg_type == "image_meta" and len(raw_seg) >= 2:
+            from ai_runtime.image_archive import metadata_text
+            has_image = True
+            try:
+                summary = metadata_text(raw_seg[1])
+            except (ValueError, TypeError, KeyError):
+                summary = "[图片归档元数据无效]"
+            image_summaries.append(summary)
+            text_parts.append(summary)
         elif seg_type == "imagev2":
             has_image = True
             image_id = image_id_from_hash(raw_seg[1] if len(raw_seg) >= 2 else None)

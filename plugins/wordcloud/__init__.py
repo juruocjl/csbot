@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
@@ -83,7 +84,9 @@ async def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
         colormap='viridis',
         collocations=False
     ).generate_from_frequencies(wordcount).to_image().save(buffer, format='PNG') 
-    return buffer
+    from ai_runtime.image_archive import snapshot_image
+    return snapshot_image(buffer, '群聊词云', {'user_id': user_id, 'time_range': time_type,
+                          'word_frequencies': dict(sorted(wordcount.items(), key=lambda row: row[1], reverse=True)[:200])})
 
 @wordcloud.handle()
 async def wordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
@@ -96,7 +99,7 @@ async def wordcloud_function(message: GroupMessageEvent, args: Message = Command
         if seg.type == "at":
             uid = seg.data["qq"]
     image = await get_wordcloud(gid, user_id=uid, time_type=msg)
-    await wordcloud.finish(MessageSegment.image(image))
+    await wordcloud.finish(image_segment(image))
 
 @mywordcloud.handle()
 async def mywordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
@@ -106,12 +109,11 @@ async def mywordcloud_function(message: GroupMessageEvent, args: Message = Comma
     msg = args.extract_plain_text().strip()
     uid = message.get_user_id()
     image = await get_wordcloud(gid, user_id=uid, time_type=msg)
-    await mywordcloud.finish(MessageSegment.image(image))
+    await mywordcloud.finish(image_segment(image))
 
 @scheduler.scheduled_job("cron", hour="23", minute="50", id="todaywc")
 async def todaywc():
     bot = get_bot()
     for group in config.cs_group_list:
         image = await get_wordcloud(group, time_type="今日")
-        await bot.send_group_msg(group_id=group, message=Message([MessageSegment.image(image)]))
-
+        await bot.send_group_msg(group_id=group, message=Message([image_segment(image)]))

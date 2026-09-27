@@ -13,6 +13,7 @@ import contextvars
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from nonebot.adapters.onebot.v11 import Message,MessageSegment
 from PIL import Image
+from ai_runtime.image_archive import image_segment
 
 async def main():
     with tempfile.TemporaryDirectory() as tmp:
@@ -29,7 +30,7 @@ async def main():
         key=uuid.uuid4().hex;store=state_store()
         store.execute('INSERT INTO run_images VALUES(?,?,?,?)',('image',key,digest,'chart'))
         async def ask(*args,**kwargs):return '图在这。'
-        namespace=dict(uuid=uuid,Message=Message,MessageSegment=MessageSegment,Bot=object,
+        namespace=dict(uuid=uuid,Message=Message,MessageSegment=MessageSegment,image_segment=image_segment,Bot=object,
             group_id_from_sid=lambda x:'g',_format_ai_message=lambda m,ids:str(m),config=SimpleNamespace(cs_ai_engine='dsh',cs_domain='https://fixture.invalid'),__package__='plugins.cs_ai',
             logger=SimpleNamespace(info=lambda *a:None,error=lambda *a:None),ai_ask_main=ask,_should_forward_ai_result=lambda s:False,_render_at_segments=Message)
         exec(compile(module,str(source),'exec'),namespace)

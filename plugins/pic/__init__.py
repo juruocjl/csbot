@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment, library_image
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters import Bot
@@ -124,7 +125,7 @@ async def getpic_function(bot: Bot, message: MessageEvent):
     if not imgpath:
         await getpic.finish("没有图片")
     lastpic = imgpath
-    msg = await getpic.send(MessageSegment.image(open(imgpath, "rb").read()))
+    msg = await getpic.send(image_segment(library_image(imgpath)))
     await asyncio.sleep(600)
     await bot.delete_msg(message_id = msg['message_id'])
 @addpic.handle()
@@ -145,7 +146,7 @@ async def getmgz_function(bot: Bot, message: MessageEvent):
     imgpath = Pic2.getpic()
     if not imgpath:
         await getpic.finish("没有图片")
-    msg = await getpic.send(MessageSegment.image(open(imgpath, "rb").read()))
+    msg = await getpic.send(image_segment(library_image(imgpath)))
     await asyncio.sleep(600)
     await bot.delete_msg(message_id = msg['message_id'])
 @addmgz.handle()
@@ -177,7 +178,7 @@ async def checklp_function(message: MessageEvent):
         result = meme.generate([Image("test", data)], [], {})
         lastpic = None
         if isinstance(result, bytes):
-            await checklp.send(MessageSegment.image(result))
+            await checklp.send(image_segment(result))
     if text == "nlg" and lastpic:
         meme = get_meme("dog_dislike")
         with open(lastpic, "rb") as f:
@@ -185,4 +186,4 @@ async def checklp_function(message: MessageEvent):
         result = meme.generate([Image("test", data)], [], {})
         lastpic = None
         if isinstance(result, bytes):
-            await checklp.send(MessageSegment.image(result))
+            await checklp.send(image_segment(result))

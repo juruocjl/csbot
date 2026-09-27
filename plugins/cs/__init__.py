@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment, GroupMessageEvent, Bot
@@ -122,7 +123,7 @@ def _schedule_watch_stage_auto_delete(bot: Bot, sent_message) -> None:
 async def _send_watch_stage_image(bot: Bot, group_id: int | str, image: bytes) -> None:
     sent_message = await bot.send_group_msg(
         group_id=int(group_id),
-        message=Message(MessageSegment.image(image)),
+        message=Message(image_segment(image)),
     )
     _schedule_watch_stage_auto_delete(bot, sent_message)
 
@@ -193,7 +194,7 @@ async def update_function(message: MessageEvent):
         if baseinfo is None or detailinfo is None:
             await update.finish("数据获取失败，请稍后再试")
         image = await gen_stats_image(baseinfo, detailinfo)
-        await update.finish(MessageSegment.image(image))
+        await update.finish(image_segment(image))
     else:
         await update.finish("请先使用 /绑定 steamid64 绑定")
 
@@ -224,7 +225,7 @@ async def show_function(message: MessageEvent, args: Message = CommandArg()):
         detailinfo = await db_val.get_detail_info(steamid)
         if baseinfo is not None and detailinfo is not None:
             image = await gen_stats_image(baseinfo, detailinfo)
-            await show.finish(MessageSegment.image(image))
+            await show.finish(image_segment(image))
         else:
             await show.finish("请先使用 /更新数据 更新战绩")
     else:
@@ -251,7 +252,7 @@ async def rank_function(message: GroupMessageEvent, args: Message = CommandArg()
                 token = await db_server.get_bot_token(str(message.group_id))
                 screenshot = await get_screenshot(f"/rank?rankName={rank_type}&timeType={time_type}", token)
                 if screenshot:
-                    await rank.finish(MessageSegment.image(screenshot))
+                    await rank.finish(image_segment(screenshot))
                 else:
                     await rank.finish("生成排名图片失败，请稍后再试")
             except ValueError as e:
@@ -471,7 +472,10 @@ async def scoretrend_function(message: MessageEvent, args: Message = CommandArg(
 
     if skipped:
         await scoretrend.send("以下成员已跳过：" + "，".join(skipped))
-    await scoretrend.finish(MessageSegment.image(image_bytes))
+    from ai_runtime.image_archive import snapshot_image
+    image_bytes = snapshot_image(image_bytes, '天梯分数变化', {'time_range': time_type,
+        'series': [{'member': label, 'points': [{'time': x.isoformat(), 'score': y} for x, y in zip(xs, ys)]} for label, xs, ys in series], 'skipped': skipped})
+    await scoretrend.finish(image_segment(image_bytes))
         
 @matches.handle()
 async def matches_function(message: MessageEvent, args: Message = CommandArg()):
@@ -523,7 +527,7 @@ async def matches_function(message: MessageEvent, args: Message = CommandArg()):
         if matches_data is not None and baseinfo is not None:   
             matches_data_extra = [await db_val.get_match_extra(match.mid) for match in matches_data]
             image = await gen_matches_image(matches_data, matches_data_extra, steamid, baseinfo.name)
-            await matches.finish(MessageSegment.image(image))
+            await matches.finish(image_segment(image))
         else:
             await matches.finish("未找到比赛")
     else:
@@ -581,5 +585,5 @@ async def matchteammate_function(message: MessageEvent, args: Message = CommandA
         else:
             data.append((title, "", "虚位以待", fmt.format(value=float("nan"), count=float("nan"))))
     image = await gen_teammate_image(steamid, time_type, data)
-    await matchteammate.finish(MessageSegment.image(image))
+    await matchteammate.finish(image_segment(image))
     

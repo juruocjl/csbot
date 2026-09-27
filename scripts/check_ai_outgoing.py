@@ -27,9 +27,11 @@ async def main():
         nonebot.init(cs_database=os.environ["CS_DATABASE"])
         next_mid=-1_800_000_000
         calls=[]
+        wire=[]
         async def fake_send(self,api,**data):
             nonlocal next_mid
             calls.append(api)
+            wire.append(data)
             if data.get("message")=="transport-failure":raise TimeoutError("fixture")
             next_mid+=1
             return {"message_id":next_mid}
@@ -88,6 +90,45 @@ async def main():
             assert len(calls)==5,'index retry must not resend to QQ'
             print("PASS: outgoing text/image/reply/forward searchable, self-echo deduplicated, image scope enforced, uncertain send never retried")
             print('PASS: failed archive indexing retries durably without a second platform send')
+            from ai_runtime.image_archive import snapshot_image, image_segment, MARKER
+            import json
+            before_images = media_cache().db.execute('SELECT count(*) FROM media').fetchone()[0]
+            snapshot_pixels=BytesIO(); Image.new('RGB',(9,9),'green').save(snapshot_pixels,format='PNG')
+            annotated = snapshot_image(snapshot_pixels.getvalue(), '比赛结果快照', {'players': ['合成甲'], 'score': '13:8'}, source={'page': '/match', 'params': {'id': 'fixture-match'}})
+            snapshot_sent = await bot.call_api('send_group_msg',group_id=int(gid),message=image_segment(annotated))
+            assert MARKER not in json.dumps(wire[-1]) and '13:8' not in json.dumps(wire[-1])
+            assert 'base64://' in json.dumps(wire[-1]), 'QQ must still receive real pixels'
+            assert media_cache().db.execute('SELECT count(*) FROM media').fetchone()[0] == before_images
+            snapshot_hash=__import__('hashlib').sha256(snapshot_pixels.getvalue()).hexdigest()
+            assert not (media_cache().full/f'{snapshot_hash}.png').exists()
+            assert not (media_cache().small/f'{snapshot_hash}.png').exists()
+            info = await authorized_image(async_session_factory, gid, annotated.metadata['image_id'][:16])
+            assert info['full_status'] == 'metadata_only' and info['metadata']['snapshot']['score'] == '13:8'
+            assert info['full_path'] is None and info['thumbnail_path'] is None
+            try: await authorized_image(async_session_factory,'888',annotated.metadata['image_id'])
+            except ValueError: pass
+            else: raise AssertionError('cross-group metadata access')
+            async with async_session_factory() as session:
+                snapshot_text=await session.scalar(text('SELECT plain_text FROM chat_message_index WHERE group_id=:gid AND mid=:mid'),{'gid':gid,'mid':snapshot_sent['message_id']})
+                assert '比赛结果快照' in snapshot_text and '13:8' in snapshot_text
+            original_get_image = allmsg.get_image
+            async def no_download(*a, **kw): raise AssertionError('echo downloaded already archived image')
+            allmsg.get_image = no_download
+            try:
+                await insert_message(bot,snapshot_sent['message_id'],f'group_{gid}_{bot.self_id}',int(time.time()),Message(MessageSegment.image('https://not-fetched.invalid/echo.png')),strict_index=True)
+            finally: allmsg.get_image = original_get_image
+            # Metadata survives index outage and nested forward transport, without pixels in the outbox.
+            allmsg.insert_message = fail_index
+            try:
+                await bot.call_api('send_group_forward_msg',group_id=int(gid),messages=[{'type':'node','data':{'name':'fixture','uin':'777','content':Message(image_segment(annotated))}}])
+                staged = store.rows("SELECT payload FROM outbound WHERE status='sent'")[0]['payload']
+                assert 'base64://' not in staged and '13:8' in staged
+                assert MARKER not in json.dumps(wire[-1]) and 'base64://' in json.dumps(wire[-1])
+            finally: allmsg.insert_message = original
+            calls_before = len(calls)
+            await drain(bot)
+            assert len(calls) == calls_before and not store.rows("SELECT id FROM outbound WHERE status='sent'")
+            print('PASS: metadata searchable and group scoped; QQ pixels unchanged; no cached originals/thumbnails; echo and forward retry preserve metadata without re-sending')
         finally:
             async with engine.begin() as conn:
                 await conn.execute(text("DELETE FROM chat_chunk_message WHERE chunk_id IN (SELECT id FROM chat_chunk_index WHERE group_id=:gid)"),{"gid":gid})

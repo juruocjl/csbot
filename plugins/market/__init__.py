@@ -1,3 +1,4 @@
+from ai_runtime.image_archive import image_segment
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
@@ -208,13 +209,13 @@ async def get_baojia_image(title: str = "当前底价"):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
         temp_file.flush()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 120 + len(data) * 60)
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 120 + len(data) * 60, archive_title='市场报价 '+title)
     return img
 
 @baojia.handle()
 async def baojia_function():
     # await baojia.finish(get_baojia())
-    await baojia.finish(MessageSegment.image(await get_baojia_image()))
+    await baojia.finish(image_segment(await get_baojia_image()))
 
 @search.handle()
 async def search_function(args: Message = CommandArg()):
@@ -255,7 +256,7 @@ async def send_baojia():
         await bot.send_msg(
             message_type="group",
             group_id=groupid,
-            message=MessageSegment.image(await get_baojia_image(title="10点自动更新"))
+            message=image_segment(await get_baojia_image(title="10点自动更新"))
         )
 
 @updallgoods.handle()
