@@ -1,9 +1,9 @@
 from nonebot import get_plugin_config
 from nonebot.plugin import PluginMetadata
-from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment, GroupMessageEvent
 from nonebot.adapters import Bot
 from nonebot import require
-from nonebot import on_command
+from nonebot import on_command, on_message
 from nonebot.permission import SUPERUSER
 from nonebot.params import CommandArg
 from nonebot import logger
@@ -40,6 +40,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 from PIL import Image
+from ai_runtime.media import media_cache
 from sqlalchemy import select, func, case
 import time
 import uuid
@@ -312,7 +313,6 @@ async def _load_cached_image(image_id: str) -> tuple[str, list[tuple[int | None,
             select(ImgCacheInfo.hash)
             .where(
                 ImgCacheInfo.hash.like(f"{normalized_id}%"),
-                ImgCacheInfo.valid == True,
             )
             .limit(2)
         )
@@ -323,10 +323,8 @@ async def _load_cached_image(image_id: str) -> tuple[str, list[tuple[int | None,
         raise ValueError("image id is ambiguous; use more hash characters")
 
     full_hash = hashes[0]
-    image_path = IMAGE_CACHE_DIR / f"{full_hash}.png"
-    if not image_path.is_file():
-        raise ValueError("cached image file is unavailable")
-    content = image_path.read_bytes()
+    with media_cache().lease(full_hash) as image_path:
+        content = image_path.read_bytes()
     if len(content) > MAX_AI_IMAGE_BYTES:
         raise ValueError("cached image is too large for vision input")
     vision_images, source_frame_count = _prepare_vision_images(content)
@@ -1139,20 +1137,78 @@ class DataManager:
         
 db = DataManager()
 
-aiask = on_command("ai", priority=10, block=True)
-
-aiasktb = on_command("aitb", priority=10, block=True)
-
-aiaskxmm = on_command("aixmm", priority=10, block=True)
-
-aiaskxhs = on_command("aixhs", priority=10, block=True)
-
-aiasktmr = on_command("aitmr", priority=10, block=True)
-
-aimem = on_command("ai记忆", priority=10, block=True)
+async def _human_group(bot: Bot, event: GroupMessageEvent) -> bool:
+    return str(event.user_id) != str(bot.self_id)
 
 
-async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_id: str | None) -> str:
+aiask = on_command("ai", rule=_human_group, priority=10, block=True)
+
+aiasktb = on_command("aitb", rule=_human_group, priority=10, block=True)
+
+aiaskxmm = on_command("aixmm", rule=_human_group, priority=10, block=True)
+
+aiaskxhs = on_command("aixhs", rule=_human_group, priority=10, block=True)
+
+aiasktmr = on_command("aitmr", rule=_human_group, priority=10, block=True)
+
+aimem = on_command("ai记忆", rule=_human_group, priority=10, block=True)
+
+
+async def _explicitly_called(bot: Bot, event: GroupMessageEvent) -> bool:
+    if str(event.user_id)==str(bot.self_id): return False
+    if any(seg.type=="at" and str(seg.data.get("qq"))==str(bot.self_id) for seg in event.original_message):
+        return True
+    return bool(event.reply and str(event.reply.sender.user_id)==str(bot.self_id))
+
+
+ai_called = on_message(rule=_explicitly_called,priority=11,block=True)
+
+
+@ai_called.handle()
+async def ai_called_function(bot: Bot, event: GroupMessageEvent):
+    from ..allmsg.outgoing import current_run
+    chat_id=str(uuid.uuid4())
+    current_run.set(chat_id)
+    question=Message([seg for seg in event.message if not (seg.type=="at" and str(seg.data.get("qq"))==str(bot.self_id))])
+    response=await ai_ask2(bot,str(event.user_id),event.get_session_id(),None,question,
+                           event.original_message,chat_id,event.message_id)
+    if response is not None: await ai_called.finish(response)
+    await ai_called.finish()
+
+
+async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_id: str | None,
+                      *, channel: str | None = None, conversation: str = "default") -> str:
+    from ai_runtime.service import ask
+    channel = channel or ("qq" if uid else "report")
+    chat_id = chat_id or str(uuid.uuid4())
+    from ..allmsg.outgoing import current_run
+    current_run.set(chat_id)
+    if config.cs_ai_engine == "legacy":
+        if channel == "web":
+            raise ValueError("旧引擎不支持隔离的网页个人会话")
+        return await _ai_ask_legacy(uid, sid, persona, text, chat_id)
+    if config.cs_ai_engine != "dsh":
+        raise ValueError("unknown AI engine")
+    model_name = await runtime_config.get("cs_ai_model")
+    async def guard(output):
+        if channel == "web": return output
+        if config.cs_ai_output_guard_enabled:
+            try:
+                async with AsyncOpenAI(api_key=config.cs_ai_api_key,base_url=config.cs_ai_url) as client:
+                    verdict = await _guard_qq_output(client, output)
+                return normalize_qq_plain_text(verdict.text)
+            except Exception:
+                logger.warning("QQ output guard failed closed")
+                return QQ_GUARD_FAILED_TEXT
+        return normalize_qq_plain_text(output)
+    return await ask(chat_id=chat_id,gid=group_id_from_sid(sid),uid=uid,prompt=text,persona=persona,
+        channel=channel,conversation=chat_id if channel=="report" else conversation,
+        model=model_name,endpoint=config.cs_ai_url,api_key=config.cs_ai_api_key,
+        factory=async_session_factory,chat_history=chat_history_db,archive=db.insert_chat_record,
+        guard=guard,vision=config.cs_ai_vision,thinking=config.cs_ai_enable_thinking)
+
+
+async def _ai_ask_legacy(uid: str, sid: str, persona: str | None, text: str, chat_id: str | None) -> str:
     model_name: str = await runtime_config.get("cs_ai_model")
     steamids = await db_val.get_member_steamid(sid)
     mysteamid = await db_val.get_steamid(uid)
@@ -1954,14 +2010,17 @@ async def ai_ask2(
             if text:
                 text = f"[reply:{reference['message_id']}] {text}"
             else:
-                text = str(reference["text"])
-                uid = str(reference["qq"])
+                text = f"请回应我引用的消息：[reply:{reference['message_id']}] {reference['text']}"
     except Exception as e:
         logger.warning(f"获取回复消息失败: {e}")
         return Message("获取回复消息失败。")
     logger.info(f"UID: {uid}, Text: {text}")
 
-    ai_text = await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
+    try:
+        ai_text = await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
+    except Exception as exc:
+        logger.error(f"AI request did not complete: {type(exc).__name__}")
+        return MessageSegment.at(uid) + " 这次没能完成，记录已保留，可以稍后重试。"
     if _should_forward_ai_result(ai_text):
         sent_forward = False
         try:
@@ -1985,12 +2044,14 @@ async def ai_ask2(
         return MessageSegment.at(uid) + " " + ai_message
 
 @aiask.handle()
-async def aiask_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
+async def aiask_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     chat_id = str(uuid.uuid4())
+    from ..allmsg.outgoing import current_run
+    current_run.set(chat_id)
     await aiask.send(
-        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
     response = await ai_ask2(bot, uid, sid, None, args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
     if response is None:
@@ -1998,12 +2059,14 @@ async def aiask_function(bot: Bot, message: MessageEvent, args: Message = Comman
     await aiask.finish(response)
 
 @aiasktb.handle()
-async def aiasktb_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
+async def aiasktb_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     chat_id = str(uuid.uuid4())
+    from ..allmsg.outgoing import current_run
+    current_run.set(chat_id)
     await aiasktb.send(
-        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
     response = await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
     if response is None:
@@ -2011,12 +2074,14 @@ async def aiasktb_function(bot: Bot, message: MessageEvent, args: Message = Comm
     await aiasktb.finish(response)
 
 @aiaskxmm.handle()
-async def aiaskxmm_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
+async def aiaskxmm_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     chat_id = str(uuid.uuid4())
+    from ..allmsg.outgoing import current_run
+    current_run.set(chat_id)
     await aiaskxmm.send(
-        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
     response = await ai_ask2(bot, uid, sid, "xmm", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
     if response is None:
@@ -2024,12 +2089,14 @@ async def aiaskxmm_function(bot: Bot, message: MessageEvent, args: Message = Com
     await aiaskxmm.finish(response)
 
 @aiaskxhs.handle()
-async def aiaskxhs_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
+async def aiaskxhs_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     chat_id = str(uuid.uuid4())
+    from ..allmsg.outgoing import current_run
+    current_run.set(chat_id)
     await aiaskxhs.send(
-        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
     response = await ai_ask2(bot, uid, sid, "xhs", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
     if response is None:
@@ -2037,12 +2104,14 @@ async def aiaskxhs_function(bot: Bot, message: MessageEvent, args: Message = Com
     await aiaskxhs.finish(response)
 
 @aiasktmr.handle()
-async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
+async def aiasktmr_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
     chat_id = str(uuid.uuid4())
+    from ..allmsg.outgoing import current_run
+    current_run.set(chat_id)
     await aiasktmr.send(
-        MessageSegment.at(uid) + " " + "AI正在思考：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
+        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
     )
     response = await ai_ask2(bot, uid, sid, "tmr", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
     if response is None:
@@ -2050,7 +2119,7 @@ async def aiasktmr_function(bot: Bot, message: MessageEvent, args: Message = Com
     await aiasktmr.finish(response)
 
 @aimem.handle()
-async def aimem_function(bot: Bot, message: MessageEvent, args: Message = CommandArg()):
+async def aimem_function(bot: Bot, message: GroupMessageEvent, args: Message = CommandArg()):
     uid = message.get_user_id()
     sid = message.get_session_id()
 
@@ -2067,6 +2136,9 @@ async def aimem_function(bot: Bot, message: MessageEvent, args: Message = Comman
         await aimem.finish(
             MessageSegment.at(uid) + " 请输入要加入记忆的内容。"
         )
+    if config.cs_ai_engine == "dsh":
+        response = await ai_ask_main(uid,sid,None,"请记住我明确提供的长期信息："+text,str(uuid.uuid4()))
+        await aimem.finish(_render_at_segments(response))
     try:
         model_name: str = await runtime_config.get("cs_ai_model")
         # 创建聊天完成请求

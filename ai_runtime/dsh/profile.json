@@ -1,0 +1,137 @@
+[
+  {
+    "disabled": true,
+    "id": "sdk-app-startup"
+  },
+  {
+    "disabled": true,
+    "id": "sdk-jsonrpc-server"
+  },
+  {
+    "disabled": true,
+    "id": "persistent-bash"
+  },
+  {
+    "disabled": true,
+    "id": "persistent-pwsh"
+  },
+  {
+    "disabled": true,
+    "id": "terminal-bash"
+  },
+  {
+    "disabled": true,
+    "id": "terminal-pwsh"
+  },
+  {
+    "disabled": true,
+    "id": "pty"
+  },
+  {
+    "disabled": true,
+    "id": "subprocess"
+  },
+  {
+    "disabled": true,
+    "id": "session-log-deepseek"
+  },
+  {
+    "disabled": true,
+    "id": "plugin-package-inventory-deepseek"
+  },
+  {
+    "insert": [
+      {
+        "config": {},
+        "id": "commands",
+        "name": "@deepseek-ai/dsh-commands"
+      },
+      {
+        "config": {
+          "model": "$CSBOT_MODEL",
+          "provider": "deepseek-official"
+        },
+        "id": "agent-default-model",
+        "name": "@deepseek-ai/dsh-agent-default-model"
+      },
+      {
+        "config": {
+          "host": "127.0.0.1",
+          "port": 0
+        },
+        "id": "webserver",
+        "name": "@deepseek-ai/dsh-host-webserver"
+      },
+      {
+        "config": {},
+        "id": "token-meter",
+        "name": "@deepseek-ai/dsh-token-meter"
+      },
+      {
+        "config": {},
+        "id": "compaction",
+        "name": "@deepseek-ai/dsh-compaction-basic"
+      },
+      {
+        "config": {
+          "autoDream": false,
+          "autoInject": true,
+          "autoSummarize": "$REMEMBER",
+          "entityExtractionEnabled": false,
+          "externalApiEnabled": false,
+          "lightMode": true,
+          "memoryDir": "$CSBOT_MEMORY_DIR",
+          "strictScope": true
+        },
+        "id": "mneme",
+        "name": "@modusensus/dsh-mneme"
+      },
+      {
+        "config": {},
+        "id": "csbot-bridge",
+        "name": "$CSBOT_BRIDGE"
+      }
+    ]
+  },
+  {
+    "id": "llm-deepseek",
+    "config": {
+      "streamIdleTimeoutMs": 60000,
+      "maxTokens": 8192,
+      "maxImagesPerRequest": 8,
+      "models": "$MODELS",
+      "imageOffloadCountQuantum": 2
+    }
+  },
+  {
+    "insert": [
+      {
+        "id": "fs",
+        "name": "@deepseek-ai/dsh-fs-local",
+        "config": {
+          "cwd": "$CSBOT_WORKSPACE"
+        }
+      },
+      {
+        "id": "attachments",
+        "name": "@deepseek-ai/dsh-attachment-local",
+        "config": {
+          "maxImageBytes": 33554432,
+          "maxImagesPerMessage": 8,
+          "normalizedImageMaxPixels": 1048576,
+          "normalizedImageMaxDimension": 2048,
+          "normalizedImageMaxBytes": 262144,
+          "imageCompressionConcurrency": 1
+        }
+      },
+      {
+        "id": "tool-fs",
+        "name": "@deepseek-ai/dsh-tool-fs",
+        "config": {
+          "readLimit": 200,
+          "readMaxBytes": 24000
+        }
+      }
+    ]
+  }
+]

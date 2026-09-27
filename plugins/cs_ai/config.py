@@ -11,3 +11,5 @@ class Config(BaseModel):
     cs_ai_enable_thinking: bool = False
     cs_tavily_api_key: str = ""
     cs_domain: str = "https://cs.example.com"  # CS服务器域名
+    cs_ai_engine: str = "dsh"
+    cs_ai_vision: bool = True

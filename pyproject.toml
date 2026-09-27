@@ -3,7 +3,7 @@ name = "test"
 version = "0.1.0"
 description = "test"
 readme = "README.md"
-requires-python = ">=3.9, <4.0"
+requires-python = ">=3.11, <4.0"
 dependencies = [
     "aiohttp>=3.13.2",
     "aiomysql>=0.3.2",
@@ -37,6 +37,7 @@ dependencies = [
     "pymysql>=1.1.2",
     "pypinyin>=0.55.0",
     "pyppeteer>=2.0.0",
+    "sqlglot==28.0.0",
     "thefuzz[speedup]>=0.22.1",
     "ts3>=2.0.0b2",
     "types-tqdm>=4.67.0.20250809",

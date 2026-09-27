@@ -29,6 +29,7 @@ configuration snapshot until it finishes, so one operation cannot mix values.
 - [部署手册](https://github.com/juruocjl/csbot-depoly/blob/main/DEPLOY.md)
 - [服务器服务清单](https://github.com/juruocjl/csbot-depoly/blob/main/SERVER_SERVICES.md)
 - [本地交付验收](https://github.com/juruocjl/csbot-depoly/blob/main/DELIVERY_CHECK.md)
+- [DSH/Mneme AI 架构、权限和发布](https://github.com/juruocjl/csbot-depoly/blob/main/AI_RUNTIME.md)
 - [执行约束](https://github.com/juruocjl/csbot-depoly/blob/main/AGENTS.md)
 
 在该部署仓库的子模块布局中，上述文件位于本目录的上一层；独立克隆请使用上面的仓库链接。

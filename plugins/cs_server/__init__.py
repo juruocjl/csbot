@@ -3171,16 +3171,31 @@ async def get_major_homework_personal(
 class AIRecordIdsResponse(BaseModel):
     isEnd: bool = Field(..., description="是否已结束生成")
     recordIds: list[int] = Field(..., description="此聊天记录编号列表")
+    status: str = Field("unknown",description="queued/running/completed/interrupted")
 
 class AIAskResponse(BaseModel):
     chatId: str = Field(..., description="AI chat id")
 
-async def _run_web_ai_chat(chat_id: str, uid: str, sid: str, prompt: str, persona: str | None) -> None:
+
+@app.post("/api/ai/history",summary="个人会话最近对话")
+async def personal_ai_history(conversation: str=Body("default",embed=True),info: AuthSession=Depends(get_current_user)):
+    from ai_runtime.runner import scope_key
+    from ai_runtime.store import state_store
+    if not info.user_id or not info.group_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}",conversation):
+        raise HTTPException(status_code=400,detail="无效的个人会话")
+    scope=scope_key("web",info.group_id,info.user_id,conversation)
+    rows=state_store().rows("SELECT id,request,response,status,created_at FROM runs WHERE scope=? AND channel='web' AND group_id=? AND user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 50",
+                            (scope,info.group_id,info.user_id))
+    return {"turns":list(reversed(rows)),"limit":50}
+
+async def _run_web_ai_chat(chat_id: str, uid: str, sid: str, prompt: str, persona: str | None, conversation: str) -> None:
     try:
-        await ai_ask_main(uid, sid, persona, prompt, chat_id=chat_id)
+        await ai_ask_main(uid, sid, persona, prompt, chat_id=chat_id,channel="web",conversation=conversation)
     except Exception as e:
         logger.exception("web ai chat failed")
-        await db_ai.insert_chat_record(chat_id, "assistant", f"AI请求失败: {e}", None, None, True)
+        from ai_runtime.store import state_store
+        state_store().execute("UPDATE runs SET status='interrupted',error=? WHERE id=? AND status IN ('queued','running')",(type(e).__name__,chat_id))
+        await db_ai.insert_chat_record(chat_id, "assistant", "这次没能完成，请稍后重试。", None, None, True)
 
 @app.post("/api/ai/ask",
     response_model=AIAskResponse,
@@ -3190,6 +3205,7 @@ async def _run_web_ai_chat(chat_id: str, uid: str, sid: str, prompt: str, person
 async def ask_ai_from_web(
     prompt: str = Body(..., embed=True),
     persona: str | None = Body(None, embed=True),
+    conversation: str = Body("default", embed=True),
     info: AuthSession = Depends(get_current_user),
 ):
     if not info.user_id or not info.group_id:
@@ -3197,9 +3213,16 @@ async def ask_ai_from_web(
     prompt = prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is empty")
+    if len(prompt.encode())>16000 or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}",conversation):
+        raise HTTPException(status_code=400,detail="问题过长或会话编号无效")
     chat_id = str(uuid.uuid4())
     sid = f"group_{info.group_id}_{info.user_id}"
-    asyncio.create_task(_run_web_ai_chat(chat_id, info.user_id, sid, prompt, persona))
+    from ai_runtime.service import register
+    try:
+        register(chat_id,info.group_id,info.user_id,prompt,"web",conversation)
+    except ValueError as exc:
+        raise HTTPException(status_code=429,detail=str(exc))
+    asyncio.create_task(_run_web_ai_chat(chat_id, info.user_id, sid, prompt, persona,conversation))
     return AIAskResponse(chatId=chat_id)
 
 @app.post("/api/ai/recordids",
@@ -3207,11 +3230,17 @@ async def ask_ai_from_web(
     summary="获取AI聊天记录编号列表",
     description="获取当前认证 Token 所在群组的AI聊天记录编号列表。"
 )
-async def get_ai_record_ids(chatId: str=Body(..., embed=True), _: AuthSession = Depends(get_current_user)):
+async def get_ai_record_ids(chatId: str=Body(..., embed=True), info: AuthSession = Depends(get_current_user)):
+    from ai_runtime.store import state_store
+    if not state_store().can_read(chatId,info.group_id,info.user_id):
+        raise HTTPException(status_code=404,detail="Record not found")
     is_end, record_ids = await db_ai.get_chat_records_id(chatId)
+    run=state_store().get_run(chatId)
+    status=run["status"] if run else "unknown"
     return AIRecordIdsResponse(
-        isEnd=is_end,
-        recordIds=record_ids
+        isEnd=is_end or status in {"completed","interrupted"},
+        recordIds=record_ids,
+        status=status,
     )
 
 class AiRecordResponse(BaseModel):
@@ -3225,14 +3254,17 @@ class AiRecordResponse(BaseModel):
     summary="获取AI聊天记录内容",
     description="根据聊天记录编号获取AI聊天记录的详细内容。"
 )
-async def get_ai_record(recordId: int=Body(..., embed=True), _: AuthSession = Depends(get_current_user)):
+async def get_ai_record(recordId: int=Body(..., embed=True), info: AuthSession = Depends(get_current_user)):
     record = await db_ai.get_chat_record(recordId)
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+    from ai_runtime.store import state_store
+    if not state_store().can_read(record.chat_id,info.group_id,info.user_id):
+        raise HTTPException(status_code=404,detail="Record not found")
     return AiRecordResponse(
         timestamp=record.timestamp,
         role=record.role,
         content=record.content,
         tools=record.tool_calls,
-        reasons=record.reasoning_content
+        reasons=None
     )

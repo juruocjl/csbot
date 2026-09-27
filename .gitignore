@@ -14,3 +14,6 @@ imgs
 win_matrix.csv
 mymigrations/versions/*
 !mymigrations/versions/*.py
+
+node_modules/
+data/ai/

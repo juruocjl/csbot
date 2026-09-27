@@ -5,6 +5,7 @@ from nonebot.params import CommandArg
 from nonebot import on_command, on_message
 from nonebot import logger
 from nonebot import require
+from nonebot import get_driver
 from nonebot.adapters.onebot.v11 import Bot
 
 require("utils")
@@ -31,6 +32,7 @@ from pathlib import Path
 import random
 import json
 import asyncio
+import base64
 from io import BytesIO
 from datetime import date, datetime, timedelta
 import matplotlib
@@ -39,6 +41,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
+from ai_runtime.media import media_cache
 
 __plugin_meta__ = PluginMetadata(
     name="allmsg",
@@ -64,6 +67,14 @@ class DataManager:
     async def insert_groupmsg(self, mid: int, sid: str, timestamp: int, data_bytes: bytes) -> int:
         async with async_session_factory() as session:
             async with session.begin():
+                gid = sid.split("_")[1]
+                await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+                                      {"key": f"group-message:{gid}:{mid}"})
+                existing = await session.scalar(select(GroupMsg.id).where(
+                    GroupMsg.mid == mid, GroupMsg.sid.like(f"group\\_{gid}\\_%", escape="\\")
+                ).order_by(GroupMsg.id.asc()).limit(1))
+                if existing is not None:
+                    return existing
                 msg = GroupMsg(mid=mid, sid=sid, timestamp=timestamp, data=data_bytes)
                 session.add(msg)
                 await session.flush()
@@ -90,11 +101,13 @@ class DataManager:
                     session.add(GroupMember(gid=gid, uid=uid))
     
 
-    async def get_id_by_mid(self, mid: int) -> int:
+    async def get_id_by_mid(self, mid: int, group_id: str | None = None) -> int:
         async with async_session_factory() as session:
             stmt = select(GroupMsg.id).where(GroupMsg.mid == mid)\
                 .order_by(GroupMsg.timestamp.desc())\
                 .limit(1)
+            if group_id is not None:
+                stmt = stmt.where(GroupMsg.sid.like(f"group\\_{group_id}\\_%", escape="\\"))
             
             result = await session.execute(stmt)
             row_id = result.scalar()
@@ -202,35 +215,25 @@ async def get_msg_status(groupid) -> str:
     return f"本群已记录消息数：{count}"
 
 async def get_image(file: str, url: str) -> bytes:
-    async with img_cache_lock:
-        filepath = cache_dir / file
-        cachc_dict: dict[str, float] = json.loads(await local_storage.get("img_cache_dict", "{}"))
-        content = None
-        if file in cachc_dict and filepath.exists():
-            logger.info(f"使用缓存图片 {file}")
-            with open(filepath, "rb") as f:
-                content = f.read()
-            cachc_dict[file] = time.time()
-        else:
-            logger.info(f"下载图片 {file} 从 {url}")
-            async with get_session().get(url) as res:
-                assert res.status == 200
-                content = await res.read()
-            with open(filepath, "wb") as f:
-                f.write(content)
-            cachc_dict[file] = time.time()
-        # 清理缓存
-        if len(cachc_dict) > 300:
-            sorted_items = sorted(cachc_dict.items(), key=lambda item: item[1])
-            for i in range(len(sorted_items) - 250):
-                fpath = cache_dir / sorted_items[i][0]
-                if fpath.exists():
-                    fpath.unlink()
-                del cachc_dict[sorted_items[i][0]]
-        await local_storage.set("img_cache_dict", json.dumps(cachc_dict))
-        return content
+    limit = 32 * 1024**2
+    if file.startswith("base64://"):
+        if len(file) > limit * 4 // 3 + 32:
+            raise ValueError("image exceeds download limit")
+        return base64.b64decode(file[9:], validate=True)
+    target = url or (file if file.startswith(("https://", "http://")) else "")
+    if not target:
+        raise ValueError("image has no accessible bytes or URL")
+    # Do not retain a second, unbounded copy in imgs/cache.
+    async with get_session().get(target) as res:
+        res.raise_for_status()
+        content = bytearray()
+        async for chunk in res.content.iter_chunked(65536):
+            content.extend(chunk)
+            if len(content) > limit:
+                raise ValueError("image exceeds download limit")
+        return bytes(content)
 
-async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: Message) -> str:
+async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: Message, *, strict_index: bool = False) -> str:
     msglist = []
     mhs: str | None = None
     for seg in message:
@@ -238,7 +241,7 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
             msglist.append(["text", seg.data["text"]])
         elif seg.type == "reply":
             reply_mid = int(seg.data["id"])
-            msglist.append(["reply", await db.get_id_by_mid(reply_mid), reply_mid])
+            msglist.append(["reply", await db.get_id_by_mid(reply_mid, sid.split("_")[1]), reply_mid])
         elif seg.type == "at":
             msglist.append(["at", seg.data["qq"]])
         elif seg.type == "face":
@@ -246,22 +249,12 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         elif seg.type == "image":
             # print(seg.data)
             try:
-                content = await get_image(seg.data["file"], seg.data["url"])
-                filehash = hashlib.sha256(content).hexdigest()
-                filename = filehash + ".png"
-                # print(filehash)
-                async with img_lock:
-                    has_small, has_full = await db.touch_img_cache(filehash)
-                    if not has_full:
-                        with open(full_dir / filename, "wb") as fullf:
-                            fullf.write(content)
-                    if not has_small:
-                        from PIL import Image
-                        img = Image.open(BytesIO(content))
-                        img.thumbnail((128, 128))
-                        with open(small_dir / filename, "wb") as smallf:
-                            img.save(smallf, format="PNG")
+                content = await get_image(str(seg.data.get("file", "")), str(seg.data.get("url", "")))
+                filehash = await asyncio.to_thread(media_cache().put, content)
+                await db.touch_img_cache(filehash)
             except Exception as e:
+                if strict_index:
+                    raise
                 logger.error(f"图片处理失败: {e}")
                 filehash = "error" + random.randbytes(32).hex()
 
@@ -276,6 +269,8 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
     try:
         await chat_history_db.index_group_message(record_id)
     except Exception as e:
+        if strict_index:
+            raise
         logger.warning(f"index chat message {record_id} failed: {e}")
     if mhs is not None:
         return mhs
@@ -302,7 +297,9 @@ myallmsg = MyDecorator()
 @allmsg.handle()
 async def allmsg_function(bot: Bot, message: GroupMessageEvent) -> None:
     assert(message.get_session_id().startswith("group"))
-    await db.touch_group_member(str(message.group_id), message.get_user_id())
+    is_bot = message.get_user_id() == str(bot.self_id)
+    if not is_bot:
+        await db.touch_group_member(str(message.group_id), message.get_user_id())
     mhs = await insert_message(
         bot,
         message.message_id,
@@ -310,7 +307,23 @@ async def allmsg_function(bot: Bot, message: GroupMessageEvent) -> None:
         message.time,
         message.original_message
     )
-    await myallmsg.run(bot, message, mhs)
+    if not is_bot:
+        await myallmsg.run(bot, message, mhs)
+
+
+@get_driver().on_startup
+async def reconcile_image_cache():
+    result = await asyncio.to_thread(media_cache().reconcile)
+    logger.info(f"original image cache: {result}")
+    registered=json.loads(await local_storage.get("img_cache_dict","{}"))
+    remaining=await asyncio.to_thread(media_cache().migrate_downloads,cache_dir,registered)
+    await local_storage.set("img_cache_dict",json.dumps(remaining))
+    if remaining: logger.warning(f"legacy image cache requires review: {len(remaining)} files retained")
+
+
+require("nonebot_plugin_apscheduler")
+from .outgoing import install as install_outgoing_archive
+install_outgoing_archive()
 
 @talk_trend.handle()
 async def talk_trend_function(event: GroupMessageEvent, args: Message = CommandArg()):
