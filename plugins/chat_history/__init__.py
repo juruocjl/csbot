@@ -31,6 +31,7 @@ from ..models import (
 )
 
 from .config import Config
+from .ranking import StreamingBM25
 
 __plugin_meta__ = PluginMetadata(
     name="chat_history",
@@ -1111,26 +1112,41 @@ class DataManager:
             if users:
                 user_filters = [ChatRetrievalSpan.participant_uids.like(f'%"{str(user)}"%') for user in users]
                 stmt = stmt.where(or_(*user_filters))
-            result = await session.execute(stmt.order_by(ChatRetrievalSpan.end_time.desc()).limit(BM25_CANDIDATE_LIMIT))
-            spans = list(result.scalars().all())
-
-        candidate_count = len(spans)
-        if query_terms:
-            documents: list[list[str]] = []
-            for span in spans:
-                tokens = [str(token) for token in _json_loads_list(getattr(span, "token_text", None))]
-                if not tokens:
-                    tokens = _bm25_tokens(span.span_text, lexicon_terms)
-                documents.append(tokens)
-            scores = _bm25_rank(query_terms, documents)
-            scored_spans = [
-                (span, score)
-                for span, score in zip(spans, scores)
-                if score > 0
-            ]
-            scored_spans = sorted(scored_spans, key=lambda item: (item[1], item[0].end_time), reverse=True)[:limit]
-        else:
-            scored_spans = [(span, 1.0) for span in spans[:limit]]
+            candidates = stmt.order_by(ChatRetrievalSpan.end_time.desc()).limit(BM25_CANDIDATE_LIMIT)
+            if query_terms:
+                # Stream scalar columns, not 50k ORM objects plus all token arrays.
+                # Spooling only query frequencies keeps exact corpus-wide IDF.
+                columns = candidates.with_only_columns(
+                    ChatRetrievalSpan.id, ChatRetrievalSpan.end_time,
+                    ChatRetrievalSpan.token_text, ChatRetrievalSpan.span_text,
+                ).execution_options(yield_per=512)
+                with StreamingBM25(query_terms, limit, BM25_K1, BM25_B) as ranker:
+                    result = await session.stream(columns)
+                    try:
+                        async for row in result:
+                            tokens = [str(token) for token in _json_loads_list(row.token_text)]
+                            if not tokens:
+                                tokens = _bm25_tokens(row.span_text, lexicon_terms)
+                            ranker.add(row.id, row.end_time, tokens)
+                    finally:
+                        await result.close()
+                    candidate_count = ranker.count
+                    ranked = await asyncio.to_thread(ranker.finish)
+                if ranked:
+                    result = await session.execute(select(ChatRetrievalSpan).where(
+                        ChatRetrievalSpan.group_id == group_id,
+                        ChatRetrievalSpan.id.in_([key for key, _ in ranked]),
+                    ))
+                    by_id = {span.id: span for span in result.scalars()}
+                    scored_spans = [(by_id[key], score) for key, score in ranked if key in by_id]
+                else:
+                    scored_spans = []
+            else:
+                # Count capped IDs without loading the corpus for a recency query.
+                candidate_count = await session.scalar(select(func.count()).select_from(
+                    candidates.with_only_columns(ChatRetrievalSpan.id).subquery()))
+                result = await session.execute(candidates.limit(limit))
+                scored_spans = [(span, 1.0) for span in result.scalars()]
 
         records = []
         for span, bm25_score in scored_spans:
