@@ -6,6 +6,7 @@ import tempfile
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_runtime.sandbox import ScriptSandbox
+from ai_runtime.source import source_snapshot
 
 
 async def main():
@@ -13,10 +14,19 @@ async def main():
         if request.get("method")=="call" and request.get("name")=="members":
             return {"rows":[{"uid":"fixture","steamid":"fixture"}],"truncated":False}
         raise ValueError("only synthetic members fixture is available")
-    with tempfile.TemporaryDirectory(prefix="csbot-sandbox-check-") as tmp:
-        sandbox=ScriptSandbox(fixture,Path(tmp)/"artifacts")
+    with tempfile.TemporaryDirectory(prefix="csbot-sandbox-check-") as tmp, source_snapshot() as source:
+        sandbox=ScriptSandbox(fixture,Path(tmp)/"artifacts",source_root=source.root)
         code='''import csdata,json,os,socket
 from pathlib import Path
+assert Path("/source/plugins/fudu/__init__.py").is_file()
+assert "calc_roll_point" in Path("/source/plugins/fudu/__init__.index.md").read_text()
+assert not Path("/source/.env.prod").exists()
+assert not Path("/source/.git").exists()
+assert not Path("/source/data").exists()
+for target in (Path("/source/plugins/fudu/__init__.py"), Path("/source/new-file.py")):
+    try: target.write_text("attempted mutation")
+    except OSError: pass
+    else: raise AssertionError("source snapshot was writable")
 assert csdata.call("members")["rows"][0]["uid"]=="fixture"
 assert not Path("/var/run/docker.sock").exists()
 assert not any(key in os.environ for key in ("CS_DATABASE","DEEPSEEK_API_KEY","CS_TEST_TOKEN"))
@@ -44,7 +54,7 @@ print("isolation fixture passed")
         assert result["exit_code"]==0,result["output"]
         assert len(result["artifacts"])==1
         assert Path(result["artifacts"][0]).read_text()=='{"fixture": true}'
-        print("PASS: scoped broker, no inherited credentials, no Docker socket, read-only root, no network, cgroup memory/PID limits, artifact export")
+        print("PASS: read-only reviewed source mount and function search; scoped broker, no inherited credentials, no Docker socket, read-only root, no network, cgroup memory/PID limits, artifact export")
         result=await sandbox.run("""import csdata
 csdata.configure_plot()
 import matplotlib.pyplot as plt

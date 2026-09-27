@@ -1,10 +1,13 @@
 """DSH process supervisor. One durable scope, one live process at a time."""
 import asyncio
+from contextlib import nullcontext
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+
+from .source import source_snapshot
 
 RUNTIME = Path(__file__).resolve().parent
 LIVE_SLOTS = asyncio.Semaphore(1)
@@ -49,6 +52,7 @@ mid、record_id、block_id、内部路径及查询字段是检索线索，日常
 DATA.md 说明数据源、SQL模板和安全边界。优先用 csdata.call 常用模板；需要时自行写 SQL 或 Python。
 群成员QQ昵称/群名片/头像、实际管理员、竞选规则、复读点数都有csdata.call查询，参照DATA.md；不只会查游戏。
 管理员、点数、昵称等会变，回答当前情况先查；区分QQ实际权限和机器人竞选状态，不凭旧聊天或记忆断定在任。
+文档不清楚或与结果矛盾时，先read本轮SOURCE.md，再按索引读实际业务源码和调用处。隔离Python的/source也是同一只读快照，可搜索与AST分析；不是整个仓库。源码不代表线上配置或数据，不授予写入/额外SQL权限。
 工具调用和查证是交流的一部分，不需要刻意宣告自己是 agent。计算有复杂条件时用脚本核对。
 图片先看状态与只读路径；原图存在才能读，已经淘汰不能假装看过。read_image 返回的是模型可读预览。
 长期记忆由 Mneme 管理。只记录被叫到后对话中有依据的长期信息；旁听资料不可自动升级为长期记忆。
@@ -93,128 +97,131 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                   vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False,
                   run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=()):
     from .sandbox import ScriptSandbox
-    root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
-    workspace=root/"workspace"
-    workspace.mkdir(parents=True,exist_ok=True)
-    # Generated scratch artifacts live for one turn. Chat thumbnails and
-    # normalized DSH previews retain their separate persistence policy.
-    artifacts=workspace/'artifacts'
-    if not memory_only and artifacts.is_dir():
-        for path in artifacts.iterdir():
-            if path.is_file() and not path.is_symlink(): path.unlink()
-    os.chmod(root,0o700)
-    for filename in ("DATA.md",):
-        source=RUNTIME/filename
-        if source.is_file(): shutil.copyfile(source,workspace/filename)
-    executable=RUNTIME/"dsh/node_modules/.bin/dsh"
-    if not executable.is_file():
-        raise ValueError("DSH runtime not installed; run deployment preflight")
-    # No bot, database, SSH, proxy, or unrelated provider secrets inherited.
-    env={"PATH":os.environ.get("PATH","/usr/local/bin:/usr/bin:/bin"),"HOME":str(root),
-         "DSH_HOME":str(root/"harness"),"DEEPSEEK_API_KEY":api_key,"DEEPSEEK_BASE_URL":endpoint,
-         "DSH_CONTEXT_WINDOW":os.getenv("CS_AI_CONTEXT_WINDOW","65536"),
-         "DSH_SYSTEM_PROMPT":SYSTEM_PROMPT,"CSBOT_MODEL":model,
-         "CSBOT_MEMORY_DIR":str(root/"memory"),"CSBOT_WORKSPACE":str(workspace),
-         "CSBOT_BRIDGE":str(RUNTIME/"dsh/bridge.mjs"),"CSBOT_REMEMBER":"1" if remember else "0",
-         "CSBOT_VISION":"1" if vision else "0","CSBOT_THINKING":"1" if thinking else "0",
-         "NODE_OPTIONS":"--max-old-space-size=256"}
-    paths=set(map(str,read_paths))
-    async def gateway(request):
-        result=await dispatch(request)
-        if request.get("method")=="image" or (request.get('method')=='call' and request.get('name')=='member_avatar'):
-            for field in ("full_path","thumbnail_path"):
-                if result.get(field): paths.add(result[field])
-        return result
-    sandbox=ScriptSandbox(gateway,workspace/"artifacts")
-    profile=root/("memory-import-profile.json" if memory_only else "profile.json")
-    profile.write_text(json.dumps(render_profile(env)))
-    async with LIVE_SLOTS:
-        if on_started:await on_started()
-        process=await asyncio.create_subprocess_exec(str(executable),"--profile","sdk-minimal",
-            "--patch",str(profile),cwd=workspace,env=env,
-            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,
-            limit=2*1024**2)
-        # Drain diagnostics without copying user chat or credentials into logs.
-        error_tail=bytearray()
-        async def drain_errors():
-            while chunk:=await process.stderr.read(8192):
-                error_tail.extend(chunk)
-                del error_tail[:-16000]
-        errors=asyncio.create_task(drain_errors())
-        result=None
-        acks={}
-        write_lock=asyncio.Lock()
-        async def send(value):
-            async with write_lock:
-                process.stdin.write((json.dumps(value,ensure_ascii=False)+'\n').encode())
-                await process.stdin.drain()
-        async def steer(text):
-            import uuid
-            key=uuid.uuid4().hex
-            future=asyncio.get_running_loop().create_future();acks[key]=future
-            try:
-                await send({'type':'steer','id':key,'text':text})
-                return await asyncio.wait_for(asyncio.shield(future),10)
-            except (BrokenPipeError,ConnectionResetError,TimeoutError):
-                raise ValueError('补充的投递状态尚未确认，请查看当前回复；未自动重复提交') from None
-            finally:acks.pop(key,None)
-        rpc_tasks=[]
-        rpc_slots=asyncio.Semaphore(1)
-        async def handle_rpc(event):
-            async with rpc_slots:
+    with source_snapshot() if not memory_only else nullcontext(None) as code_snapshot:
+        root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
+        workspace=root/"workspace"
+        workspace.mkdir(parents=True,exist_ok=True)
+        # Generated scratch artifacts live for one turn. Chat thumbnails and
+        # normalized DSH previews retain their separate persistence policy.
+        artifacts=workspace/'artifacts'
+        if not memory_only and artifacts.is_dir():
+            for path in artifacts.iterdir():
+                if path.is_file() and not path.is_symlink(): path.unlink()
+        os.chmod(root,0o700)
+        for filename in ("DATA.md",):
+            source=RUNTIME/filename
+            if source.is_file(): shutil.copyfile(source,workspace/filename)
+        (workspace/"SOURCE.md").write_text(code_snapshot.guide if code_snapshot else "本次离线记忆维护未开放源码。\n")
+        executable=RUNTIME/"dsh/node_modules/.bin/dsh"
+        if not executable.is_file():
+            raise ValueError("DSH runtime not installed; run deployment preflight")
+        # No bot, database, SSH, proxy, or unrelated provider secrets inherited.
+        env={"PATH":os.environ.get("PATH","/usr/local/bin:/usr/bin:/bin"),"HOME":str(root),
+             "DSH_HOME":str(root/"harness"),"DEEPSEEK_API_KEY":api_key,"DEEPSEEK_BASE_URL":endpoint,
+             "DSH_CONTEXT_WINDOW":os.getenv("CS_AI_CONTEXT_WINDOW","65536"),
+             "DSH_SYSTEM_PROMPT":SYSTEM_PROMPT,"CSBOT_MODEL":model,
+             "CSBOT_MEMORY_DIR":str(root/"memory"),"CSBOT_WORKSPACE":str(workspace),
+             "CSBOT_BRIDGE":str(RUNTIME/"dsh/bridge.mjs"),"CSBOT_REMEMBER":"1" if remember else "0",
+             "CSBOT_VISION":"1" if vision else "0","CSBOT_THINKING":"1" if thinking else "0",
+             "NODE_OPTIONS":"--max-old-space-size=256"}
+        paths=set(map(str,read_paths))
+        if code_snapshot: paths.update(code_snapshot.files)
+        async def gateway(request):
+            result=await dispatch(request)
+            if request.get("method")=="image" or (request.get('method')=='call' and request.get('name')=='member_avatar'):
+                for field in ("full_path","thumbnail_path"):
+                    if result.get(field): paths.add(result[field])
+            return result
+        sandbox=ScriptSandbox(gateway,workspace/"artifacts",source_root=code_snapshot.root if code_snapshot else None)
+        profile=root/("memory-import-profile.json" if memory_only else "profile.json")
+        profile.write_text(json.dumps(render_profile(env)))
+        async with LIVE_SLOTS:
+            if on_started:await on_started()
+            process=await asyncio.create_subprocess_exec(str(executable),"--profile","sdk-minimal",
+                "--patch",str(profile),cwd=workspace,env=env,
+                stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,
+                limit=2*1024**2)
+            # Drain diagnostics without copying user chat or credentials into logs.
+            error_tail=bytearray()
+            async def drain_errors():
+                while chunk:=await process.stderr.read(8192):
+                    error_tail.extend(chunk)
+                    del error_tail[:-16000]
+            errors=asyncio.create_task(drain_errors())
+            result=None
+            acks={}
+            write_lock=asyncio.Lock()
+            async def send(value):
+                async with write_lock:
+                    process.stdin.write((json.dumps(value,ensure_ascii=False)+'\n').encode())
+                    await process.stdin.drain()
+            async def steer(text):
+                import uuid
+                key=uuid.uuid4().hex
+                future=asyncio.get_running_loop().create_future();acks[key]=future
                 try:
-                    if event['method']=='guard_output' and guard is not None:
-                        value=await guard(event['text'])
-                    elif event['method']=='execute_python':
-                        value=await sandbox.run(event['code'])
-                        paths.update(value.get('artifacts',[]))
-                        if on_images and value.get('deliver_images') and value['exit_code']==0:
-                            await on_images(value['deliver_images'])
-                    else:raise ValueError('unknown bridge method')
-                    reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths)}
-                except Exception as exc:
-                    reply={'type':'rpc_result','id':event['id'],'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
-                await send(reply)
-        try:
-            async with asyncio.timeout(600):
-                while line:=await process.stdout.readline():
-                    if not line.startswith(b"CSBOT:"): continue
-                    event=json.loads(line[6:])
-                    if event["type"]=="ready":
-                        request={"type":"start","sessionId":"csbot-"+scope,"text":text,
-                                 "context":context,"remember":remember,"readPaths":list(paths),"guard":guard is not None,
-                                 "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles)}
-                        await send(request)
-                        if run_id:ACTIVE[run_id]=steer
-                    elif event['type']=='steer_ack':
-                        if future:=acks.get(event['id']):
-                            if not future.done():future.set_result(event['accepted'])
-                    elif event['type']=='trace':
-                        if on_event:
-                            for item in event['events']:on_event(item)
-                    elif event["type"]=="rpc":
-                        rpc_tasks.append(asyncio.create_task(handle_rpc(event)))
-                    elif event["type"]=="complete": result=event
-                    elif event["type"]=="error":
-                        # Configuration/runtime details are available through
-                        # explicit preflight, never echoed into a group chat.
-                        raise RuntimeError("DSH execution failed")
-                await process.wait()
-                if process.returncode or not result:
-                    raise RuntimeError("DSH process exited without a durable result")
-                if result.get("reason",{}).get("kind")!="completed":
-                    raise RuntimeError("DSH turn did not complete")
-                return result
-        finally:
-            if run_id:ACTIVE.pop(run_id,None)
-            for future in acks.values():
-                if not future.done():future.set_exception(ValueError('补充未确认，执行进程已退出；未自动重复提交'))
-            for task in rpc_tasks:
-                if not task.done():task.cancel()
-            await asyncio.gather(*rpc_tasks,return_exceptions=True)
-            if process.returncode is None:
-                process.kill()
-                await process.wait()
-            await errors
-            if diagnostics and error_tail:
-                diagnostics(error_tail.decode(errors="replace").replace(api_key,"[REDACTED]").replace(endpoint,"[MODEL_ENDPOINT]"))
+                    await send({'type':'steer','id':key,'text':text})
+                    return await asyncio.wait_for(asyncio.shield(future),10)
+                except (BrokenPipeError,ConnectionResetError,TimeoutError):
+                    raise ValueError('补充的投递状态尚未确认，请查看当前回复；未自动重复提交') from None
+                finally:acks.pop(key,None)
+            rpc_tasks=[]
+            rpc_slots=asyncio.Semaphore(1)
+            async def handle_rpc(event):
+                async with rpc_slots:
+                    try:
+                        if event['method']=='guard_output' and guard is not None:
+                            value=await guard(event['text'])
+                        elif event['method']=='execute_python':
+                            value=await sandbox.run(event['code'])
+                            paths.update(value.get('artifacts',[]))
+                            if on_images and value.get('deliver_images') and value['exit_code']==0:
+                                await on_images(value['deliver_images'])
+                        else:raise ValueError('unknown bridge method')
+                        reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths)}
+                    except Exception as exc:
+                        reply={'type':'rpc_result','id':event['id'],'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
+                    await send(reply)
+            try:
+                async with asyncio.timeout(600):
+                    while line:=await process.stdout.readline():
+                        if not line.startswith(b"CSBOT:"): continue
+                        event=json.loads(line[6:])
+                        if event["type"]=="ready":
+                            request={"type":"start","sessionId":"csbot-"+scope,"text":text,
+                                     "context":context,"remember":remember,"readPaths":list(paths),"guard":guard is not None,
+                                     "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles)}
+                            await send(request)
+                            if run_id:ACTIVE[run_id]=steer
+                        elif event['type']=='steer_ack':
+                            if future:=acks.get(event['id']):
+                                if not future.done():future.set_result(event['accepted'])
+                        elif event['type']=='trace':
+                            if on_event:
+                                for item in event['events']:on_event(item)
+                        elif event["type"]=="rpc":
+                            rpc_tasks.append(asyncio.create_task(handle_rpc(event)))
+                        elif event["type"]=="complete": result=event
+                        elif event["type"]=="error":
+                            # Configuration/runtime details are available through
+                            # explicit preflight, never echoed into a group chat.
+                            raise RuntimeError("DSH execution failed")
+                    await process.wait()
+                    if process.returncode or not result:
+                        raise RuntimeError("DSH process exited without a durable result")
+                    if result.get("reason",{}).get("kind")!="completed":
+                        raise RuntimeError("DSH turn did not complete")
+                    return result
+            finally:
+                if run_id:ACTIVE.pop(run_id,None)
+                for future in acks.values():
+                    if not future.done():future.set_exception(ValueError('补充未确认，执行进程已退出；未自动重复提交'))
+                for task in rpc_tasks:
+                    if not task.done():task.cancel()
+                await asyncio.gather(*rpc_tasks,return_exceptions=True)
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                await errors
+                if diagnostics and error_tail:
+                    diagnostics(error_tail.decode(errors="replace").replace(api_key,"[REDACTED]").replace(endpoint,"[MODEL_ENDPOINT]"))

@@ -38,6 +38,9 @@ async def check(args):
         if not installed.is_file() or json.loads(installed.read_text())['version']!=want:
             raise ValueError('DSH/Mneme dependency version mismatch; run npm ci --ignore-scripts')
     print(f'PASS: Python, Node {version}, pinned DSH/Mneme')
+    from ai_runtime.source import reviewed_files
+    reviewed_files()
+    print('PASS: reviewed business source manifest matches deployed files')
     subprocess.run(['docker','image','inspect','csbot-ai-python:1','--format','{{.Id}}'],check=True,capture_output=True,timeout=10)
     from ai_runtime.sandbox import ScriptSandbox
     async def deny(_): raise ValueError('preflight has no script data access')

@@ -19,7 +19,7 @@ async def main():
             raw=Path(value['path']).read_bytes();assert raw.startswith(b'\x89PNG');images.append(raw)
     async def deny(_):raise ValueError('Synthetic acceptance has no database access')
     original=ScriptSandbox.__init__
-    def initialize(self,dispatch,artifacts,image='csbot-ai-python:realtime-candidate'):original(self,dispatch,artifacts,image)
+    def initialize(self,dispatch,artifacts,image='csbot-ai-python:realtime-candidate',**kwargs):original(self,dispatch,artifacts,image,**kwargs)
     with tempfile.TemporaryDirectory(prefix='csbot-live-stream-') as tmp,patch.object(ScriptSandbox,'__init__',initialize):
         task=asyncio.create_task(run_dsh(scope=scope_key('web','0','0','stream'),run_id='live-fixture',
             text='这是合成数据功能验收，不查询群资料，不需记忆。必须调用 execute_python：import time,csdata; time.sleep(3); csdata.configure_plot(); import matplotlib.pyplot as plt; plt.plot([1,2,3],[2,4,3]); plt.title("测试趋势"); plt.savefig("chart.png"); plt.close(); csdata.artifact("chart.png",send=True,caption="测试趋势"); print(sum(range(1,101)))。最终回复计算结果。',

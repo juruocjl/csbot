@@ -10,8 +10,9 @@ import uuid
 
 
 class ScriptSandbox:
-    def __init__(self, dispatch, artifacts: Path, image="csbot-ai-python:1"):
+    def __init__(self, dispatch, artifacts: Path, image="csbot-ai-python:1", *, source_root: Path | None = None):
         self.dispatch,self.artifacts,self.image = dispatch,artifacts,image
+        self.source_root = source_root
 
     async def run(self, code: str):
         if not isinstance(code,str) or len(code.encode()) > 64*1024:
@@ -48,7 +49,8 @@ class ScriptSandbox:
 
         with tempfile.TemporaryDirectory(prefix="csbot-broker-") as directory:
             # Docker mounts only this empty transport directory, never secrets,
-            # source checkout, model credentials, DB files or the Docker socket.
+            # model credentials, DB files or the Docker socket. Optional /source
+            # contains only the reviewed disposable snapshot, never the checkout.
             os.chmod(directory,0o755)
             socket_path = Path(directory)/"data.sock"
             server = await asyncio.start_unix_server(serve,str(socket_path),limit=32769)
@@ -63,6 +65,8 @@ class ScriptSandbox:
                        ]
             font=Path(__file__).resolve().parents[1]/'assets/merged.ttf'
             if font.is_file():command+=['--mount',f'type=bind,src={font},dst=/opt/chart-font.ttf,readonly']
+            if self.source_root is not None:
+                command += ["--mount", f"type=bind,src={self.source_root},dst=/source,readonly"]
             command.append(self.image)
             process = None
             output=bytearray()

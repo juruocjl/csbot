@@ -3,6 +3,7 @@ import asyncio
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import sys
@@ -26,8 +27,17 @@ class Provider(BaseHTTPRequestHandler):
             time.sleep(0.3)  # Catch exit-before-distillation races with real latency.
             content='[{"type":"preference","title":"fixture preference","content":"QQ 123 喜欢茶。","importance":4}]'
             delta={"role":"assistant","content":content};finish="stop"
+        elif messages[-1].get("role")=="tool" and "SOURCE_READ_CASE" in str(messages):
+            body = str(messages[-1].get("content"))
+            match = re.search(r'`([^`]+/plugins/fudu/__init__\.py)`', body)
+            if match:
+                delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_source_code","type":"function","function":{"name":"read","arguments":json.dumps({"file_path":match[1],"offset":330,"limit":100})}}]};finish="tool_calls"
+            else:
+                delta={"role":"assistant","content":"Source checked."};finish="stop"
         elif messages[-1].get("role")=="tool":
             delta={"role":"assistant","content":"File permission checked."};finish="stop"
+        elif "SOURCE_READ_CASE" in str(messages[-1].get("content")):
+            delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_source_index","type":"function","function":{"name":"read","arguments":json.dumps({"file_path":"SOURCE.md"})}}]};finish="tool_calls"
         elif "DENY_FILE" in str(messages[-1].get("content")):
             delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"read","arguments":json.dumps({"file_path":"/etc/passwd"})}}]};finish="tool_calls"
         else:
@@ -79,6 +89,12 @@ async def main():
             assert any("outside the authorized" in str(m.get("content")) for m in tool_messages)
             assert not any("root:x:" in str(m.get("content")) for m in tool_messages)
             print("PASS: minimal tool schema; native file tool cannot read host files")
+            start=len(REQUESTS)
+            result=await run(scope_key("web","1","123","source"),"SOURCE_READ_CASE",remember=False)
+            tool_messages=[m for r in REQUESTS[start:] for m in r["messages"] if m.get("role")=="tool"]
+            assert any("random.choices" in str(m.get("content")) for m in tool_messages)
+            assert any("calc_roll_point" in str(m.get("content")) for m in tool_messages)
+            print("PASS: native read opens current source index and authorized business code without new tools")
             start=len(REQUESTS)
             async def guard(_):return "SAFE_FINAL"
             result=await run(scope_key("qq","2","123"),"GUARD_CASE",guard=guard)

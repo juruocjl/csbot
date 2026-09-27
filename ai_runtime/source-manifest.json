@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "files": {
+    "plugins/fudu/__init__.py": "c687d9d0bcd0e42b00f62f2c684b609a74503139d0cf01fad72f3bfd6b1259a9",
+    "plugins/fudu/config.py": "8f8849f0fe979ff3ee52f1580d5bb198deabc052942354d67a3fb73c4b4a9289",
+    "plugins/allmsg/__init__.py": "0d522db0d70b36b11eceb7051a7d42d8be0d668aced6be03d83857227392c390",
+    "plugins/cs_db_val/__init__.py": "55159bdafa1b9eae7ad4624ca1d9c219fd2b10d8f3f0461ab58825d6d18ee004",
+    "plugins/models/__init__.py": "024bf9eafad8c8eb39f94e9422f6d6e263d02d5d141b91050086adb2c02907f0",
+    "plugins/utils/__init__.py": "8a25e0507cc49e97a22299bc696679f544d20362d2bb4ef32a656650f18b50dd",
+    "plugins/cs/__init__.py": "3bbbe74926b5d7999c6feec419a14a5038eb8558588e4713cd10c2ac6fea1a02",
+    "plugins/cs_report/__init__.py": "3e94d514450f198607d2fadf48f2d53413ed945392b8958fe72ba7ba0c0752a5",
+    "plugins/small_funcs/__init__.py": "6c33adc5e0d1ff387e8725c71a74ac2170771adab14af9ad5637c1197f9e7ccd",
+    "plugins/time_location/__init__.py": "4bc2c8247321f2d471a644c568a0c316fe78c63753a2843c537cdbd7061caad5",
+    "plugins/time_location/logic.py": "2ec872b11e1bf198bfdad929adaddadc06a8ddd480963b02e4247e8070a74e5f",
+    "ai_runtime/group.py": "654a8d98d082641c05de0bc6f921f476b962fef7aad3c1095de895dd0f1b5e31",
+    "ai_runtime/queries.py": "a880a17d1cfa9c2417f32feff5815d0875bbe33db58eaa1f9ec444161ae2f90a"
+  }
+}
