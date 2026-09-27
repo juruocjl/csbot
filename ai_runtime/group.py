@@ -125,7 +125,14 @@ class GroupKnowledge:
                         if picture.width * picture.height > 4_000_000:
                             raise ValueError('avatar pixel limit')
                         picture.verify()
-                    return self.cache.put(bytes(content), private=True)
+                    # MediaCache uses .png paths. DSH rejects JPEG bytes at a
+                    # .png path, so normalize this fetched avatar before storage.
+                    with Image.open(BytesIO(content)) as picture:
+                        picture.seek(0)
+                        picture.thumbnail((640, 640))
+                        normalized = BytesIO()
+                        picture.convert('RGBA').save(normalized, format='PNG')
+                    return self.cache.put(normalized.getvalue(), private=True)
                 self._avatars[uid] = await asyncio.to_thread(save)
             except Exception:
                 raise ValueError('QQ avatar unavailable; do not claim to have viewed it') from None

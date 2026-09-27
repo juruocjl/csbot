@@ -68,7 +68,7 @@ class Checks(unittest.IsolatedAsyncioTestCase):
             await group.call('group_admins', {})
 
     async def test_avatar_fixed_url_private_cache(self):
-        buffer = BytesIO(); Image.new('RGB', (16, 16), 'blue').save(buffer, format='PNG')
+        buffer = BytesIO(); Image.new('RGB', (16, 16), 'blue').save(buffer, format='JPEG')
         class Response:
             status = 200
             content = None
@@ -88,6 +88,7 @@ class Checks(unittest.IsolatedAsyncioTestCase):
             result = await self.group.call('member_avatar', {'uid': '2'})
             self.assertEqual(result['full_status'], 'available')
             self.assertTrue(Path(result['full_path']).is_relative_to(Path(tmp).resolve()/'.private'))
+            self.assertEqual(Image.open(result['full_path']).format, 'PNG')
             self.assertTrue(Path(result['thumbnail_path']).is_file())
             self.group.cache.db.close()
 
