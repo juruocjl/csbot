@@ -34,7 +34,7 @@ async def main():
             async def script_fixture(self, code):
                 if mode == "failure":
                     raise ValueError("数据库查询暂时失败，未返回点数数据")
-                return {"exit_code": 0, "stdout": json.dumps({"rows": [], "has_more": False, "message": "检索未找到补充线索"}, ensure_ascii=False), "stderr": "", "artifacts": []}
+                return {"exit_code": 0, "output": json.dumps({"rows": [], "has_more": False, "message": "检索未找到补充线索"}, ensure_ascii=False), "stderr": "", "artifacts": []}
             options = dict(scope=scope_key("qq", name, "11111"),
                            state_root=Path(tmp), dispatch=deny,
                            model=config["CS_AI_MODEL"], endpoint=config["CS_AI_URL"],

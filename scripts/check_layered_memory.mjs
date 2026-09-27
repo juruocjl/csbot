@@ -25,7 +25,14 @@ test('layering, evidence, correction, clutter, scope and failed persistence',asy
  const corrected={...fact,subject:'33333',content:'小茶是QQ 33333（茶茶）',evidence:[{id:'source',quote:'纠正，小茶是QQ 33333（茶茶）'}],supersedes:[first.id]};
  const second=await save.execute(corrected,exec);assert(db.get(first.id).forgotten);assert((await foundationalContext(exec,'小茶')).includes('33333'));assert(!(await foundationalContext(exec,'小茶')).includes('22222'));
  await forget.execute({id:second.id},exec);assert(!(await foundationalContext(exec,'小茶')).includes('33333'));
- setup();approved=false;await saveSummary([fact],exec);assert([...db.values()].some(x=>unpack(x.content)?.tier==='episode'&&unpack(x.content).text.includes('未确认')));approved=true;
- setup();fail=true;await assert.rejects(saveSummary([{title:'new',content:'new',tier:'topic'}],exec),/disk unavailable/);fail=false;
+ setup();approved=false;const beforeReject=db.size;assert.equal((await saveSummary([fact],exec))[0].action,'skipped');assert.equal(db.size,beforeReject);assert.equal((await saveSummary([{title:'行程',content:'自称去旁听，未经证实',tier:'episode'}],exec))[0].action,'skipped');assert.equal(db.size,beforeReject);await assert.rejects(save.execute({title:'错读反话',content:'要去旅游',tier:'episode'},exec),/暂不保存/);approved=true;
+ setup();const episode=await save.execute({...fact,tier:'episode'},exec);assert.equal(unpack(db.get(episode.id).content).evidence[0].quote,fact.evidence[0].quote);fail=true;await assert.rejects(saveSummary([{title:'new',content:'new',tier:'topic'}],exec),/disk unavailable/);fail=false;
  configureMemory({events:()=>[{seq:1,type:'user/message',data:{source:{kind:'plugin'},content:[{type:'text',text:'旁听秘密'}]}},{seq:2,type:'tool/call',data:{name:'memory_search',callId:'m'}},{seq:3,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'m',content:[{type:'text',text:'旧错误'}]}]}}}]});assert.deepEqual(sources(),[]);
+});
+
+test('failed Python output cannot be memory evidence',()=>{
+ configureMemory({events:()=>[
+  {seq:1,type:'tool/call',data:{name:'execute_python',callId:'p',arguments:'print(fake)'}},
+  {seq:2,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'p',content:[{type:'text',text:JSON.stringify({exit_code:1,output:'unverified partial data'})}]}]}}}
+ ]});assert.deepEqual(sources(),[]);
 });

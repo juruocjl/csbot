@@ -26,7 +26,7 @@ class Provider(BaseHTTPRequestHandler):
         if not body.get("tools"):
             time.sleep(0.3)  # Catch exit-before-distillation races with real latency.
             content='[{"type":"preference","title":"fixture preference","content":"QQ 123 喜欢茶。","importance":4}]'
-            if '核验群聊基础知识。' in str(messages):
+            if '核验群聊记忆。' in str(messages):
                 content='{"approved":true}'
             elif 'LAYER_FOUNDATION' in str(messages):
                 catalog=json.loads(messages[-1]['content'].split('：\n',1)[1].split('\n已有基础知识',1)[0])

@@ -17,7 +17,7 @@ export function sources(){
   for(const e of runtime.events()){
     if(e.type==='tool/call')calls.set(e.data.callId,e.data);
     if(e.type==='user/message'&&e.data?.source?.kind==='user')result.push({id:`event:${e.seq}`,kind:'user',text:textOf(e.data.content)});
-    if(e.type==='tool/result')for(const b of e.data?.message?.content??[])if(b.type==='tool-result'&&!b.isError){const call=calls.get(b.toolCallId);if(!call||call.name.startsWith('memory_'))continue;const text=textOf(b.content);if(text.length<=12000)result.push({id:`event:${e.seq}`,kind:'tool',text,tool:call.name,arguments:String(call.arguments).slice(0,12000)});}
+    if(e.type==='tool/result')for(const b of e.data?.message?.content??[])if(b.type==='tool-result'&&!b.isError){const call=calls.get(b.toolCallId);if(!call||call.name.startsWith('memory_'))continue;const text=textOf(b.content);if(call.name==='execute_python'){try{if(JSON.parse(text).exit_code!==0)continue;}catch{continue;}}if(text.length<=12000)result.push({id:`event:${e.seq}`,kind:'tool',text,tool:call.name,arguments:String(call.arguments).slice(0,12000)});}
   }
   // Do not promote truncated evidence; passive injected messages and reasoning never qualify.
   const ordered=[...(runtime.inputSources?.()??[]),...result.reverse()];const seen=new Set();
@@ -28,14 +28,17 @@ export function normalize(args,evidence=sources()){
   if(!TIERS.includes(tier))throw new MemoryPolicyError('Unknown memory tier');
   if(typeof args.title!=='string'||!args.title.trim()||args.title.length>160||typeof args.content!=='string'||!args.content.trim()||args.content.length>8000)throw new MemoryPolicyError('Memory needs a concise title and content (max 8000 characters)');
   const data={schema:'csbot-memory-v1',tier,category:tier==='foundation'?args.category:'',subject:String(args.subject??''),keys:Array.isArray(args.keys)?[...new Set(args.keys.filter(k=>typeof k==='string'&&k.trim()&&k.length<=80))].slice(0,8):[],text:args.content.trim(),evidence:[],supersedes:[]};
-  if(tier==='foundation'){
-    if(!CATEGORIES.includes(data.category)||!data.subject||data.subject.length>100||!data.keys.length||data.text.length>700)throw new MemoryPolicyError('Foundation requires category, explicit subject, lookup keys and <=700 character content');
-    if(!Array.isArray(args.evidence)||!args.evidence.length||args.evidence.length>4)throw new MemoryPolicyError('Foundation requires source evidence; use topic/episode for uncertain material');
+  if(args.evidence!==undefined){
+    if(!Array.isArray(args.evidence)||args.evidence.length>4)throw new MemoryPolicyError('Invalid evidence references');
     for(const ref of args.evidence){
       const source=evidence.find(s=>s.id===ref.id);
       if(!source||typeof ref.quote!=='string'||ref.quote.length<4||ref.quote.length>1500||!source.text.includes(ref.quote))throw new MemoryPolicyError('Evidence must quote a complete available source exactly');
       data.evidence.push({id:source.id,kind:source.kind,quote:ref.quote,...(source.kind==='tool'?{tool:source.tool,arguments:source.arguments}:{})});
     }
+  }
+  if(tier==='foundation'){
+    if(!CATEGORIES.includes(data.category)||!data.subject||data.subject.length>100||!data.keys.length||data.text.length>700)throw new MemoryPolicyError('Foundation requires category, explicit subject, lookup keys and <=700 character content');
+    if(!Array.isArray(args.evidence)||!args.evidence.length||args.evidence.length>4)throw new MemoryPolicyError('Foundation requires source evidence; use topic/episode for uncertain material');
     if(data.category==='alias'){
       data.subject=data.subject.trim().replace(/^QQ[：:\s]*/i,'');
       data.keys=data.keys.filter(k=>!['称呼','昵称','别名','alias','QQ','qq','人物','用户','群友'].includes(k));
@@ -85,8 +88,10 @@ async function save(args,exec){
     
     const current=await allMemories(exec);
     for(const id of data.supersedes){const old=current.find(i=>i.id===id),meta=old&&unpack(old.content);if(!meta||meta.tier!=='foundation'||meta.category!==data.category||!meta.keys.some(k=>data.keys.includes(k)))throw new MemoryPolicyError('Corrections must refer to visible foundation entries with the same category and overlapping keys');}
-    if(!runtime?.verify||!await runtime.verify({...data,replaces:current.filter(i=>data.supersedes.includes(i.id)).map(publicItem)}))throw new MemoryPolicyError('证据不足以确认稳定事实或明确纠正，请查证');
+    data.replaces=current.filter(i=>data.supersedes.includes(i.id)).map(publicItem);
   }
+  if(!runtime?.verify||!await runtime.verify(data))throw new MemoryPolicyError('原文不足以支持此记忆的主体、含义或事实性质，暂不保存；不要用未证实标签绕过。');
+  delete data.replaces;
   data.recorded_at=new Date().toISOString();
   const digest=createHash('sha256').update(JSON.stringify([data.tier,data.category,data.subject,data.keys.slice().sort(),data.text,data.supersedes])).digest('hex').slice(0,20);
   const title=`${args.title.trim()} [${digest}]`;
@@ -106,16 +111,17 @@ export async function saveSummary(entries,exec){
   for(const entry of entries){
     try{result.push(await save(entry,exec));}
     catch(error){
-      // Keep rejected promotions as searchable dated material, explicitly unconfirmed.
-      if(entry.tier!=='foundation'||!(error instanceof MemoryPolicyError))throw error;
-      result.push(await save({...entry,tier:'episode',content:`未确认的基础知识候选（不作为确定事实）：${entry.content}\n未提升原因：${error.message}`},exec));
+      // A rejected interpretation is not made valid by moving it to a lower tier.
+      // Leave existing/manual memories untouched; infrastructure failures still fail the flush.
+      if(!(error instanceof MemoryPolicyError))throw error;
+      result.push({action:'skipped',reason:error.message});
     }
   }
   return result;
 }
 export function wrapMemoryTool(tool){
   native.set(tool.name,tool);
-  if(tool.name==='memory_save')return {...tool,description:'保存分层记忆。foundation仅用于已确认人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)，需明确subject、keys、原文evidence。topic保存专题背景/偏好；episode保存临时统计/资料/不确定推测。省略tier默认episode。基础层纠正用supersedes列出已检索的旧ID。不要把提问者当被讨论者。',parameters:{type:'object',properties:{type:{type:'string'},importance:{type:'integer'},source:{type:'string'},tags:{type:'array',items:{type:'string'}},title:{type:'string'},content:{type:'string'},tier:{type:'string',enum:TIERS},category:{type:'string',enum:CATEGORIES},subject:{type:'string',description:'alias类别必须填纯数字QQ，例如22222；其他类别填写适用对象。不能填提问者QQ代替被讨论者。'},keys:{type:'array',items:{type:'string'},description:'具体昵称、外号、黑话、约定名称；不要用称呼/昵称等泛词'},evidence:{type:'array',items:{type:'object',properties:{id:{type:'string'},quote:{type:'string'}},required:['id','quote'],additionalProperties:false}},supersedes:{type:'array',items:{type:'string'}}},required:['title','content'],additionalProperties:false},execute:save};
+  if(tool.name==='memory_save')return {...tool,description:'保存分层记忆。foundation仅用于已确认人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)，需明确subject、keys、原文evidence。topic保存专题背景/偏好；episode保存有依据的临时统计/资料/明确待查问题。所有层都须准确反映表达性质；反话、玩笑、假设不能按字面存成经历或计划，意思不明先不保存。省略tier默认episode。基础层纠正用supersedes列出已检索的旧ID。不要把提问者当被讨论者。',parameters:{type:'object',properties:{type:{type:'string'},importance:{type:'integer'},source:{type:'string'},tags:{type:'array',items:{type:'string'}},title:{type:'string'},content:{type:'string'},tier:{type:'string',enum:TIERS},category:{type:'string',enum:CATEGORIES},subject:{type:'string',description:'alias类别必须填纯数字QQ，例如22222；其他类别填写适用对象。不能填提问者QQ代替被讨论者。'},keys:{type:'array',items:{type:'string'},description:'具体昵称、外号、黑话、约定名称；不要用称呼/昵称等泛词'},evidence:{type:'array',items:{type:'object',properties:{id:{type:'string'},quote:{type:'string'}},required:['id','quote'],additionalProperties:false}},supersedes:{type:'array',items:{type:'string'}}},required:['title','content'],additionalProperties:false},execute:save};
   if(tool.name==='memory_search')return {...tool,description:tool.description+' Results carry tier/category/evidence. Foundation comes first; legacy and episode material is not confirmed current knowledge.',output:{schema:{type:'object'},render:(_,v)=>[{type:'text',text:JSON.stringify(v)}]},async execute(args,exec){
     const result=await tool.execute({...args,limit:100},exec);
     const core=(await allMemories(exec)).filter(i=>metadata(i)?.tier==='foundation'&&JSON.stringify(publicItem(i)).toLowerCase().includes(args.query.toLowerCase()));
