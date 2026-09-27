@@ -124,13 +124,29 @@ export function apply(ctx) {
     if (req.legacyMemory) {
       // Import previously explicit group memory faithfully, without another
       // model rewrite. Stable titles make a crash/retry idempotent.
-      const parts=req.legacyMemory.match(/[\s\S]{1,4000}/g) ?? [];
+      const characters=Array.from(req.legacyMemory);
+      const parts=[];for(let i=0;i<characters.length;i+=4000)parts.push(characters.slice(i,i+4000).join(''));
       for (let index=0;index<parts.length;index++) {
         const result=await ctx.tools.execute({callId:randomUUID(),name:'memory_save',
           arguments:{type:'history',title:`旧群记忆迁移 ${index+1}`,content:parts[index],
                      source:'legacy-ai-mem-explicit',importance:4},agent:handle.agent,signal:new AbortController().signal});
         if (result.isError) throw new Error('Legacy memory import failed');
       }
+    }
+    if(req.memoryOnly) {
+      accepting=false;
+      let verified=0;
+      for(const title of req.memoryCheckTitles ?? []) {
+        const result=await ctx.tools.execute({callId:randomUUID(),name:'memory_search',
+          arguments:{query:title,mode:'keyword',limit:100},agent:handle.agent,signal:new AbortController().signal});
+        if(result.isError || !result.value?.items?.some(item=>item.title===title))throw new Error('Imported memory is not searchable');
+        verified++;
+      }
+      await flushMemory();await ctx.sessionPersistence.flush();
+      clearInterval(traceTimer);trace=[];
+      await handle.dispose();
+      emit({type:'complete',reason:{kind:'completed'},messages:[],tools:[],verified});
+      input.close();process.exit(0);
     }
     const before = handle.agent.session.snapshotEvents().length;
     if (req.context) handle.agent.inject(createUserMessage({content:[{type:'text',text:req.context}],source:{kind:'plugin',plugin:'csbot-context'}}));

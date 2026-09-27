@@ -99,14 +99,6 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     context,cutoff=await catch_up(factory,store,gid,scope)
                 else:
                     context,cutoff="网页个人对话；需要群资料时主动检索，不把网页内容写入群记忆。" if channel=="web" else "自动报告任务；不提炼长期记忆。",0
-                legacy=""
-                migrate=channel=="qq" and not store.rows("SELECT 1 FROM migrations WHERE scope=? AND name='legacy-manual-memory'",(scope,))
-                if migrate:
-                    async with factory() as session:
-                        old=await session.scalar(text("SELECT mem FROM ai_mem WHERE gid=:gid"),{"gid":gid})
-                    legacy=(old or "").split("[自动日报周报知识]",1)[0].strip()
-                    if len(legacy)>64000:
-                        raise ValueError("旧群记忆超过自动迁移上限，需要管理员分批导入；原数据保持不变")
                 context="本轮表达风格："+instruction(persona)+"\n服务端确认的本轮身份："+json.dumps({"channel":channel,"group_id":gid,"user_id":uid,"persona_this_turn":persona,
                     "current_time":datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()},ensure_ascii=False)+"\n"+context
                 store.execute("UPDATE runs SET cutoff=? WHERE id=?",(cutoff,chat_id))
@@ -124,10 +116,8 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                         publish(chat_id,{'type':'image','id':image_id,'caption':value['caption']})
                 result=await run_dsh(scope=scope,text=f"QQ用户 {uid}：{prompt}" if uid else prompt,
                     context=context,model=model,endpoint=endpoint,api_key=api_key,dispatch=dispatch,
-                    remember=channel in {"qq","web"},vision=vision,thinking=thinking,guard=guard if channel!='web' else None,legacy_memory=legacy,
+                    remember=channel in {"qq","web"},vision=vision,thinking=thinking,guard=guard if channel!='web' else None,
                     run_id=chat_id,on_event=lambda event:publish(chat_id,event),on_images=images,on_started=started)
-                if migrate:
-                    store.execute("INSERT OR IGNORE INTO migrations(scope,name,completed_at) VALUES(?,'legacy-manual-memory',?)",(scope,int(time.time())))
                 output="\n\n".join(item["content"] for item in result["messages"])
                 if not output.strip(): raise RuntimeError("model returned no public answer")
                 # Legacy record compatibility; detailed native events use scoped SSE access.

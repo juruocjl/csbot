@@ -28,7 +28,6 @@ from ..cs_db_upd import LockingError
 
 require("cs_ai")
 from ..cs_ai import ai_ask_main
-from ..cs_ai import db as ai_db
 
 
 from .config import Config
@@ -165,7 +164,6 @@ async def send_day_report_function():
             group_id=groupid,
             message=render_at_segments(ai_report)
         )
-        await ai_db.remember_report_knowledge(sid, "日报", daily_report, ai_report)
 
 @scheduler.scheduled_job("cron", day_of_week="sun", hour="23", minute="45", id="weekreport")
 async def send_week_report():
@@ -197,4 +195,3 @@ async def send_week_report():
             group_id=groupid,
             message=render_at_segments(ai_report)
         )
-        await ai_db.remember_report_knowledge(sid, "周报", weekly_report, ai_report)

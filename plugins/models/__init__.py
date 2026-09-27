@@ -356,7 +356,7 @@ class SteamExtraInfo(Base):
 
     legacyScore: Mapped[float] = mapped_column(Float)
 
-# AI 记忆存储
+# 旧 AI 记忆归档：仅供离线迁移/核对，运行时不再读写。保留表以便恢复。
 class AIMemory(Base):
     __tablename__ = "ai_mem"
 

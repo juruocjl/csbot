@@ -89,7 +89,7 @@ def render_profile(env):
 async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: str,
                   api_key: str, dispatch, read_paths=(), remember=True,
                   vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False,
-                  run_id=None,on_event=None,on_images=None,on_started=None):
+                  run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=()):
     from .sandbox import ScriptSandbox
     root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
     workspace=root/"workspace"
@@ -97,7 +97,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
     # Generated scratch artifacts live for one turn. Chat thumbnails and
     # normalized DSH previews retain their separate persistence policy.
     artifacts=workspace/'artifacts'
-    if artifacts.is_dir():
+    if not memory_only and artifacts.is_dir():
         for path in artifacts.iterdir():
             if path.is_file() and not path.is_symlink(): path.unlink()
     os.chmod(root,0o700)
@@ -124,7 +124,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                 if result.get(field): paths.add(result[field])
         return result
     sandbox=ScriptSandbox(gateway,workspace/"artifacts")
-    profile=root/"profile.json"
+    profile=root/("memory-import-profile.json" if memory_only else "profile.json")
     profile.write_text(json.dumps(render_profile(env)))
     async with LIVE_SLOTS:
         if on_started:await on_started()
@@ -181,7 +181,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                     if event["type"]=="ready":
                         request={"type":"start","sessionId":"csbot-"+scope,"text":text,
                                  "context":context,"remember":remember,"readPaths":list(paths),"guard":guard is not None,
-                                 "legacyMemory":legacy_memory,"compact":compact}
+                                 "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles)}
                         await send(request)
                         if run_id:ACTIVE[run_id]=steer
                     elif event['type']=='steer_ack':
