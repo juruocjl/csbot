@@ -45,6 +45,17 @@ print("isolation fixture passed")
         assert len(result["artifacts"])==1
         assert Path(result["artifacts"][0]).read_text()=='{"fixture": true}'
         print("PASS: scoped broker, no inherited credentials, no Docker socket, read-only root, no network, cgroup memory/PID limits, artifact export")
+        result=await sandbox.run("""import csdata
+csdata.configure_plot()
+import matplotlib.pyplot as plt
+plt.plot([1,2,3],[2,4,3]);plt.title('合成测试趋势');plt.savefig('chart.png');plt.close()
+csdata.artifact('chart.png',send=True,caption='测试图')
+""")
+        assert result['exit_code']==0,result['output']
+        assert len(result['deliver_images'])==1 and result['deliver_images'][0]['caption']=='测试图'
+        assert Path(result['deliver_images'][0]['path']).read_bytes().startswith(b'\x89PNG')
+        assert 'Glyph' not in result['output'],result['output']
+        print('PASS: isolated matplotlib with Chinese font produces an explicitly submitted PNG')
         try:
             await sandbox.run("print('x' * (5 * 1024 * 1024))")
         except ValueError as exc:

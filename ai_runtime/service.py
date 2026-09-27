@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import weakref
 import time
+import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -19,6 +20,7 @@ from .media import media_cache
 from .runner import run_dsh,scope_key
 from .store import state_store
 from .style import instruction
+from .events import publish
 
 LOCKS=weakref.WeakValueDictionary()
 
@@ -34,6 +36,10 @@ def register(chat_id,gid,uid,prompt,channel="qq",conversation="default"):
     if store.rows("SELECT count(*) AS n FROM runs WHERE status IN ('queued','running')")[0]["n"]>=8:
         raise ValueError("AI 队列已满，稍后再试")
     store.register_run(chat_id,scope,gid,uid,channel,prompt)
+    from .events import prune
+    prune()
+    publish(chat_id,{'type':'request','text':prompt,'channel':channel})
+    publish(chat_id,{'type':'status','status':'queued'})
     return store.get_run(chat_id)
 
 
@@ -68,7 +74,6 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
         # Recheck after waiting: a duplicate HTTP/task dispatch must not run twice.
         if store.get_run(chat_id)["status"]!="queued":
             raise ValueError("request already consumed")
-        store.execute("UPDATE runs SET status='running' WHERE id=?",(chat_id,))
         try:
             await archive(chat_id,"user",prompt,None,None,False)
             broker=DataBroker(factory,gid,Path(os.environ["CS_AI_GAME_DB"]) if os.getenv("CS_AI_GAME_DB") else None)
@@ -105,22 +110,38 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                 context="本轮表达风格："+instruction(persona)+"\n服务端确认的本轮身份："+json.dumps({"channel":channel,"group_id":gid,"user_id":uid,"persona_this_turn":persona,
                     "current_time":datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()},ensure_ascii=False)+"\n"+context
                 store.execute("UPDATE runs SET cutoff=? WHERE id=?",(cutoff,chat_id))
+                async def started():
+                    store.execute("UPDATE runs SET status='running' WHERE id=?",(chat_id,))
+                    publish(chat_id,{'type':'status','status':'running','thinking_enabled':thinking})
+                async def images(values):
+                    if len(store.rows('SELECT id FROM run_images WHERE run_id=?',(chat_id,)))+len(values)>4:
+                        raise ValueError('每轮最多提交 4 张图片')
+                    for value in values:
+                        digest=media_cache().put(Path(value['path']).read_bytes(),private=True)
+                        image_id=uuid.uuid4().hex
+                        store.execute('INSERT INTO run_images(id,run_id,digest,caption) VALUES(?,?,?,?)',
+                                      (image_id,chat_id,digest,value['caption']))
+                        publish(chat_id,{'type':'image','id':image_id,'caption':value['caption']})
                 result=await run_dsh(scope=scope,text=f"QQ用户 {uid}：{prompt}" if uid else prompt,
                     context=context,model=model,endpoint=endpoint,api_key=api_key,dispatch=dispatch,
-                    remember=channel in {"qq","web"},vision=vision,thinking=thinking,guard=guard,legacy_memory=legacy)
+                    remember=channel in {"qq","web"},vision=vision,thinking=thinking,guard=guard if channel!='web' else None,legacy_memory=legacy,
+                    run_id=chat_id,on_event=lambda event:publish(chat_id,event),on_images=images,on_started=started)
                 if migrate:
                     store.execute("INSERT OR IGNORE INTO migrations(scope,name,completed_at) VALUES(?,'legacy-manual-memory',?)",(scope,int(time.time())))
                 output="\n\n".join(item["content"] for item in result["messages"])
                 if not output.strip(): raise RuntimeError("model returned no public answer")
-                # Public tool output only; never expose the model's private reasoning.
+                # Legacy record compatibility; detailed native events use scoped SSE access.
                 for event in result["tools"]:
                     await archive(chat_id,"tool",json.dumps(event,ensure_ascii=False)[:24000],None,None,False)
                 await archive(chat_id,"assistant",output,None,None,True)
                 store.execute("UPDATE runs SET status='completed',response=? WHERE id=?",(output,chat_id))
+                publish(chat_id,{'type':'final','text':output})
+                publish(chat_id,{'type':'status','status':'completed'})
                 if channel=="qq":
                     store.execute("INSERT INTO scopes(id,cursor) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET cursor=max(cursor,excluded.cursor)",(scope,cutoff))
                 return output
         except BaseException as exc:
             store.execute("UPDATE runs SET status='interrupted',error=? WHERE id=?",(type(exc).__name__,chat_id))
+            publish(chat_id,{'type':'status','status':'interrupted'})
             await archive(chat_id,"assistant","这次没能完成查询，记录已保留，可以稍后重试。",None,None,True)
             raise

@@ -51,11 +51,26 @@ def image(image_id):
     return _request({"method":"image","id":image_id})
 
 
-def artifact(path):
+def configure_plot():
+    """Configure headless matplotlib with the supplied Chinese font."""
+    import matplotlib
+    matplotlib.use('Agg')
+    from matplotlib import font_manager
+    font='/opt/chart-font.ttf'
+    if Path(font).is_file():
+        font_manager.fontManager.addfont(font)
+        matplotlib.rcParams['font.family']=font_manager.FontProperties(fname=font).get_name()
+    matplotlib.rcParams['axes.unicode_minus']=False
+
+
+def artifact(path, *, send=False, caption=""):
     """Export a bounded PNG/JPEG/text/CSV/JSON result for this invocation."""
     file = Path(path)
     if file.is_symlink() or not file.is_file() or file.stat().st_size > 2*1024**2:
         raise ValueError("artifact must be a regular file <=2 MiB")
     if file.suffix.lower() not in {".png",".jpg",".jpeg",".txt",".csv",".json"}:
         raise ValueError("unsupported artifact type")
-    print("CSBOT_ARTIFACT:"+json.dumps({"name":file.name,"data":base64.b64encode(file.read_bytes()).decode()}))
+    if send and file.suffix.lower() not in {'.png','.jpg','.jpeg'}:
+        raise ValueError('Only PNG/JPEG can be submitted as chat images')
+    print("CSBOT_ARTIFACT:"+json.dumps({"name":file.name,"data":base64.b64encode(file.read_bytes()).decode(),
+                                      "send":bool(send),"caption":str(caption)[:200]}))

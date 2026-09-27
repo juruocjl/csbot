@@ -49,6 +49,12 @@ class StateStore:
         CREATE TABLE IF NOT EXISTS migrations (
           scope TEXT NOT NULL, name TEXT NOT NULL, completed_at INTEGER NOT NULL,
           PRIMARY KEY(scope,name));
+        CREATE TABLE IF NOT EXISTS run_events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+          payload TEXT NOT NULL, created_at REAL NOT NULL, bytes INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id,seq);
+        CREATE TABLE IF NOT EXISTS run_images (
+          id TEXT PRIMARY KEY,run_id TEXT NOT NULL,digest TEXT NOT NULL,caption TEXT NOT NULL);
         """)
         if 'recalled_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(outbound)')}:
             self.db.execute('ALTER TABLE outbound ADD COLUMN recalled_at INTEGER')

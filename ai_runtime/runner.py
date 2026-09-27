@@ -8,6 +8,14 @@ import shutil
 
 RUNTIME = Path(__file__).resolve().parent
 LIVE_SLOTS = asyncio.Semaphore(1)
+ACTIVE = {}
+
+
+async def steer_run(run_id,text):
+    """Return False only when nothing was delivered; uncertain delivery never retries."""
+    control=ACTIVE.get(run_id)
+    if control is None:return False
+    return await control(text)
 
 SYSTEM_PROMPT = """你是群里一个直爽犀利、爱接梗和吐槽的群友，用中文自然交流，也乐意帮大家查数据。
 你有自己的判断：欣赏靠谱的配合和坦诚，讨厌甩锅和硬装；不同意就讲道理，不为了讨好而附和。
@@ -80,7 +88,8 @@ def render_profile(env):
 
 async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: str,
                   api_key: str, dispatch, read_paths=(), remember=True,
-                  vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False):
+                  vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False,
+                  run_id=None,on_event=None,on_images=None,on_started=None):
     from .sandbox import ScriptSandbox
     root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
     workspace=root/"workspace"
@@ -118,6 +127,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
     profile=root/"profile.json"
     profile.write_text(json.dumps(render_profile(env)))
     async with LIVE_SLOTS:
+        if on_started:await on_started()
         process=await asyncio.create_subprocess_exec(str(executable),"--profile","sdk-minimal",
             "--patch",str(profile),cwd=workspace,env=env,
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,
@@ -130,6 +140,39 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                 del error_tail[:-16000]
         errors=asyncio.create_task(drain_errors())
         result=None
+        acks={}
+        write_lock=asyncio.Lock()
+        async def send(value):
+            async with write_lock:
+                process.stdin.write((json.dumps(value,ensure_ascii=False)+'\n').encode())
+                await process.stdin.drain()
+        async def steer(text):
+            import uuid
+            key=uuid.uuid4().hex
+            future=asyncio.get_running_loop().create_future();acks[key]=future
+            try:
+                await send({'type':'steer','id':key,'text':text})
+                return await asyncio.wait_for(asyncio.shield(future),10)
+            except (BrokenPipeError,ConnectionResetError,TimeoutError):
+                raise ValueError('补充的投递状态尚未确认，请查看当前回复；未自动重复提交') from None
+            finally:acks.pop(key,None)
+        rpc_tasks=[]
+        rpc_slots=asyncio.Semaphore(1)
+        async def handle_rpc(event):
+            async with rpc_slots:
+                try:
+                    if event['method']=='guard_output' and guard is not None:
+                        value=await guard(event['text'])
+                    elif event['method']=='execute_python':
+                        value=await sandbox.run(event['code'])
+                        paths.update(value.get('artifacts',[]))
+                        if on_images and value.get('deliver_images') and value['exit_code']==0:
+                            await on_images(value['deliver_images'])
+                    else:raise ValueError('unknown bridge method')
+                    reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths)}
+                except Exception as exc:
+                    reply={'type':'rpc_result','id':event['id'],'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
+                await send(reply)
         try:
             async with asyncio.timeout(600):
                 while line:=await process.stdout.readline():
@@ -139,21 +182,16 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                         request={"type":"start","sessionId":"csbot-"+scope,"text":text,
                                  "context":context,"remember":remember,"readPaths":list(paths),"guard":guard is not None,
                                  "legacyMemory":legacy_memory,"compact":compact}
-                        process.stdin.write((json.dumps(request,ensure_ascii=False)+"\n").encode())
-                        await process.stdin.drain()
+                        await send(request)
+                        if run_id:ACTIVE[run_id]=steer
+                    elif event['type']=='steer_ack':
+                        if future:=acks.get(event['id']):
+                            if not future.done():future.set_result(event['accepted'])
+                    elif event['type']=='trace':
+                        if on_event:
+                            for item in event['events']:on_event(item)
                     elif event["type"]=="rpc":
-                        try:
-                            if event["method"]=="guard_output" and guard is not None:
-                                value=await guard(event["text"])
-                            elif event["method"]=="execute_python":
-                                value=await sandbox.run(event["code"])
-                            else:
-                                raise ValueError("unknown bridge method")
-                            reply={"type":"rpc_result","id":event["id"],"result":value,"readPaths":list(paths)}
-                        except Exception as exc:
-                            reply={"type":"rpc_result","id":event["id"],"error":str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
-                        process.stdin.write((json.dumps(reply,ensure_ascii=False)+"\n").encode())
-                        await process.stdin.drain()
+                        rpc_tasks.append(asyncio.create_task(handle_rpc(event)))
                     elif event["type"]=="complete": result=event
                     elif event["type"]=="error":
                         # Configuration/runtime details are available through
@@ -166,6 +204,12 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                     raise RuntimeError("DSH turn did not complete")
                 return result
         finally:
+            if run_id:ACTIVE.pop(run_id,None)
+            for future in acks.values():
+                if not future.done():future.set_exception(ValueError('补充未确认，执行进程已退出；未自动重复提交'))
+            for task in rpc_tasks:
+                if not task.done():task.cancel()
+            await asyncio.gather(*rpc_tasks,return_exceptions=True)
             if process.returncode is None:
                 process.kill()
                 await process.wait()

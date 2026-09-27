@@ -81,4 +81,10 @@ print(csdata.image("消息里[image:...]的ID"))
 
 ## 输出文件
 
+画图前调用 `csdata.configure_plot()`，然后 `import matplotlib.pyplot as plt`，启用无显示器绘图和内置中文字体。用真实查询结果作图，说明时间范围、单位和样本数。
+
 可用 matplotlib 生成图表，再 `csdata.artifact("chart.png")` 导出。每文件最多 2 MiB、每脚本最多 8 个，仅 PNG/JPEG/TXT/CSV/JSON；文件名用英文字母、数字、下划线或短横线。工具返回宿主机只读路径，可用 read/read_image 复核。这些临时结果在该会话下一轮开始时清理；需要时重新计算。不要把脚本、数据库连接或内部路径放进普通群聊回复。
+
+需要把图实际交给用户时，使用 `csdata.artifact("chart.png", send=True, caption="每月胜率")`。只有成功执行脚本、验证通过的 PNG/JPEG 才会提交，每轮最多 4 张。QQ 会随本轮回复实际发送并归档，网页显示有权限的图片；不要只回复本地文件路径或声称尚未提交的图已发出。普通 `artifact()` 只导出供检查，不会自动发送。
+
+生成图的原图与群聊原图共享 1 GiB LRU 预算，缩略图保留；网页个人图存于私有目录，不能通过公开静态图片地址访问。原图被淘汰时页面明确提示并展示缩略图，不能假装高清图仍存在。

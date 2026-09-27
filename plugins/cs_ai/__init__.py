@@ -1993,6 +1993,7 @@ async def ai_ask2(
     chat_id: str | None = None,
     current_mid: int | None = None,
 ) -> Message | None:
+    chat_id=chat_id or str(uuid.uuid4())
     group_id = group_id_from_sid(sid)
     image_ids = (
         await chat_history_db.get_message_image_ids_by_mid(group_id, current_mid)
@@ -2000,6 +2001,7 @@ async def ai_ask2(
         else []
     )
     text = _format_ai_message(msg, image_ids)
+    is_supplement=text.startswith(('补充：','补充:'))
     msg2id: int | None = None
     try:
         if orimsg[0].type == "reply":
@@ -2016,12 +2018,31 @@ async def ai_ask2(
         return Message("获取回复消息失败。")
     logger.info(f"UID: {uid}, Text: {text}")
 
+    if is_supplement and config.cs_ai_engine=='dsh':
+        from ai_runtime.store import state_store
+        from ai_runtime.runner import steer_run
+        from ai_runtime.events import publish
+        active=state_store().rows("SELECT id FROM runs WHERE channel='qq' AND group_id=? AND user_id=? AND status='running' ORDER BY created_at DESC LIMIT 1",(group_id,uid))
+        if active:
+            target=active[0]['id']
+            try:accepted=await steer_run(target,f'QQ用户 {uid} 补充当前问题：{text}')
+            except ValueError as exc:
+                publish(target,{'type':'supplement','text':text,'delivery':'unknown'})
+                return MessageSegment.at(uid)+' '+str(exc)
+            if accepted:
+                publish(target,{'type':'supplement','text':text,'delivery':'accepted'})
+                from ..allmsg.outgoing import current_run
+                current_run.set(target)
+                return MessageSegment.at(uid)+' 补充收到了，会接着一起看。'
+
     try:
         ai_text = await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
     except Exception as exc:
         logger.error(f"AI request did not complete: {type(exc).__name__}")
         return MessageSegment.at(uid) + " 这次没能完成，记录已保留，可以稍后重试。"
-    if _should_forward_ai_result(ai_text):
+    from ai_runtime.store import state_store
+    generated=state_store().rows('SELECT digest FROM run_images WHERE run_id=?',(chat_id,))
+    if _should_forward_ai_result(ai_text) and not generated:
         sent_forward = False
         try:
             sent_forward = await _send_ai_forward_result(
@@ -2037,6 +2058,14 @@ async def ai_ask2(
             return None
 
     ai_message = _render_at_segments(ai_text)
+    if generated:
+        from ai_runtime.media import media_cache
+        for image in generated:
+            try:
+                with media_cache().lease(image['digest']) as image_path:
+                    ai_message+=MessageSegment.image(image_path.read_bytes())
+            except FileNotFoundError:
+                ai_message+='\n生成的原图已淘汰，未发送低清替代图；可让我重新生成。'
 
     if msg2id is not None:
         return MessageSegment.reply(msg2id) + MessageSegment.at(uid) + " " + ai_message

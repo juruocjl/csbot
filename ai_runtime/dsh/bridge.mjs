@@ -13,11 +13,17 @@ export function apply(ctx) {
   const pending = new Map();
   const input = createInterface({input: process.stdin});
   let start;
+  let liveAgent, accepting=false, hadSteer=false;
   const request = new Promise(resolve => {start = resolve;});
   input.on('line', line => {
     try {
       const value = JSON.parse(line);
       if (value.type === 'start') start(value);
+      else if(value.type==='steer') {
+        const accepted=Boolean(liveAgent && accepting);
+        if(accepted) {hadSteer=true;liveAgent.steer(createUserMessage({content:[{type:'text',text:value.text}],source:{kind:'user'}}));}
+        emit({type:'steer_ack',id:value.id,accepted});
+      }
       else if (value.type === 'rpc_result') {
         const waiter = pending.get(value.id);
         if (waiter) {pending.delete(value.id); waiter(value);}
@@ -28,6 +34,21 @@ export function apply(ctx) {
     await ctx.get('loader')?.await();
     emit({type:'ready'});
     const req = await request;
+    let trace=[];
+    const flushTrace=()=>{if(trace.length){emit({type:'trace',events:trace});trace=[];}};
+    const traceTimer=setInterval(flushTrace,80);
+    const record=value=>{trace.push(value);if(trace.length>=64)flushTrace();};
+    ctx.on('agent/assistant-stream',({agent,frame})=>{
+      if(agent.session.id!==req.sessionId)return;
+      if(req.guard && frame.type==='chunk' && (frame.chunk.type==='reasoning-delta' || (frame.chunk.type==='block-end' && frame.chunk.block.type==='reasoning')))return;
+      // Native frames identify attempts, so retries replace rather than concatenate.
+      if(frame.type!=='chunk' || ['text-delta','reasoning-delta','block-end','finish'].includes(frame.chunk.type))
+        record({type:'assistant_stream',frame});
+    });
+    ctx.on('session/event',(session,event)=>{
+      if(session.id!==req.sessionId)return;
+      if(['tool/call','tool/result'].includes(event.type))record({type:event.type,data:event.data,time:event.time});
+    });
     async function rpc(method, data) {
       const id=randomUUID();
       const response=new Promise(resolve=>pending.set(id,resolve));
@@ -41,7 +62,11 @@ export function apply(ctx) {
     ctx.on('llm/stream', async function* (options,next) {
       if (!req.guard || !isAgentLoopRequest(options)) {yield* next(); return;}
       const chunks=[];
-      for await (const chunk of next()) chunks.push(chunk);
+      const attempt=randomUUID();
+      for await (const chunk of next()) {
+        chunks.push(chunk);
+        if(chunk.type==='reasoning-delta')record({type:'reasoning_delta',attempt,text:chunk.text});
+      }
       const blocks=chunks.filter(chunk=>chunk.type==='block-end').map(chunk=>chunk.block);
       const draft=blocks.filter(block=>block.type==='text').map(block=>block.text).join('\n');
       const terminal=chunks.at(-1);
@@ -73,7 +98,7 @@ export function apply(ctx) {
     });
     ctx.tools.register({
       name:'execute_python',
-      description:'Run Python in a disposable isolated container (45s, 192 MiB, no internet). Use import csdata; csdata.catalog(), csdata.call(name, **params), csdata.query(sql, params, source="main"|"game"), csdata.search(query), csdata.block(id), csdata.image(id). Read DATA.md first. Print concise results. csdata.artifact(path) exports a small result file.',
+      description:'Run Python in a disposable isolated container (45s, 192 MiB, no internet). Use import csdata; csdata.catalog(), csdata.call(name, **params), csdata.query(sql, params, source="main"|"game"), csdata.search(query), csdata.block(id), csdata.image(id). Read DATA.md first. Print concise results. csdata.artifact(path) exports a small result file; csdata.artifact("chart.png", send=True, caption="...") submits an image to the user with this reply.',
       parameters:{type:'object',properties:{code:{type:'string'}},required:['code'],additionalProperties:false},
       output:{schema:{type:'object'},render:(_,value)=>[{type:'text',text:JSON.stringify(value)}]},
       async execute(args, exec) {
@@ -95,6 +120,7 @@ export function apply(ctx) {
     const handle = exists
       ? await ctx.agents.resume({resumeSessionId:req.sessionId,agentOptions:options,setup})
       : await ctx.agents.create({sessionId:req.sessionId,meta:{cwd:root},agentOptions:options,setup});
+    liveAgent=handle.agent;accepting=true;
     if (req.legacyMemory) {
       // Import previously explicit group memory faithfully, without another
       // model rewrite. Stable titles make a crash/retry idempotent.
@@ -110,15 +136,17 @@ export function apply(ctx) {
     if (req.context) handle.agent.inject(createUserMessage({content:[{type:'text',text:req.context}],source:{kind:'plugin',plugin:'csbot-context'}}));
     handle.agent.followup(createUserMessage({content:[{type:'text',text:req.text}],source:{kind:req.remember ? 'user' : 'plugin',...(!req.remember ? {plugin:'csbot-report'} : {})}}));
     await handle.agent.whenIdle();
+    accepting=false;
     await flushMemory();
     const compaction = req.compact ? await ctx.compaction.compactNow(handle.agent,new AbortController().signal) : null;
     await ctx.sessionPersistence.flush();
     const events=handle.agent.session.snapshotEvents().slice(before);
     const end=events.filter(event=>event.type==='turn/end').at(-1);
-    const messages=events.filter(event=>event.type==='assistant/message' && !event.data.message.content.some(block=>block.type==='tool-call')).slice(-1).map(event=>({
+    const messages=events.filter(event=>event.type==='assistant/message' && !event.data.message.content.some(block=>block.type==='tool-call')).slice(hadSteer?0:-1).map(event=>({
       role:'assistant',content:event.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'),
     })).filter(message=>message.content);
     const toolEvents=events.filter(event=>event.type==='tool/call'||event.type==='tool/result').map(event=>({type:event.type,data:event.data}));
+    clearInterval(traceTimer);flushTrace();
     await handle.dispose();
     emit({type:'complete',reason:end?.data.reason,messages,tools:toolEvents,resumed:Boolean(exists),compacted:Boolean(compaction)});
     input.close();

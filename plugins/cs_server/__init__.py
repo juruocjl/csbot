@@ -19,10 +19,10 @@ import asyncio
 import uuid
 import hashlib
 from pathlib import Path
-from fastapi import FastAPI, Body, HTTPException, Depends
+from fastapi import FastAPI, Body, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -3186,6 +3186,8 @@ async def personal_ai_history(conversation: str=Body("default",embed=True),info:
     scope=scope_key("web",info.group_id,info.user_id,conversation)
     rows=state_store().rows("SELECT id,request,response,status,created_at FROM runs WHERE scope=? AND channel='web' AND group_id=? AND user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 50",
                             (scope,info.group_id,info.user_id))
+    for row in rows:
+        row['images']=state_store().rows('SELECT id,caption FROM run_images WHERE run_id=?',(row['id'],))
     return {"turns":list(reversed(rows)),"limit":50}
 
 async def _run_web_ai_chat(chat_id: str, uid: str, sid: str, prompt: str, persona: str | None, conversation: str) -> None:
@@ -3268,3 +3270,70 @@ async def get_ai_record(recordId: int=Body(..., embed=True), info: AuthSession =
         tools=record.tool_calls,
         reasons=None
     )
+
+
+@app.post('/api/ai/events',summary='实时 AI 执行事件，可按游标重连')
+async def ai_events(request: Request,chatId: str=Body(...),after: int=Body(0),info: AuthSession=Depends(get_current_user)):
+    from ai_runtime.store import state_store
+    from ai_runtime.events import read,signal
+    store=state_store()
+    if not store.can_read(chatId,info.group_id,info.user_id):raise HTTPException(404,'Record not found')
+    if after<0:raise HTTPException(400,'Invalid cursor')
+    maximum=store.rows('SELECT coalesce(max(seq),0) n FROM run_events WHERE run_id=?',(chatId,))[0]['n']
+    if after>maximum:raise HTTPException(409,'事件游标已失效，请重新加载本轮记录')
+    async def stream():
+        cursor=after
+        wake=signal(chatId)
+        metadata=store.get_run(chatId)
+        yield 'event: ready\ndata: '+json.dumps({'channel':metadata['channel'],'request':metadata['request'],'images':store.rows('SELECT id,caption FROM run_images WHERE run_id=?',(chatId,))},ensure_ascii=False)+'\n\n'
+        while not await request.is_disconnected():
+            wake.clear()
+            batch=read(chatId,cursor)
+            for item in batch:
+                cursor=item['id']
+                yield f'id: {cursor}\ndata: '+json.dumps(item['event'],ensure_ascii=False)+'\n\n'
+            if batch:continue
+            row=store.get_run(chatId)
+            if row['status'] in {'completed','interrupted'}:
+                yield 'event: done\ndata: '+json.dumps({'status':row['status'],'response':row['response'],'hasEvents':maximum>0 or cursor>0})+'\n\n'
+                break
+            try:await asyncio.wait_for(wake.wait(),10)
+            except TimeoutError:yield ': heartbeat\n\n'
+    return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-store','X-Accel-Buffering':'no'})
+
+
+@app.post('/api/ai/supplement',summary='补充当前个人对话，错过则排队')
+async def ai_supplement(chatId: str=Body(...),prompt: str=Body(...),conversation: str=Body('default'),info: AuthSession=Depends(get_current_user)):
+    from ai_runtime.store import state_store
+    from ai_runtime.runner import scope_key,steer_run
+    from ai_runtime.events import publish
+    store=state_store();row=store.get_run(chatId)
+    if not row or row['channel']!='web' or row['scope']!=scope_key('web',info.group_id,info.user_id,conversation):
+        raise HTTPException(404,'Record not found')
+    prompt=prompt.strip()
+    if not prompt or len(prompt.encode())>16000:raise HTTPException(400,'补充内容为空或过长')
+    try:accepted=await steer_run(chatId,f'QQ用户 {info.user_id} 补充当前问题：{prompt}')
+    except ValueError as exc:
+        publish(chatId,{'type':'supplement','text':prompt,'delivery':'unknown'})
+        raise HTTPException(409,str(exc))
+    if accepted:
+        publish(chatId,{'type':'supplement','text':prompt,'delivery':'accepted'})
+        return {'chatId':chatId,'delivery':'inserted'}
+    result=await ask_ai_from_web(prompt=prompt,persona=None,conversation=conversation,info=info)
+    return {'chatId':result.chatId,'delivery':'queued'}
+
+
+@app.get('/api/ai/images/{image_id}',summary='查看本会话提交的生成图')
+async def ai_generated_image(image_id: str,thumbnail: bool=False,info: AuthSession=Depends(get_current_user)):
+    from ai_runtime.store import state_store
+    from ai_runtime.media import media_cache
+    store=state_store();rows=store.rows('SELECT * FROM run_images WHERE id=?',(image_id,))
+    if not rows or not store.can_read(rows[0]['run_id'],info.group_id,info.user_id):raise HTTPException(404,'Image not found')
+    cache=media_cache();image=cache.info(rows[0]['digest'])
+    if thumbnail:
+        if not image['thumbnail_path']:raise HTTPException(404,'Image not found')
+        return Response(Path(image['thumbnail_path']).read_bytes(),media_type='image/png',headers={'Cache-Control':'private, no-store'})
+    try:
+        with cache.lease(rows[0]['digest']) as path:data=path.read_bytes()
+    except FileNotFoundError:raise HTTPException(410,'原图已被 LRU 淘汰，缩略图仍可查看')
+    return Response(data,media_type=image['mime'] or 'image/png',headers={'Cache-Control':'private, no-store'})

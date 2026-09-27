@@ -60,7 +60,10 @@ class ScriptSandbox:
                        "--tmpfs","/work:rw,noexec,nosuid,nodev,size=32m,mode=1777",
                        "--tmpfs","/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777",
                        "--mount",f"type=bind,src={directory},dst=/broker,readonly",
-                       self.image]
+                       ]
+            font=Path(__file__).resolve().parents[1]/'assets/merged.ttf'
+            if font.is_file():command+=['--mount',f'type=bind,src={font},dst=/opt/chart-font.ttf,readonly']
+            command.append(self.image)
             process = None
             output=bytearray()
             async def capture():
@@ -100,7 +103,7 @@ class ScriptSandbox:
                     await server.wait_closed()
                     for task in list(tasks): task.cancel()
                     await asyncio.gather(*list(tasks),return_exceptions=True)
-            files,lines=[],[]
+            files,lines,deliver=[],[],[]
             self.artifacts.mkdir(parents=True,exist_ok=True)
             for line in output.decode(errors="replace").splitlines():
                 if line.startswith("CSBOT_ARTIFACT:"):
@@ -114,7 +117,14 @@ class ScriptSandbox:
                     path=self.artifacts/(uuid.uuid4().hex[:8]+"-"+filename)
                     path.write_bytes(data)
                     files.append(str(path.resolve()))
+                    if value.get('send'):
+                        if path.suffix not in {'.png','.jpg','.jpeg'}:raise ValueError('Only images can be submitted')
+                        from PIL import Image
+                        with Image.open(path) as image:
+                            if image.width*image.height>16_000_000:raise ValueError('Generated image exceeds pixel budget')
+                            image.verify()
+                        deliver.append({'path':str(path.resolve()),'caption':str(value.get('caption',''))[:200]})
                 else:
                     lines.append(line)
             text="\n".join(lines)
-            return {"exit_code":process.returncode,"output":text[:24000],"truncated":len(text)>24000,"artifacts":files}
+            return {"exit_code":process.returncode,"output":text[:24000],"truncated":len(text)>24000,"artifacts":files,'deliver_images':deliver}
