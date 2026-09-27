@@ -1,0 +1,19 @@
+[Unit]
+Description=Read-only CSBot session snapshot publisher
+After=csbot.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/csbot
+ExecStart=/home/ubuntu/csbot/.venv/bin/python scripts/ai_observer_sync.py --source data/ai --destination data/ai-observer/sessions --watch
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/csbot/data/ai-observer
+PrivateTmp=true
+MemoryMax=192M
+CPUQuota=20%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=DSH observer entry on Tailscale only
+After=tailscaled.service
+
+[Socket]
+ListenStream=100.101.30.74:3088
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target
