@@ -53,7 +53,7 @@ class ScriptSandbox:
             socket_path = Path(directory)/"data.sock"
             server = await asyncio.start_unix_server(serve,str(socket_path),limit=32769)
             os.chmod(socket_path,0o666)
-            command = ["docker","run","--rm","-i","--name",name,"--network","none",
+            command = ["docker","run","--rm","-i","--name",name,"--label","csbot.ai.sandbox=true","--network","none",
                        "--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
                        "--pids-limit","32","--memory","192m","--memory-swap","192m","--cpus","0.5",
                        "--ulimit","fsize=8388608:8388608","--ulimit","nofile=64:64",

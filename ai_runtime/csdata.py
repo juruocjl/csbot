@@ -25,6 +25,11 @@ def catalog():
     return _request({"method":"catalog"})
 
 
+def status():
+    """Monitor readiness only; no account identity or environment is exposed."""
+    return _request({"method":"status"})
+
+
 def call(name, **params):
     return _request({"method":"call","name":name,"params":params})
 
