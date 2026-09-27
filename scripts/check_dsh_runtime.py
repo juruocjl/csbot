@@ -22,10 +22,16 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         REQUESTS.append(body)
-        messages=body["messages"]
+        messages=[m for m in body["messages"] if not (m.get("role")=="user" and "群聊基础知识（资料" in str(m.get("content")) and "完整证据目录" not in str(m.get("content")))]
         if not body.get("tools"):
             time.sleep(0.3)  # Catch exit-before-distillation races with real latency.
             content='[{"type":"preference","title":"fixture preference","content":"QQ 123 喜欢茶。","importance":4}]'
+            if '核验群聊基础知识。' in str(messages):
+                content='{"approved":true}'
+            elif 'LAYER_FOUNDATION' in str(messages):
+                catalog=json.loads(messages[-1]['content'].split('：\n',1)[1].split('\n已有基础知识',1)[0])
+                ref=next(e for e in catalog if e['kind']=='user')
+                content=json.dumps([{'title':'小茶称呼','content':'小茶是QQ 22222（茶茶）。','tier':'foundation','category':'alias','subject':'22222','keys':['小茶','茶茶'],'evidence':[{'id':ref['id'],'quote':'小茶是QQ 22222（茶茶）'}]}],ensure_ascii=False)
             delta={"role":"assistant","content":content};finish="stop"
         elif messages[-1].get("role")=="tool" and "SOURCE_READ_CASE" in str(messages):
             body = str(messages[-1].get("content"))
@@ -74,7 +80,7 @@ async def main():
                 assert db.execute("SELECT count(*) FROM memories").fetchone()[0]>0
             print("PASS: Mneme persists invoked dialogue; raw passive context excluded")
             with sqlite3.connect(memory_files[0]) as db:
-                old=db.execute("SELECT id FROM memories WHERE title='fixture preference'").fetchone()[0]
+                old=db.execute("SELECT id FROM memories WHERE title LIKE 'fixture preference [%'").fetchone()[0]
             start=len(REQUESTS)
             repaired=await run_dsh(scope=group,text='',context='',model='not-used',endpoint='http://127.0.0.1:1',api_key='not-used',dispatch=deny,state_root=root,remember=False,memory_only=True,
                 memory_actions=[{'name':'memory_forget','arguments':{'id':old}},
@@ -129,6 +135,17 @@ async def main():
             result=await run(group,"AFTER_COMPACT",remember=False)
             assert result["resumed"]
             print("PASS: DSH compacts a long session and resumes its durable replacement")
+            layered=scope_key('qq','layer-fixture','11111')
+            await run(layered,'LAYER_FOUNDATION QQ用户 11111：确认小茶是QQ 22222（茶茶），记住。')
+            with sqlite3.connect(root/'scopes'/layered/'memory/memory.db') as db:
+                rows=[json.loads(r[0]) for r in db.execute('SELECT content FROM memories WHERE forgotten=0')]
+                assert any(r['tier']=='foundation' and r['subject']=='22222' for r in rows),rows
+            start=len(REQUESTS)
+            await run(layered,'小茶是谁？',remember=False)
+            assert any('群聊基础知识' in str(m) and '"subject":"22222"' in str(m) for m in REQUESTS[start]['messages']), REQUESTS[start]['messages']
+            assert '"subject":"11111"' not in str(REQUESTS[start]['messages'])
+            print('PASS: automatic promotion uses evidence, preserves subject, and injects foundation after process restart')
+
     finally:
         server.shutdown();server.server_close()
 

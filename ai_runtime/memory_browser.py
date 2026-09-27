@@ -71,9 +71,31 @@ def tags(value):
         return []
 
 
-def browse(store, gid, uid, scope, query='', kind='', archived=False, cursor=None, root=None):
+TIERS = ('foundation', 'topic', 'episode', 'legacy')
+CATEGORIES = ('alias', 'glossary', 'style', 'agreement')
+TIER_SQL = "CASE WHEN json_valid(content) THEN CASE WHEN json_extract(content,'$.schema')='csbot-memory-v1' AND json_extract(content,'$.tier') IN ('foundation','topic','episode') THEN json_extract(content,'$.tier') ELSE 'legacy' END ELSE 'legacy' END"
+CATEGORY_SQL = "CASE WHEN json_valid(content) THEN CASE WHEN json_extract(content,'$.schema')='csbot-memory-v1' THEN coalesce(json_extract(content,'$.category'),'') ELSE '' END ELSE '' END"
+
+def project(row, preview=False):
+    raw = row.pop('body', '') if preview else row.get('content', '')
+    row.update(tier='legacy', category='', subject='', evidence=[])
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and data.get('schema')=='csbot-memory-v1' and data.get('tier') in TIERS[:3] and isinstance(data.get('text'), str):
+            row.update(tier=data['tier'],category=data.get('category',''),subject=data.get('subject',''),evidence=data.get('evidence',[]))
+            raw=data['text']
+            row['title']=re.sub(r' \[([a-f0-9]{20})\]$', '', row['title'])
+    except (ValueError, TypeError):
+        pass
+    row['preview' if preview else 'content']=raw[:300] if preview else raw
+    row['tags']=[t for t in tags(row['tags']) if not t.startswith(('tier:', 'category:'))]
+    row['archived']=bool(row['archived'])
+    return row
+
+
+def browse(store, gid, uid, scope, query='', kind='', archived=False, cursor=None, root=None, tier='', category=''):
     authorize(store, gid, uid, scope)
-    if len(query)>200 or len(kind)>80 or type(archived) is not bool:
+    if len(query)>200 or len(kind)>80 or type(archived) is not bool or tier not in ('',*TIERS) or category not in ('',*CATEGORIES):
         raise ValueError('invalid filter')
     position = None
     if cursor is not None:
@@ -89,6 +111,10 @@ def browse(store, gid, uid, scope, query='', kind='', archived=False, cursor=Non
         if db is None:
             return {'items': [], 'types': [], 'nextCursor': None, 'total': 0}
         filters = ['forgotten=0', 'archived=?']; args = [int(archived)]
+        if tier:
+            filters.append('('+TIER_SQL+')=?'); args.append(tier)
+        if category:
+            filters.append('('+CATEGORY_SQL+')=?'); args.append(category)
         if kind:
             filters.append('type=?'); args.append(kind)
         if query.strip():
@@ -103,12 +129,12 @@ def browse(store, gid, uid, scope, query='', kind='', archived=False, cursor=Non
             where += ' AND (updated_at<? OR (updated_at=? AND id<?))'
             args.extend([position[0],position[0],position[1]])
         rows = [dict(r) for r in db.execute('''SELECT id,type,substr(title,1,300) AS title,
-            substr(content,1,300) AS preview,substr(tags,1,8192) AS tags,importance,archived,created_at,updated_at
+            substr(content,1,131072) AS body,substr(tags,1,8192) AS tags,importance,archived,created_at,updated_at
             FROM memories WHERE '''+where+' ORDER BY updated_at DESC,id DESC LIMIT 21',args)]
         page = rows[:20]
         next_cursor = base64.urlsafe_b64encode(json.dumps([page[-1]['updated_at'],page[-1]['id']]).encode()).decode() if len(rows)>20 else None
         for row in page:
-            row['tags'] = tags(row['tags']); row['archived'] = bool(row['archived'])
+            project(row, preview=True)
         return {'items': page, 'types': types, 'nextCursor': next_cursor, 'total': total}
 
 
@@ -124,6 +150,6 @@ def detail(store, gid, uid, scope, memory_id, root=None):
         if row is None:
             raise PermissionError('unknown memory')
         result = dict(row)
-        result['tags'] = tags(result['tags'])
+        project(result)
         result['archived'] = bool(result['archived']); result['truncated'] = bool(result['truncated'])
         return result

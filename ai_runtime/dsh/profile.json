@@ -75,7 +75,7 @@
       {
         "config": {
           "autoDream": false,
-          "autoInject": true,
+          "autoInject": false,
           "autoSummarize": "$REMEMBER",
           "entityExtractionEnabled": false,
           "externalApiEnabled": false,
@@ -133,5 +133,11 @@
         }
       }
     ]
+  },
+  {
+    "id": "system-prompt",
+    "config": {
+      "includeRuntimeContext": true
+    }
   }
 ]

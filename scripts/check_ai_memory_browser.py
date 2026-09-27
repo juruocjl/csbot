@@ -1,6 +1,7 @@
 """Synthetic Mneme fixtures: ownership, forgotten state, pagination and no writes."""
 from pathlib import Path
 import hashlib
+import json
 import sqlite3
 import sys
 import tempfile
@@ -56,6 +57,18 @@ class Checks(unittest.TestCase):
         self.assertFalse((self.root/'scopes'/missing).exists())
         path.unlink();path.symlink_to(self.root/'scopes'/self.other/'memory'/'memory.db')
         with self.assertRaises(MemoryUnavailable):browse(self.store,'1','10',self.group,root=self.root)
+    def test_layers_and_evidence(self):
+        path=self.root/'scopes'/self.group/'memory'/'memory.db'
+        data={'schema':'csbot-memory-v1','tier':'foundation','category':'alias','subject':'22222','text':'小茶是茶茶','evidence':[{'id':'e1','kind':'user','quote':'小茶是QQ22222'}]}
+        with sqlite3.connect(path) as db:db.execute('UPDATE memories SET content=?,tags=? WHERE id=?',(json.dumps(data,ensure_ascii=False),'["tier:foundation","category:alias","小茶"]','000'))
+        page=browse(self.store,'1','10',self.group,tier='foundation',category='alias',root=self.root)
+        self.assertEqual(page['total'],1);self.assertEqual(page['items'][0]['preview'],'小茶是茶茶')
+        self.assertEqual(page['items'][0]['tags'],['小茶'])
+        result=detail(self.store,'1','10',self.group,'000',root=self.root)
+        self.assertEqual(result['subject'],'22222');self.assertEqual(result['evidence'][0]['id'],'e1')
+        self.assertEqual(browse(self.store,'1','10',self.group,tier='legacy',root=self.root)['total'],24)
+        with self.assertRaises(ValueError):browse(self.store,'1','10',self.group,tier='bad',root=self.root)
+
     def test_visible_truncation(self):
         path=self.root/'scopes'/self.group/'memory'/'memory.db'
         with sqlite3.connect(path) as db:db.execute('UPDATE memories SET content=? WHERE id=?',('大'*140000,'000'))

@@ -3178,6 +3178,8 @@ class AIAskResponse(BaseModel):
 
 
 class AIMemoryQuery(BaseModel):
+    tier: str = Field('', max_length=20)
+    category: str = Field('', max_length=20)
     scope: str = Field(..., min_length=64, max_length=64)
     query: str = Field('', max_length=200)
     kind: str = Field('', max_length=80)
