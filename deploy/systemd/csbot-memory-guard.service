@@ -1,0 +1,16 @@
+[Unit]
+Description=Sample CSBot memory and restart under pressure or during maintenance
+After=csbot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/csbot-memory-guard.py
+TimeoutStartSec=180
+RuntimeDirectory=csbot-memory-guard
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+MemoryMax=64M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

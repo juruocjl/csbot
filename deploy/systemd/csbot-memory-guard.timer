@@ -1,0 +1,11 @@
+[Unit]
+Description=Check CSBot memory every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=csbot-memory-guard.service
+
+[Install]
+WantedBy=timers.target
