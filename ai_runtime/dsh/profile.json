@@ -137,7 +137,9 @@
   {
     "id": "system-prompt",
     "config": {
-      "includeRuntimeContext": true
+      "includeRuntimeContext": true,
+      "includeHarnessIdentity": false,
+      "personaPrefix": "$DSH_SYSTEM_PROMPT"
     }
   }
 ]

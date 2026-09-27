@@ -12,7 +12,7 @@ import threading
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from ai_runtime.runner import run_dsh,scope_key
+from ai_runtime.runner import run_dsh,scope_key,SYSTEM_PROMPT
 
 REQUESTS=[]
 
@@ -69,6 +69,9 @@ async def main():
             group=scope_key("qq","1","123")
             result=await run(group,"USER_SENTINEL: QQ 123 喜欢茶，请记住。")
             assert result["reason"]["kind"]=="completed" and not result["resumed"]
+            system_text="\n".join(str(m.get("content", "")) for m in REQUESTS[0]["messages"] if m["role"]=="system")
+            assert SYSTEM_PROMPT in system_text, "DSH profile patch dropped the actual system prompt"
+            print("PASS: real provider request contains the complete reply and evidence policy")
             distills=[r for r in REQUESTS if not r.get("tools")]
             assert distills,"Mneme did not run"
             assert "群聊记忆的身份与证据规则" in json.dumps(distills,ensure_ascii=False)
@@ -95,6 +98,7 @@ async def main():
             result=await run(group,"RESUME_CASE",remember=False)
             assert result["resumed"]
             assert "USER_SENTINEL" in json.dumps(REQUESTS[start]["messages"])
+            assert SYSTEM_PROMPT in "\n".join(str(m.get("content", "")) for m in REQUESTS[start]["messages"] if m["role"]=="system")
             print("PASS: stable group session resumes across process restart")
             start=len(REQUESTS)
             personal=scope_key("web","1","123")
