@@ -3177,6 +3177,44 @@ class AIAskResponse(BaseModel):
     chatId: str = Field(..., description="AI chat id")
 
 
+class AIMemoryQuery(BaseModel):
+    scope: str = Field(..., min_length=64, max_length=64)
+    query: str = Field('', max_length=200)
+    kind: str = Field('', max_length=80)
+    archived: bool = False
+    cursor: str | None = Field(None, max_length=600)
+
+class AIMemoryDetailQuery(BaseModel):
+    scope: str = Field(..., min_length=64, max_length=64)
+    id: str = Field(..., min_length=1, max_length=128)
+
+def _read_ai_memory(info, action, **kwargs):
+    from ai_runtime import memory_browser
+    from ai_runtime.store import state_store
+    if not info.user_id or not info.group_id:
+        raise HTTPException(401, '未绑定 QQ 或群')
+    try:
+        return getattr(memory_browser, action)(state_store(), info.group_id, info.user_id, **kwargs)
+    except PermissionError:
+        raise HTTPException(404, '记忆不存在或无权查看') from None
+    except ValueError:
+        raise HTTPException(400, '无效的记忆筛选条件') from None
+    except memory_browser.MemoryUnavailable:
+        raise HTTPException(503, '记忆暂时无法读取，请稍后重试') from None
+
+@app.post('/api/ai/memory/scopes', summary='可浏览的群记忆与本人个人记忆')
+def ai_memory_scopes(info: AuthSession=Depends(get_current_user)):
+    return _read_ai_memory(info, 'scopes')
+
+@app.post('/api/ai/memory/list', summary='只读浏览 Mneme 记忆')
+def ai_memory_list(body: AIMemoryQuery, info: AuthSession=Depends(get_current_user)):
+    return _read_ai_memory(info, 'browse', **body.model_dump())
+
+@app.post('/api/ai/memory/detail', summary='只读 Mneme 记忆详情')
+def ai_memory_detail(body: AIMemoryDetailQuery, info: AuthSession=Depends(get_current_user)):
+    return _read_ai_memory(info, 'detail', scope=body.scope, memory_id=body.id)
+
+
 @app.post("/api/ai/conversations", summary="有权限查看的AI对话列表")
 async def ai_conversations(before: int | None=Body(None,embed=True),info: AuthSession=Depends(get_current_user)):
     from ai_runtime.store import state_store
