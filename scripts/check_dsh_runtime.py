@@ -127,7 +127,10 @@ async def main():
                 await run(imported,"IMPORT_CASE",remember=False,legacy_memory="QQ 123 手工保存：喜欢绿茶。")
             with sqlite3.connect(next((root/"scopes"/imported/"memory").rglob("*.db"))) as db:
                 assert db.execute("SELECT count(*) FROM memories WHERE title='旧群记忆迁移 1'").fetchone()[0]==1
-            print("PASS: explicit legacy memory import is durable and idempotent")
+            start=len(REQUESTS)
+            await run(imported,'旧的偏好是什么？',remember=False)
+            assert any('群聊基础知识' in str(m) and 'QQ 123 手工保存：喜欢绿茶。' in str(m) for m in REQUESTS[start]['messages'])
+            print("PASS: explicit legacy memory import is durable, idempotent, and keeps confirmed priority in real model input")
             result=await run_dsh(scope=group,text="COMPACT_CASE",context="旁听记录："+"合成聊天资料。"*6000,
                 model="fixture",endpoint=f"http://127.0.0.1:{server.server_port}",api_key="fixture",
                 dispatch=deny,state_root=root,remember=False,compact=True,diagnostics=lambda v:print(v[-1500:]))

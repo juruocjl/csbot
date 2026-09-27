@@ -60,7 +60,7 @@ export function apply(ctx) {
       if (reply.error) throw new Error(reply.error);
       return reply;
     }
-    let memoryExec;
+    let memoryExec, beforeMemory=0;
     const streamText=chunks=>chunks.filter(c=>c.type==='block-end'&&c.block.type==='text').map(c=>c.block.text).join('');
     async function verifyFoundation(data){
       const chunks=[];
@@ -153,7 +153,8 @@ export function apply(ctx) {
       : await ctx.agents.create({sessionId:req.sessionId,meta:{cwd:root},agentOptions:options,setup});
     liveAgent=handle.agent;accepting=true;
     memoryExec={agent:handle.agent,signal:new AbortController().signal};
-    const memoryConfig={inputSources:()=>inputEvidence,trusted:Boolean(req.memoryOnly||req.legacyMemory),events:()=>handle.agent.session.snapshotEvents().slice(-2000),verify:verifyFoundation};
+    beforeMemory=handle.agent.session.snapshotEvents().length;
+    const memoryConfig={inputSources:()=>inputEvidence,trusted:Boolean(req.memoryOnly||req.legacyMemory),events:()=>handle.agent.session.snapshotEvents().slice(beforeMemory),verify:verifyFoundation};
     configureMemory(memoryConfig);
     if (req.legacyMemory) {
       // Import previously explicit group memory faithfully, without another

@@ -72,9 +72,9 @@ def tags(value):
 
 
 TIERS = ('foundation', 'topic', 'episode', 'legacy')
-CATEGORIES = ('alias', 'glossary', 'style', 'agreement')
-TIER_SQL = "CASE WHEN json_valid(content) THEN CASE WHEN json_extract(content,'$.schema')='csbot-memory-v1' AND json_extract(content,'$.tier') IN ('foundation','topic','episode') THEN json_extract(content,'$.tier') ELSE 'legacy' END ELSE 'legacy' END"
-CATEGORY_SQL = "CASE WHEN json_valid(content) THEN CASE WHEN json_extract(content,'$.schema')='csbot-memory-v1' THEN coalesce(json_extract(content,'$.category'),'') ELSE '' END ELSE '' END"
+CATEGORIES = ('alias', 'glossary', 'style', 'agreement', 'imported')
+TIER_SQL = "CASE WHEN source='legacy-ai-mem-explicit' THEN 'foundation' WHEN json_valid(content) THEN CASE WHEN json_extract(content,'$.schema')='csbot-memory-v1' AND json_extract(content,'$.tier') IN ('foundation','topic','episode') THEN json_extract(content,'$.tier') ELSE 'legacy' END ELSE 'legacy' END"
+CATEGORY_SQL = "CASE WHEN source='legacy-ai-mem-explicit' THEN 'imported' WHEN json_valid(content) THEN CASE WHEN json_extract(content,'$.schema')='csbot-memory-v1' THEN coalesce(json_extract(content,'$.category'),'') ELSE '' END ELSE '' END"
 
 def project(row, preview=False):
     raw = row.pop('body', '') if preview else row.get('content', '')
@@ -87,6 +87,8 @@ def project(row, preview=False):
             row['title']=re.sub(r' \[([a-f0-9]{20})\]$', '', row['title'])
     except (ValueError, TypeError):
         pass
+    if row.pop('source', '')=='legacy-ai-mem-explicit' and row['tier']=='legacy':
+        row.update(tier='foundation',category='imported',subject='本群',evidence=[{'id':row['id'],'kind':'legacy-explicit','quote':'旧 /ai记忆 手工保存，迁移时逐字保留；并非自动摘要。'}])
     row['preview' if preview else 'content']=raw[:300] if preview else raw
     row['tags']=[t for t in tags(row['tags']) if not t.startswith(('tier:', 'category:'))]
     row['archived']=bool(row['archived'])
@@ -128,7 +130,7 @@ def browse(store, gid, uid, scope, query='', kind='', archived=False, cursor=Non
         if position:
             where += ' AND (updated_at<? OR (updated_at=? AND id<?))'
             args.extend([position[0],position[0],position[1]])
-        rows = [dict(r) for r in db.execute('''SELECT id,type,substr(title,1,300) AS title,
+        rows = [dict(r) for r in db.execute('''SELECT id,type,source,substr(title,1,300) AS title,
             substr(content,1,131072) AS body,substr(tags,1,8192) AS tags,importance,archived,created_at,updated_at
             FROM memories WHERE '''+where+' ORDER BY updated_at DESC,id DESC LIMIT 21',args)]
         page = rows[:20]
@@ -143,7 +145,7 @@ def detail(store, gid, uid, scope, memory_id, root=None):
     if not memory_id or len(memory_id)>128:
         raise ValueError('invalid memory id')
     with database(scope, root) as db:
-        row = db.execute('''SELECT id,type,substr(title,1,300) AS title,
+        row = db.execute('''SELECT id,type,source,substr(title,1,300) AS title,
             substr(content,1,131072) AS content,length(content)>131072 AS truncated,
             substr(tags,1,8192) AS tags,importance,archived,created_at,updated_at
             FROM memories WHERE id=? AND forgotten=0''',(memory_id,)).fetchone() if db else None

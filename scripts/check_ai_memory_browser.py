@@ -26,6 +26,7 @@ class Checks(unittest.TestCase):
                     db.execute('INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{i:03}','fact',f'记忆{i}',f'正文{i}','["测试"]',3,0,0,'2026-09-27T00:00:00Z','2026-09-27T00:00:00Z'))
                 db.execute("INSERT INTO memories VALUES('forgotten','fact','secret','secret','[]',3,1,0,'x','x')")
                 db.execute("INSERT INTO memories VALUES('archive','history','旧的','archive','[]',3,0,1,'x','x')")
+                db.execute("ALTER TABLE memories ADD COLUMN source TEXT DEFAULT ''")
     def tearDown(self):
         self.store.close();self.tmp.cleanup()
     def test_scope_isolation(self):
@@ -68,6 +69,10 @@ class Checks(unittest.TestCase):
         self.assertEqual(result['subject'],'22222');self.assertEqual(result['evidence'][0]['id'],'e1')
         self.assertEqual(browse(self.store,'1','10',self.group,tier='legacy',root=self.root)['total'],24)
         with self.assertRaises(ValueError):browse(self.store,'1','10',self.group,tier='bad',root=self.root)
+        with sqlite3.connect(path) as db:db.execute("UPDATE memories SET source='legacy-ai-mem-explicit' WHERE id='001'")
+        manual=browse(self.store,'1','10',self.group,tier='foundation',category='imported',root=self.root)
+        self.assertEqual(manual['total'],1);self.assertEqual(manual['items'][0]['preview'],'正文1')
+        self.assertEqual(browse(self.store,'1','10',self.group,tier='legacy',root=self.root)['total'],23)
 
     def test_visible_truncation(self):
         path=self.root/'scopes'/self.group/'memory'/'memory.db'
