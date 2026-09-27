@@ -101,10 +101,10 @@ def render_profile(env):
                 "apiKeyEnv":"CSBOT_SEARCH_API_KEY","baseURL":env["CSBOT_SEARCH_URL"],
                 "model":env["CSBOT_SEARCH_MODEL"],"maxTokens":2048,"maxUses":2}},
             {"id":"web-fetch-http","name":"@deepseek-ai/dsh-web-fetch-http","config":{
-                "maxResponseBytes":500000,"maxBodyChars":200000,"timeoutMs":15000,"maxRedirects":3}},
+                "maxResponseBytes":500000,"maxBodyChars":300000,"timeoutMs":15000,"maxRedirects":3}},
             {"id":"tool-web","name":"@deepseek-ai/dsh-tool-web","config":{
                 "searchMaxQueries":2,"searchMaxResults":6,"searchTimeoutMs":45000,
-                "fetchTimeoutMs":18000,"fetchMaxOutputChars":200000}}
+                "fetchTimeoutMs":18000,"fetchMaxOutputChars":300000}}
         ]})
     return profile
 
