@@ -121,6 +121,7 @@ class ScriptSandbox:
                         if path.suffix not in {'.png','.jpg','.jpeg'}:raise ValueError('Only images can be submitted')
                         from PIL import Image
                         with Image.open(path) as image:
+                            if image.format not in {'PNG','JPEG'}:raise ValueError('Only PNG/JPEG content can be submitted')
                             if image.width*image.height>16_000_000:raise ValueError('Generated image exceeds pixel budget')
                             image.verify()
                         deliver.append({'path':str(path.resolve()),'caption':str(value.get('caption',''))[:200]})
