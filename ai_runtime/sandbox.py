@@ -71,10 +71,10 @@ class ScriptSandbox:
             try:
                 process = await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,
                             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
-                process.stdin.write(code.encode())
-                await process.stdin.drain()
-                process.stdin.close()
                 async with asyncio.timeout(45):
+                    process.stdin.write(code.encode())
+                    await process.stdin.drain()
+                    process.stdin.close()
                     await capture()
                     await process.wait()
                 if process.returncode == 125:
@@ -86,9 +86,16 @@ class ScriptSandbox:
                         stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
                     await asyncio.wait_for(cleanup.wait(),10)
                 finally:
-                    if process and process.returncode is None:
-                        process.kill()
+                    if process:
+                        # A full pipe pauses asyncio's transport and can keep
+                        # wait() pending even after SIGKILL. Drain and discard
+                        # remaining output while reaping the terminated CLI.
+                        async def discard():
+                            while await process.stdout.read(16384): pass
+                        remaining=asyncio.create_task(discard())
+                        if process.returncode is None: process.kill()
                         await process.wait()
+                        await remaining
                     server.close()
                     await server.wait_closed()
                     for task in list(tasks): task.cancel()
