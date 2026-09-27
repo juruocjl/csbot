@@ -65,12 +65,26 @@ async def main():
             assert result["reason"]["kind"]=="completed" and not result["resumed"]
             distills=[r for r in REQUESTS if not r.get("tools")]
             assert distills,"Mneme did not run"
+            assert "群聊记忆的身份与证据规则" in json.dumps(distills,ensure_ascii=False)
+            assert "发言者" in json.dumps(distills,ensure_ascii=False)
             assert "UNTRUSTED_CHAT_SENTINEL" not in json.dumps(distills,ensure_ascii=False)
             memory_files=list((root/"scopes"/group/"memory").rglob("*.db"))
             assert memory_files,"Mneme store missing"
             with sqlite3.connect(memory_files[0]) as db:
                 assert db.execute("SELECT count(*) FROM memories").fetchone()[0]>0
             print("PASS: Mneme persists invoked dialogue; raw passive context excluded")
+            with sqlite3.connect(memory_files[0]) as db:
+                old=db.execute("SELECT id FROM memories WHERE title='fixture preference'").fetchone()[0]
+            start=len(REQUESTS)
+            repaired=await run_dsh(scope=group,text='',context='',model='not-used',endpoint='http://127.0.0.1:1',api_key='not-used',dispatch=deny,state_root=root,remember=False,memory_only=True,
+                memory_actions=[{'name':'memory_forget','arguments':{'id':old}},
+                                {'name':'memory_save','arguments':{'type':'project','title':'群称呼确认 fixture','content':'群友明确确认：小茶指QQ 456，不是提问者QQ 123。','importance':5,'source':'explicit-correction-fixture'}}],
+                memory_check_titles=['群称呼确认 fixture'])
+            assert len(REQUESTS)==start and len(repaired['repaired'])==2
+            with sqlite3.connect(memory_files[0]) as db:
+                assert db.execute('SELECT forgotten FROM memories WHERE id=?',(old,)).fetchone()[0]==1
+                assert db.execute("SELECT content FROM memories WHERE title='群称呼确认 fixture'").fetchone()[0].endswith('不是提问者QQ 123。')
+            print('PASS: offline native correction is searchable, suppresses old memory, and makes no model call')
             start=len(REQUESTS)
             result=await run(group,"RESUME_CASE",remember=False)
             assert result["resumed"]

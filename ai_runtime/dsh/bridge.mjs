@@ -4,6 +4,7 @@ import {realpathSync, statSync} from 'node:fs';
 import {resolve, sep} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {flushMemory} from './mneme.mjs';
+import {prepareMemorySummary} from './memory-policy.mjs';
 
 export const name = 'csbot-bridge';
 export const inject = ['agents', 'sessionPersistence', 'compaction', 'tools', 'systemPrompt'];
@@ -60,6 +61,7 @@ export function apply(ctx) {
     // Guard the final provider response before DSH records it and before
     // Mneme's turn-end listener sees it. One-shot memory calls are excluded.
     ctx.on('llm/stream', async function* (options,next) {
+      prepareMemorySummary(options);
       if (!req.guard || !isAgentLoopRequest(options)) {yield* next(); return;}
       const chunks=[];
       const attempt=randomUUID();
@@ -135,6 +137,13 @@ export function apply(ctx) {
     }
     if(req.memoryOnly) {
       accepting=false;
+      const repaired=[];
+      for(const action of req.memoryActions ?? []) {
+        if(!['memory_save','memory_forget'].includes(action.name))throw new Error('Unsupported offline memory action');
+        const result=await ctx.tools.execute({callId:randomUUID(),name:action.name,arguments:action.arguments,agent:handle.agent,signal:new AbortController().signal});
+        if(result.isError)throw new Error('Offline memory action failed');
+        repaired.push({name:action.name,value:result.value});
+      }
       let verified=0;
       for(const title of req.memoryCheckTitles ?? []) {
         const result=await ctx.tools.execute({callId:randomUUID(),name:'memory_search',
@@ -145,7 +154,7 @@ export function apply(ctx) {
       await flushMemory();await ctx.sessionPersistence.flush();
       clearInterval(traceTimer);trace=[];
       await handle.dispose();
-      emit({type:'complete',reason:{kind:'completed'},messages:[],tools:[],verified});
+      emit({type:'complete',reason:{kind:'completed'},messages:[],tools:[],verified,repaired});
       input.close();process.exit(0);
     }
     const before = handle.agent.session.snapshotEvents().length;

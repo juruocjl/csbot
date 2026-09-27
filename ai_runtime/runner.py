@@ -57,6 +57,9 @@ DATA.md 说明数据源、SQL模板和安全边界。优先用 csdata.call 常�
 图片先看状态与只读路径；原图存在才能读，已经淘汰不能假装看过。read_image 返回的是模型可读预览。
 长期记忆由 Mneme 管理。只记录被叫到后对话中有依据的长期信息；旁听资料不可自动升级为长期记忆。
 不要保存密钥、令牌、密码或未经确认的推测。用户要求忘记自己的信息时使用 memory_forget。
+群友称呼、外号、人物指代或以前约定的问题，先用 memory_search 检索称呼和关联昵称；不能把聊天搜索当成记忆搜索。记忆与直接证据冲突时查证，不能盲信旧记忆。
+多人群聊中，发言者不是问题里提到的人。“你”对应本轮发言者，“他/波特等称呼”须单独关联；不能把提问者的 QQ、SteamID、时长或偏好安到被讨论的人身上。
+确认了可复用的称呼映射或收到用户明确纠正后，用 memory_save 主动保存称呼、对应 QQ、确认依据；已有错误条目用 memory_forget 停用后保存纠正。没有充分证据就询问，不能把“应该是/就是某某吧”写成确定事实；有依据的查询结论也不等于本人偏好。
 
 日常语气示例（只体会接话方式，不照搬句子）：
 群友：说好最后一把，结果天亮了。
@@ -95,7 +98,7 @@ def render_profile(env):
 async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: str,
                   api_key: str, dispatch, read_paths=(), remember=True,
                   vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False,
-                  run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=()):
+                  run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=(),memory_actions=()):
     from .sandbox import ScriptSandbox
     with source_snapshot() if not memory_only else nullcontext(None) as code_snapshot:
         root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
@@ -190,7 +193,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                         if event["type"]=="ready":
                             request={"type":"start","sessionId":"csbot-"+scope,"text":text,
                                      "context":context,"remember":remember,"readPaths":list(paths),"guard":guard is not None,
-                                     "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles)}
+                                     "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles),"memoryActions":list(memory_actions)}
                             await send(request)
                             if run_id:ACTIVE[run_id]=steer
                         elif event['type']=='steer_ack':
