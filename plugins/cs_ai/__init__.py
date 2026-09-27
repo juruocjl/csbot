@@ -1171,7 +1171,7 @@ async def ai_called_function(bot: Bot, event: GroupMessageEvent):
     current_run.set(chat_id)
     question=Message([seg for seg in event.message if not (seg.type=="at" and str(seg.data.get("qq"))==str(bot.self_id))])
     response=await ai_ask2(bot,str(event.user_id),event.get_session_id(),None,question,
-                           event.original_message,chat_id,event.message_id)
+                           event.original_message,chat_id,event.message_id,notify=ai_called.send)
     if response is not None: await ai_called.finish(response)
     await ai_called.finish()
 
@@ -1992,6 +1992,7 @@ async def ai_ask2(
     orimsg: Message,
     chat_id: str | None = None,
     current_mid: int | None = None,
+    notify=None,
 ) -> Message | None:
     chat_id=chat_id or str(uuid.uuid4())
     group_id = group_id_from_sid(sid)
@@ -2028,17 +2029,32 @@ async def ai_ask2(
             try:accepted=await steer_run(target,f'QQ用户 {uid} 补充当前问题：{text}')
             except ValueError as exc:
                 publish(target,{'type':'supplement','text':text,'delivery':'unknown'})
-                return MessageSegment.at(uid)+' '+str(exc)
+                return MessageSegment.at(uid)+' '+str(exc)+' '+config.cs_domain+f'/ai-chat?chatId={target}'
             if accepted:
                 publish(target,{'type':'supplement','text':text,'delivery':'accepted'})
                 from ..allmsg.outgoing import current_run
                 current_run.set(target)
-                return MessageSegment.at(uid)+' 补充收到了，会接着一起看。'
+                return MessageSegment.at(uid)+' 补充收到了，会接着一起看。'+config.cs_domain+f'/ai-chat?chatId={target}'
+
+    if notify:
+        if config.cs_ai_engine=='dsh':
+            from ai_runtime.service import register
+            try:register(chat_id,group_id,uid,text)
+            except ValueError as exc:return MessageSegment.at(uid)+' '+str(exc)
+        try:
+            await notify(MessageSegment.at(uid)+' 我看看，记录在这里：'+config.cs_domain+f'/ai-chat?chatId={chat_id}')
+        except Exception:
+            logger.warning('AI progress notification failed; continuing the registered request')
 
     try:
         ai_text = await ai_ask_main(uid, sid, persona, text, chat_id=chat_id)
     except Exception as exc:
         logger.error(f"AI request did not complete: {type(exc).__name__}")
+        if config.cs_ai_engine=='dsh':
+            from ai_runtime.store import state_store
+            from ai_runtime.events import publish
+            if state_store().execute("UPDATE runs SET status='interrupted',error=? WHERE id=? AND status IN ('queued','running')",(type(exc).__name__,chat_id)):
+                publish(chat_id,{'type':'status','status':'interrupted'})
         return MessageSegment.at(uid) + " 这次没能完成，记录已保留，可以稍后重试。"
     from ai_runtime.store import state_store
     generated=state_store().rows('SELECT digest FROM run_images WHERE run_id=?',(chat_id,))
@@ -2079,10 +2095,7 @@ async def aiask_function(bot: Bot, message: GroupMessageEvent, args: Message = C
     chat_id = str(uuid.uuid4())
     from ..allmsg.outgoing import current_run
     current_run.set(chat_id)
-    await aiask.send(
-        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
-    )
-    response = await ai_ask2(bot, uid, sid, None, args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
+    response = await ai_ask2(bot, uid, sid, None, args, message.original_message, chat_id=chat_id, current_mid=message.message_id,notify=aiask.send)
     if response is None:
         await aiask.finish()
     await aiask.finish(response)
@@ -2094,10 +2107,7 @@ async def aiasktb_function(bot: Bot, message: GroupMessageEvent, args: Message =
     chat_id = str(uuid.uuid4())
     from ..allmsg.outgoing import current_run
     current_run.set(chat_id)
-    await aiasktb.send(
-        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
-    )
-    response = await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
+    response = await ai_ask2(bot, uid, sid, "贴吧", args, message.original_message, chat_id=chat_id, current_mid=message.message_id,notify=aiasktb.send)
     if response is None:
         await aiasktb.finish()
     await aiasktb.finish(response)
@@ -2109,10 +2119,7 @@ async def aiaskxmm_function(bot: Bot, message: GroupMessageEvent, args: Message 
     chat_id = str(uuid.uuid4())
     from ..allmsg.outgoing import current_run
     current_run.set(chat_id)
-    await aiaskxmm.send(
-        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
-    )
-    response = await ai_ask2(bot, uid, sid, "xmm", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
+    response = await ai_ask2(bot, uid, sid, "xmm", args, message.original_message, chat_id=chat_id, current_mid=message.message_id,notify=aiaskxmm.send)
     if response is None:
         await aiaskxmm.finish()
     await aiaskxmm.finish(response)
@@ -2124,10 +2131,7 @@ async def aiaskxhs_function(bot: Bot, message: GroupMessageEvent, args: Message 
     chat_id = str(uuid.uuid4())
     from ..allmsg.outgoing import current_run
     current_run.set(chat_id)
-    await aiaskxhs.send(
-        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
-    )
-    response = await ai_ask2(bot, uid, sid, "xhs", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
+    response = await ai_ask2(bot, uid, sid, "xhs", args, message.original_message, chat_id=chat_id, current_mid=message.message_id,notify=aiaskxhs.send)
     if response is None:
         await aiaskxhs.finish()
     await aiaskxhs.finish(response)
@@ -2139,10 +2143,7 @@ async def aiasktmr_function(bot: Bot, message: GroupMessageEvent, args: Message 
     chat_id = str(uuid.uuid4())
     from ..allmsg.outgoing import current_run
     current_run.set(chat_id)
-    await aiasktmr.send(
-        MessageSegment.at(uid) + " " + "我看看，记录在这里：" + (config.cs_domain + f"/ai-chat?chatId={chat_id}")
-    )
-    response = await ai_ask2(bot, uid, sid, "tmr", args, message.original_message, chat_id=chat_id, current_mid=message.message_id)
+    response = await ai_ask2(bot, uid, sid, "tmr", args, message.original_message, chat_id=chat_id, current_mid=message.message_id,notify=aiasktmr.send)
     if response is None:
         await aiasktmr.finish()
     await aiasktmr.finish(response)
