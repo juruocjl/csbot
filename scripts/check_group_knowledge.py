@@ -88,7 +88,8 @@ class Checks(unittest.IsolatedAsyncioTestCase):
             result = await self.group.call('member_avatar', {'uid': '2'})
             self.assertEqual(result['full_status'], 'available')
             self.assertTrue(Path(result['full_path']).is_relative_to(Path(tmp).resolve()/'.private'))
-            self.assertEqual(Image.open(result['full_path']).format, 'PNG')
+            with Image.open(result['full_path']) as saved:
+                self.assertEqual(saved.format, 'PNG')
             self.assertTrue(Path(result['thumbnail_path']).is_file())
             self.group.cache.db.close()
 
