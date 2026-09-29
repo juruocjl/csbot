@@ -127,7 +127,7 @@ print(csdata.call('point_history', uid='这里填明确的QQ号', since=0, limit
 ```
 
 - `group_members(search='',offset=0,limit=50)` 返回当前群成员，搜索 QQ/QQ昵称/群名片，`limit` 最大100；`total/truncated` 提示继续分页。昵称重复时不要任意挑人。`member_info(uid)` 返回 `member.uid/nickname/card/role/avatar_url`；称呼优先群名片，再昵称。每轮第一次查询重新从 OneBot 拉成员列表，其余调用复用本轮快照；`fetched_at` 是快照时间，不是改名时间。QQ连接失败时明确报错；不能拿数据库旧昵称说成当前昵称。
-- `member_avatar(uid)` 先验证目标属于本群，再从固定 QQ 头像地址取不超过2MiB、400万像素的图片，并规范化为最长640像素PNG以匹配文件格式。返回 `full_status/full_path/thumbnail_path`，继续用 `read_image` 看实际图像；**仅拿到地址不等于看过**。头像也进入原图1GiB LRU与永久缩略图链路，并在本轮受限只读授权中注册；不自动向群发送头像。获取失败如实说明，不猜图像内容。此处指QQ头像，不是Steam头像。
+- `member_avatar(uid)` 先验证目标属于本群，再从固定 QQ 头像地址取不超过2MiB、400万像素的图片，并规范化为最长640像素PNG以匹配文件格式。返回 `full_status/full_path/thumbnail_path`，继续用 `read_image` 看实际图像；**仅拿到地址不等于看过**。`member_info` 返回的 `avatar_url` 只是网页地址，不能直接传给只读本地文件的 `read_image`；该错误不能作为“没有头像读取权限”的证据。问当前本群成员头像内容时，先调 `member_avatar`，确认 `full_status` 并读返回的 `full_path`；原图不可读时检查返回的缩略图路径，二者都不可读才说明失败点。头像也进入原图1GiB LRU与永久缩略图链路，并在本轮受限只读授权中注册；不自动向群发送头像。获取失败如实说明，不猜图像内容。此处指QQ头像，不是Steam头像。
 - `group_admins()` 的 `qq_roles` 是QQ实际群主(owner)/管理员(admin)，`roles_complete=false` 表示部分角色未知；`election_state` 是机器人竞选记录。两者不同可以是手动任免、调用失败或旧记录，应说明差异，不能混称。`election_state` 模板/逻辑表仅开放三个本群键：selected_uid（最后记录的竞选管理员，可能已下放）、active（字符串1才表示记录在位）、transfer_excluded_uids（JSON转让排除名单）；缺失不代表QQ没有管理员。
 - `election_rules()` 返回当前部署规则和本群启用状态。每日23:55按权重随机抽取，权重不是单纯点数，不能把点数榜当当选概率。候选要求当天发言、绑定Steam，排除上位记录及转让排除名单；具体时间口径见返回的 windows。概率公式中的惩罚次数是触发次数，禁言未启用时仍可能增加。
 - `points_today(uid可省略,day=0)` 使用与复读功能相同的服务器本地时区23:55业务日，返回明确 `window_start/window_end`。day=1为上一业务日，最大365。指定uid先确认当前群成员，无流水返回0；不传uid按常规点、奖励点排序，只列该业务日有流水者（可能含已退群者），不是完整成员榜。结果有截断时不能当作全群统计。

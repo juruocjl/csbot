@@ -44,6 +44,8 @@ class Provider(BaseHTTPRequestHandler):
             delta={"role":"assistant","content":"File permission checked."};finish="stop"
         elif "SOURCE_READ_CASE" in str(messages[-1].get("content")):
             delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_source_index","type":"function","function":{"name":"read","arguments":json.dumps({"file_path":"SOURCE.md"})}}]};finish="tool_calls"
+        elif "AVATAR_URL_CASE" in str(messages[-1].get("content")):
+            delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_avatar_url","type":"function","function":{"name":"read_image","arguments":json.dumps({"file_path":"https://q1.qlogo.cn/g?b=qq&nk=3345039979&s=640"})}}]};finish="tool_calls"
         elif "DENY_FILE" in str(messages[-1].get("content")):
             delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"read","arguments":json.dumps({"file_path":"/etc/passwd"})}}]};finish="tool_calls"
         else:
@@ -115,6 +117,11 @@ async def main():
             assert any("outside the authorized" in str(m.get("content")) for m in tool_messages)
             assert not any("root:x:" in str(m.get("content")) for m in tool_messages)
             print("PASS: minimal tool schema; native file tool cannot read host files")
+            start=len(REQUESTS)
+            await run(scope_key("web","1","123","avatar-url"),"AVATAR_URL_CASE",remember=False)
+            tool_messages=[m for r in REQUESTS[start:] for m in r["messages"] if m.get("role")=="tool"]
+            assert any("member_avatar" in str(m.get("content")) and "not a URL" in str(m.get("content")) for m in tool_messages)
+            print("PASS: avatar URL misuse tells the model to fetch an authorized local path")
             start=len(REQUESTS)
             result=await run(scope_key("web","1","123","source"),"SOURCE_READ_CASE",remember=False)
             tool_messages=[m for r in REQUESTS[start:] for m in r["messages"] if m.get("role")=="tool"]

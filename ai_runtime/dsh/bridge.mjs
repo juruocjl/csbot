@@ -124,6 +124,8 @@ export function apply(ctx) {
       if(['web_search','web_fetch'].includes(exec.name) && ++webCount>8)return 'Web budget exhausted.';
       if(exec.name==='web_search' && (!Array.isArray(exec.arguments.queries)||exec.arguments.queries.some(q=>typeof q!=='string'||q.length>300)))return 'Use short public terms, at most 300 characters per query; never send private chat.';
       if (exec.name === 'read' || exec.name === 'read_image') {
+        if(exec.name==='read_image' && /^https?:\/\//i.test(String(exec.arguments.file_path ?? '')))
+          return "read_image accepts an authorized local file path, not a URL. For this group's QQ avatar, call csdata.call('member_avatar', uid='QQ号') via execute_python, then read its full_path.";
         try {
           const path = realpathSync(resolve(root, exec.arguments.file_path));
           if (!(path === root || path.startsWith(root + sep) || allowedFiles.has(path))) return 'Path is outside the authorized read-only workspace.';
