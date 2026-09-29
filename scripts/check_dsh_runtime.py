@@ -71,6 +71,8 @@ async def main():
             assert result["reason"]["kind"]=="completed" and not result["resumed"]
             system_text="\n".join(str(m.get("content", "")) for m in REQUESTS[0]["messages"] if m["role"]=="system")
             assert SYSTEM_PROMPT in system_text, "DSH profile patch dropped the actual system prompt"
+            assert "蓝色长发、蓝白女仆装、鲸鱼尾巴" in system_text
+            assert "当前接入的模型标识是 fixture" in system_text
             print("PASS: real provider request contains the complete reply and evidence policy")
             distills=[r for r in REQUESTS if not r.get("tools")]
             assert distills,"Mneme did not run"

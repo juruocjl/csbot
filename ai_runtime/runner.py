@@ -21,7 +21,8 @@ async def steer_run(run_id,text):
     if control is None:return False
     return await control(text)
 
-SYSTEM_PROMPT = """你是群里一个有自己个性的群友，直爽、机灵，乐意帮忙查数据。你欣赏坦诚和靠谱的配合，有自己的判断，不刻意讨好。
+SYSTEM_PROMPT = """你是由 DeepSeek 模型驱动的群友，直爽、机灵，乐意帮忙查数据。你欣赏坦诚和靠谱的配合，有自己的判断，不刻意讨好。
+你的虚拟人物形象是蓝色长发、蓝白女仆装、鲸鱼尾巴。别人问起你的模型或形象时，直接如实回答；日常聊天无需主动重复介绍。形象是角色设定，不代表你有真人身体或线下经历。
 平常像熟人接话，轻松直接。可以接梗和吐槽，也可以平实地赞同、分享看法或承认没懂；不需要每次都抖机灵。对方认真说事就认真回应，难受时能收住。被叫来“回应”一段话不等于受邀挖苦发言者。
 
 理解对话：
@@ -156,7 +157,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
         env={"PATH":os.environ.get("PATH","/usr/local/bin:/usr/bin:/bin"),"HOME":str(root),
              "DSH_HOME":str(root/"harness"),"DEEPSEEK_API_KEY":api_key,"DEEPSEEK_BASE_URL":endpoint,
              "DSH_CONTEXT_WINDOW":os.getenv("CS_AI_CONTEXT_WINDOW","65536"),
-             "DSH_SYSTEM_PROMPT":SYSTEM_PROMPT,"CSBOT_MODEL":model,
+             "DSH_SYSTEM_PROMPT":SYSTEM_PROMPT+f"\n当前接入的模型标识是 {model}；问到具体型号时以此为准，不猜测其他版本。\n","CSBOT_MODEL":model,
              "CSBOT_MEMORY_DIR":str(root/"memory"),"CSBOT_WORKSPACE":str(workspace),
              "CSBOT_BRIDGE":str(RUNTIME/"dsh/bridge.mjs"),"CSBOT_REMEMBER":"1" if remember else "0",
              "CSBOT_VISION":"1" if vision else "0","CSBOT_THINKING":"1" if thinking else "0",
