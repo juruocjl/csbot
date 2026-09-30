@@ -91,7 +91,7 @@ print(csdata.image("消息里[image:...]的ID"))
 
 `search` 可选过滤项：users（QQ 字符串数组）、time_start、time_end（Unix 秒或 YYYY-MM-DD / YYYY-MM-DD HH:MM:SS）、strict_time_end、limit（1–20）。返回最多 5 万候选的 BM25 结果和截断标记。`block_id` 绑定原始 record_id 列表，不依赖会重建的 span id。消息中的 `[reply:id]` 是 record_id，不是 mid。
 
-`image` 先验证图片确实出现在本群，再返回 `image_id/full_status/full_path/thumbnail_path` 和已知尺寸。原图总预算 1 GiB，LRU 淘汰；缩略图暂不清理。`available` 才有 full_path；`evicted` 是正常淘汰，`missing` 是文件缺失。用原生 `read_image` 读取返回的路径；它会生成模型预览，不能把小预览说成逐像素原图检查。状态判断仍以实际文件可读性为准；读失败时退回缩略图或明确说明。不会为已淘汰原图自动联网重新下载。
+`image` 先验证图片确实出现在本群，再返回 `image_id/full_status/full_path/thumbnail_path` 和已知尺寸。原图总预算 1 GiB，LRU 淘汰；缩略图暂不清理。`available` 才有 full_path；`evicted` 是正常淘汰，`missing` 是文件缺失。`available` 时先用原生 `read_image` 读取 `full_path`，不可用或读失败再试 `thumbnail_path`；它会生成模型预览，预览变小不等于归档只剩缩略图，也不能把预览说成逐像素原图检查。读图报错不等于原图淘汰，应按实际状态说明。不会为已淘汰原图自动联网重新下载。
 
 机器人生成的图片还可能是语义归档，仍用相同的 `csdata.image(id)` 查询，无新增工具：
 

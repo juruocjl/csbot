@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from .source import source_snapshot
 
@@ -62,7 +63,7 @@ DATA.md 说明数据源、SQL模板和安全边界。优先用 csdata.call 常�
 管理员、点数、昵称等会变，回答当前情况先查；区分QQ实际权限和机器人竞选状态，不凭旧聊天或记忆断定在任。
 文档不清楚或与结果矛盾时，先read本轮SOURCE.md，再按索引读实际业务源码和调用处。隔离Python的/source也是同一只读快照，可搜索与AST分析；不是整个仓库。源码不代表线上配置或数据，不授予写入/额外SQL权限。
 工具调用和查证是交流的一部分，不需要刻意宣告自己是 agent。计算有复杂条件时用脚本核对。
-图片先看状态与只读路径；原图存在才能读，已经淘汰不能假装看过。read_image 返回的是模型可读预览。
+图片先看状态与只读路径；full_status=available时先读full_path，只有原图不可用或读失败才读thumbnail_path。read_image生成的预览较小不代表归档只剩缩略图；原图读图报错也不等于原图已淘汰，须按实际状态说明。原图存在才能说看过，已经淘汰不能假装看过。
 机器人数据图可能只归档 metadata：csdata.image 返回 metadata_only 时直接读取发送时快照，不是图片淘汰，也不需要读图；图库引用仅在校验后 available 才能读。历史快照不代表当前状态，不能凭快照声称看到了头像、画面或排版。详见 DATA.md。
 记忆由 Mneme 管理。只从被叫到后的对话提炼；旁听资料不可自动升级为记忆。所有层都须准确反映原话含义；基础知识必须有依据，有复用价值的临时资料可保存在低层。
 不要保存密钥、令牌、密码；不能把玩笑、反话、假设、引用或助手自己的推断记成当事人的经历、计划、偏好。意思未弄清就暂不提炼；写“自称/未证实”不能修复错误的字面理解。明确提出的待查线索可保留其疑问性质。用户要求忘记自己的信息时使用 memory_forget。
@@ -71,6 +72,36 @@ DATA.md 说明数据源、SQL模板和安全边界。优先用 csdata.call 常�
 记忆分为foundation基础知识、topic专题、episode资料。只有明确确认的人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)进入基础层。memory_save的subject填写被讨论对象、keys填写检索词、evidence引用本轮证据目录的id和逐字quote。称呼映射subject为QQ号；明确纠正时先检索旧条目，再用supersedes列出旧ID，由系统保存成功后停用旧条目。不要先忘记再保存。低层统计/资料可留存，标明时间及不确定性；基础知识优先使用，未提供的称呼用memory_search。没有充分证据就询问，不能把“应该是/就是某某吧”写成确定事实；有依据的查询结论也不等于本人偏好。
 
 """
+
+
+def image_suffix(path: Path) -> str | None:
+    """Recognize the stored bytes, including legacy rows without MIME metadata."""
+    with path.open("rb") as source:
+        header=source.read(16)
+    if header.startswith(b"\xff\xd8\xff"): return ".jpg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"): return ".png"
+    if header[:4]==b"RIFF" and header[8:12]==b"WEBP": return ".webp"
+    if header[:6] in (b"GIF87a",b"GIF89a"): return ".gif"
+    return None
+
+
+def readable_image_view(result: dict, artifacts: Path, views: list[Path]) -> dict:
+    """Give DSH a matching extension without altering archived original bytes."""
+    source = result.get("full_path")
+    if not source: return result
+    source = Path(source)
+    if source.is_symlink() or not source.is_file():
+        return result
+    suffix=image_suffix(source)
+    if not suffix or source.suffix.lower()==suffix: return result
+    artifacts.mkdir(parents=True, exist_ok=True)
+    view = artifacts / f"image-view-{uuid4().hex}{suffix}"
+    try:
+        os.link(source, view)
+    except OSError:
+        shutil.copyfile(source, view)
+    views.append(view)
+    return result | {"full_path": str(view)}
 
 
 def scope_key(channel: str, group_id: str, user_id: str, conversation="default"):
@@ -144,9 +175,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
         # Generated scratch artifacts live for one turn. Chat thumbnails and
         # normalized DSH previews retain their separate persistence policy.
         artifacts=workspace/'artifacts'
-        if not memory_only and artifacts.is_dir():
-            for path in artifacts.iterdir():
-                if path.is_file() and not path.is_symlink(): path.unlink()
+        image_views=[]
         os.chmod(root,0o700)
         for filename in ("DATA.md",):
             source=RUNTIME/filename
@@ -170,6 +199,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
         async def gateway(request):
             result=await dispatch(request)
             if request.get("method")=="image" or (request.get('method')=='call' and request.get('name')=='member_avatar'):
+                result=readable_image_view(result,artifacts,image_views)
                 for field in ("full_path","thumbnail_path"):
                     if result.get(field): paths.add(result[field])
             return result
@@ -177,6 +207,9 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
         profile=root/("memory-import-profile.json" if memory_only else "profile.json")
         profile.write_text(json.dumps(render_profile(env)))
         async with LIVE_SLOTS:
+            if not memory_only and artifacts.is_dir():
+                for path in artifacts.iterdir():
+                    if path.is_file() and not path.is_symlink(): path.unlink()
             if on_started:await on_started()
             process=await asyncio.create_subprocess_exec(str(executable),"--profile","sdk-minimal",
                 "--patch",str(profile),cwd=workspace,env=env,
@@ -267,3 +300,5 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                 await errors
                 if diagnostics and error_tail:
                     diagnostics(error_tail.decode(errors="replace").replace(api_key,"[REDACTED]").replace(endpoint,"[MODEL_ENDPOINT]"))
+                for view in image_views:
+                    view.unlink(missing_ok=True)

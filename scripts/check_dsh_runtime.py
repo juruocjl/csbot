@@ -1,6 +1,7 @@
 """DSH/Mneme protocol checks with a local mock provider, no real API key."""
 import asyncio
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from io import BytesIO
 import json
 import os
 import re
@@ -12,15 +13,23 @@ import threading
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from ai_runtime.runner import run_dsh,scope_key,SYSTEM_PROMPT
+from PIL import Image
+from ai_runtime.runner import run_dsh,scope_key,SYSTEM_PROMPT,readable_image_view
 
 REQUESTS=[]
+IMAGE_VIEW_PATH=None
 
 
 class Provider(BaseHTTPRequestHandler):
     def log_message(self,*_):pass
     def do_POST(self):
-        body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        payload=self.rfile.read(int(self.headers['Content-Length']))
+        try:
+            body=json.loads(payload)
+        except (UnicodeDecodeError,json.JSONDecodeError):
+            # Vision request may carry raw image bytes; the fixture only needs
+            # to acknowledge the tool cycle, not interpret the image itself.
+            body={"messages":[{"role":"tool","content":"image payload"}],"tools":[{}]}
         REQUESTS.append(body)
         messages=[m for m in body["messages"] if not (m.get("role")=="user" and "群聊基础知识（资料" in str(m.get("content")) and "完整证据目录" not in str(m.get("content")))]
         if not body.get("tools"):
@@ -46,6 +55,8 @@ class Provider(BaseHTTPRequestHandler):
             delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_source_index","type":"function","function":{"name":"read","arguments":json.dumps({"file_path":"SOURCE.md"})}}]};finish="tool_calls"
         elif "AVATAR_URL_CASE" in str(messages[-1].get("content")):
             delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_avatar_url","type":"function","function":{"name":"read_image","arguments":json.dumps({"file_path":"https://q1.qlogo.cn/g?b=qq&nk=3345039979&s=640"})}}]};finish="tool_calls"
+        elif "IMAGE_VIEW_CASE" in str(messages[-1].get("content")):
+            delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_image_view","type":"function","function":{"name":"read_image","arguments":json.dumps({"file_path":IMAGE_VIEW_PATH})}}]};finish="tool_calls"
         elif "DENY_FILE" in str(messages[-1].get("content")):
             delta={"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"read","arguments":json.dumps({"file_path":"/etc/passwd"})}}]};finish="tool_calls"
         else:
@@ -122,6 +133,24 @@ async def main():
             tool_messages=[m for r in REQUESTS[start:] for m in r["messages"] if m.get("role")=="tool"]
             assert any("member_avatar" in str(m.get("content")) and "not a URL" in str(m.get("content")) for m in tool_messages)
             print("PASS: avatar URL misuse tells the model to fetch an authorized local path")
+            raw=BytesIO()
+            Image.new("RGB",(1170,2532),(32,96,184)).save(raw,format="JPEG")
+            archived=root/"archived.png"
+            archived.write_bytes(raw.getvalue())
+            image_views=[]
+            image_result=readable_image_view({"full_path":str(archived),"full_status":"available","mime":None},root/"image-views",image_views)
+            assert image_result["full_path"].endswith(".jpg") and Path(image_result["full_path"]).read_bytes()==raw.getvalue()
+            assert archived.read_bytes()==raw.getvalue(), "archive must retain original bytes and filename"
+            global IMAGE_VIEW_PATH
+            IMAGE_VIEW_PATH=image_result["full_path"]
+            image_turn=await run(scope_key("web","1","123","image-view"),"IMAGE_VIEW_CASE",remember=False,read_paths=[IMAGE_VIEW_PATH],vision=True)
+            image_results=[block for event in image_turn.get("tools",[]) if event.get("type")=="tool/result"
+                           for block in event.get("data",{}).get("message",{}).get("content",[])
+                           if block.get("type")=="tool-result"]
+            assert image_results and all(not block.get("isError") for block in image_results),image_results
+            assert any("<type>image</type>" in str(block.get("content")) for block in image_results),image_results
+            for view in image_views:view.unlink()
+            print("PASS: mislabeled JPEG archive remains intact; format-correct view is readable by native DSH image tool")
             start=len(REQUESTS)
             result=await run(scope_key("web","1","123","source"),"SOURCE_READ_CASE",remember=False)
             tool_messages=[m for r in REQUESTS[start:] for m in r["messages"] if m.get("role")=="tool"]
