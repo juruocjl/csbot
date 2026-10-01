@@ -3,6 +3,7 @@ import ast
 import asyncio
 from io import BytesIO
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -31,7 +32,7 @@ async def main():
         store.execute('INSERT INTO run_images VALUES(?,?,?,?)',('image',key,digest,'chart'))
         async def ask(*args,**kwargs):return '图在这。'
         namespace=dict(uuid=uuid,Message=Message,MessageSegment=MessageSegment,image_segment=image_segment,Bot=object,
-            group_id_from_sid=lambda x:'g',_format_ai_message=lambda m,ids:str(m),config=SimpleNamespace(cs_ai_engine='dsh',cs_domain='https://fixture.invalid'),__package__='plugins.cs_ai',
+            group_id_from_sid=lambda x:'g',_format_ai_message=lambda m,ids,names:str(m),re=re,config=SimpleNamespace(cs_ai_engine='dsh',cs_domain='https://fixture.invalid'),__package__='plugins.cs_ai',
             logger=SimpleNamespace(info=lambda *a:None,error=lambda *a:None),ai_ask_main=ask,_should_forward_ai_result=lambda s:False,_render_at_segments=Message)
         exec(compile(module,str(source),'exec'),namespace)
         reply=await namespace['ai_ask2'](None,'123','group_g_123',None,Message('画图'),Message('画图'),chat_id=key)

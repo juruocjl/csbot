@@ -126,6 +126,8 @@ def install():
         if isinstance(raw,str) and data.get("auto_escape"):
             raw=MessageSegment.text(raw)
         payload = freeze_message(raw)
+        from . import snapshot_outgoing_ats
+        await snapshot_outgoing_ats(self,str(gid),payload)
         store = state_store()
         key = store.stage(str(self.self_id), str(gid), api, payload, current_run.get())
         data = dict(data)

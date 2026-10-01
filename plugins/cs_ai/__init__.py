@@ -229,15 +229,19 @@ def _string_list(values: Any, limit: int = 20) -> list[str]:
     return result
 
 
-def _format_ai_message(msg: Message, image_ids: list[str] | None = None) -> str:
+def _format_ai_message(msg: Message, image_ids: list[str] | None = None,
+                       at_names: dict[str, str] | None = None) -> str:
+    from ai_runtime.mentions import render_at
     image_ids = image_ids or []
+    at_names = at_names or {}
     image_index = 0
     parts: list[str] = []
     for seg in msg:
         if seg.type == "text":
             parts.append(str(seg.data.get("text", "")))
         elif seg.type == "at":
-            parts.append(f"[at:{seg.data.get('qq')}]")
+            uid=str(seg.data.get("qq"))
+            parts.append(render_at(uid,at_names.get(uid)))
         elif seg.type == "image":
             if image_index < len(image_ids):
                 parts.append(f"[image:{image_ids[image_index]}]")
@@ -1029,12 +1033,11 @@ async def ai_ask2(
 ) -> Message | None:
     chat_id=chat_id or str(uuid.uuid4())
     group_id = group_id_from_sid(sid)
-    image_ids = (
-        await chat_history_db.get_message_image_ids_by_mid(group_id, current_mid)
-        if current_mid is not None
-        else []
-    )
-    text = _format_ai_message(msg, image_ids)
+    current_record=(await chat_history_db.get_message_reference_by_mid(group_id,current_mid)
+                    if current_mid is not None else None)
+    image_ids=re.findall(r"\[image:([0-9a-f]{16})\]",current_record["text"]) if current_record else []
+    text = _format_ai_message(msg, image_ids,
+                              current_record.get("mentioned_names",{}) if current_record else {})
     is_supplement=text.startswith(('补充：','补充:'))
     msg2id: int | None = None
     try:

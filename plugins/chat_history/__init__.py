@@ -11,6 +11,8 @@ import msgpack
 import re
 from typing import Any, Callable, Iterable
 
+from ai_runtime.mentions import at_display_name, render_at
+
 from nonebot import get_driver, get_plugin_config, logger, require
 from nonebot.plugin import PluginMetadata
 from sqlalchemy import delete, func, or_, select, update
@@ -121,6 +123,7 @@ class ParsedMessage:
     plain_text: str
     normalized_text: str
     mentioned_uids: list[str]
+    mentioned_names: dict[str, str]
     reply_to_record_id: int | None
     reply_to_mid: int | None
     has_image: bool
@@ -354,6 +357,7 @@ def extract_keywords(text: str, limit: int = 12) -> list[str]:
 def parse_message_segments(segments: Iterable[Any]) -> ParsedMessage:
     text_parts: list[str] = []
     mentioned_uids: list[str] = []
+    mentioned_names: dict[str, str] = {}
     image_summaries: list[str] = []
     segment_types: list[str] = []
     reply_to_record_id: int | None = None
@@ -367,10 +371,12 @@ def parse_message_segments(segments: Iterable[Any]) -> ParsedMessage:
         segment_types.append(seg_type)
         if seg_type == "text" and len(raw_seg) >= 2:
             text_parts.append(str(raw_seg[1]).replace("\x00", " "))
-        elif seg_type == "at" and len(raw_seg) >= 2:
+        elif seg_type in ("at", "atv2") and len(raw_seg) >= 2:
             uid = str(raw_seg[1])
+            name=at_display_name(raw_seg[2]) if seg_type=="atv2" and len(raw_seg)>=3 else None
             mentioned_uids.append(uid)
-            text_parts.append(f"[at:{uid}]")
+            if name: mentioned_names[uid]=name
+            text_parts.append(render_at(uid,name))
         elif seg_type == "reply" and len(raw_seg) >= 2:
             try:
                 reply_to_record_id = int(raw_seg[1])
@@ -409,6 +415,7 @@ def parse_message_segments(segments: Iterable[Any]) -> ParsedMessage:
         plain_text=plain_text,
         normalized_text=normalize_text(plain_text),
         mentioned_uids=mentioned_uids,
+        mentioned_names=mentioned_names,
         reply_to_record_id=reply_to_record_id if reply_to_record_id and reply_to_record_id > 0 else None,
         reply_to_mid=reply_to_mid,
         has_image=has_image,
@@ -1214,6 +1221,7 @@ class DataManager:
                 "time": datetime.fromtimestamp(raw_row.timestamp).strftime("%Y-%m-%d %H:%M:%S"),
                 "text": parsed.plain_text,
                 "mentioned_uids": parsed.mentioned_uids,
+                "mentioned_names": parsed.mentioned_names,
                 "reply_to_message_id": parsed.reply_to_record_id,
                 "reply_to_mid": parsed.reply_to_mid,
                 "has_image": parsed.has_image,
@@ -1228,7 +1236,7 @@ class DataManager:
                 select(GroupMsg)
                 .where(
                     GroupMsg.mid == int(mid),
-                    GroupMsg.sid.like(f"group_{group_id}_%"),
+                    GroupMsg.sid.like(f"group\\_{group_id}\\_%", escape="\\"),
                 )
                 .order_by(GroupMsg.timestamp.desc(), GroupMsg.id.desc())
                 .limit(1)
@@ -1241,6 +1249,7 @@ class DataManager:
             "message_id": raw_row.id,
             "qq": user_id_from_sid(raw_row.sid),
             "text": parsed.plain_text,
+            "mentioned_names": parsed.mentioned_names,
         }
 
     async def get_message_image_ids_by_mid(self, group_id: str, mid: int) -> list[str]:

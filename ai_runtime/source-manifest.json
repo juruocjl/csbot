@@ -3,7 +3,7 @@
   "files": {
     "plugins/fudu/__init__.py": "c687d9d0bcd0e42b00f62f2c684b609a74503139d0cf01fad72f3bfd6b1259a9",
     "plugins/fudu/config.py": "8f8849f0fe979ff3ee52f1580d5bb198deabc052942354d67a3fb73c4b4a9289",
-    "plugins/allmsg/__init__.py": "36d11798487f6c4146665178f254156e2e43201d6c77fe4dd15db0a2532cc80a",
+    "plugins/allmsg/__init__.py": "5cbe1809ca81d9e28674d325f6e29e6ea675cb74ba308d2f81eb7a7de707109d",
     "plugins/cs_db_val/__init__.py": "55159bdafa1b9eae7ad4624ca1d9c219fd2b10d8f3f0461ab58825d6d18ee004",
     "plugins/models/__init__.py": "024bf9eafad8c8eb39f94e9422f6d6e263d02d5d141b91050086adb2c02907f0",
     "plugins/utils/__init__.py": "d9c5a95ea1986e11520f063e8443f913814b3aaef0cc556e0c1416dc53ad1c05",
@@ -13,6 +13,7 @@
     "plugins/time_location/__init__.py": "4bc2c8247321f2d471a644c568a0c316fe78c63753a2843c537cdbd7061caad5",
     "plugins/time_location/logic.py": "2ec872b11e1bf198bfdad929adaddadc06a8ddd480963b02e4247e8070a74e5f",
     "ai_runtime/group.py": "654a8d98d082641c05de0bc6f921f476b962fef7aad3c1095de895dd0f1b5e31",
+    "ai_runtime/mentions.py": "79ac9ea5edceffdad3d191125142778a5421ed0a88a681495bc578658770e338",
     "ai_runtime/queries.py": "a880a17d1cfa9c2417f32feff5815d0875bbe33db58eaa1f9ec444161ae2f90a"
   }
 }

@@ -43,6 +43,7 @@ import matplotlib.dates as mdates
 from sqlalchemy import String, Integer, LargeBinary, select, func, desc, text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from ai_runtime.media import media_cache
+from ai_runtime.mentions import at_display_name
 
 __plugin_meta__ = PluginMetadata(
     name="allmsg",
@@ -234,6 +235,37 @@ async def get_image(file: str, url: str) -> bytes:
                 raise ValueError("image exceeds download limit")
         return bytes(content)
 
+async def _at_names(bot: Bot, group_id: str, uids: set[str]) -> dict[str, str | None]:
+    """Capture group display names now; a later lookup is not historical data."""
+    async def lookup(uid: str):
+        try:
+            info = await asyncio.wait_for(bot.get_group_member_info(
+                group_id=int(group_id), user_id=int(uid), no_cache=True), timeout=2)
+            return at_display_name(info.get("card") or info.get("nickname"))
+        except Exception:
+            return None
+
+    targets=sorted(uids)[:16]
+    values=await asyncio.gather(*(lookup(uid) for uid in targets))
+    return dict(zip(targets,values))
+
+
+async def snapshot_outgoing_ats(bot: Bot, group_id: str, payload: list[dict]) -> None:
+    """Freeze names before send, so a delayed outbox drain cannot invent them."""
+    def at_items(items):
+        for item in items:
+            if item.get("type")=="at":
+                yield item
+            elif item.get("type")=="node":
+                yield from at_items(item.get("data",{}).get("content",[]))
+
+    mentions=list(at_items(payload))
+    uids={str(item.get("data",{}).get("qq","")) for item in mentions}
+    names=await _at_names(bot,group_id,{uid for uid in uids if uid.isdecimal()})
+    for item in mentions:
+        item["data"]["_csbot_at_name"] = names.get(str(item["data"].get("qq")))
+
+
 async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: Message, *, strict_index: bool = False) -> str:
     # A platform echo must not re-download images already archived semantically.
     existing = await db.get_id_by_mid(mid, sid.split('_')[1])
@@ -242,6 +274,11 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         return hashlib.sha256(str(existing).encode()).hexdigest()
     msglist = []
     mhs: str | None = None
+    at_names={}
+    if not strict_index:
+        at_names=await _at_names(bot,sid.split('_')[1],{
+            str(seg.data.get("qq","")) for seg in message
+            if seg.type=="at" and str(seg.data.get("qq","")).isdecimal()})
     for seg in message:
         if seg.type == "text":
             msglist.append(["text", seg.data["text"]])
@@ -249,7 +286,10 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
             reply_mid = int(seg.data["id"])
             msglist.append(["reply", await db.get_id_by_mid(reply_mid, sid.split("_")[1]), reply_mid])
         elif seg.type == "at":
-            msglist.append(["at", seg.data["qq"]])
+            uid=str(seg.data["qq"])
+            name=(at_display_name(seg.data.get("_csbot_at_name")) if strict_index
+                  else at_names.get(uid))
+            msglist.append(["atv2", uid, name])
         elif seg.type == "face":
             msglist.append(["face", seg.data["id"]])
         elif seg.type == "image_meta" and strict_index:
@@ -283,7 +323,9 @@ async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: 
         logger.warning(f"index chat message {record_id} failed: {e}")
     if mhs is not None:
         return mhs
-    return hashlib.sha256(msgpack.dumps(msglist)).hexdigest()
+    # Fudu compares message content, not member display-name snapshots.
+    content_segments=[["at",seg[1]] if seg[0]=="atv2" else seg for seg in msglist]
+    return hashlib.sha256(msgpack.dumps(content_segments)).hexdigest()
 
 FuduType = Callable[[Bot, GroupMessageEvent, str], Awaitable[None]]
 
@@ -408,7 +450,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent) -> None:
         atset = set()
         atall = False
         for seg in msg:
-            if seg[0] == "at":
+            if seg[0] in ("at", "atv2"):
                 if seg[1] == "all":
                     atall = True
                 else:
@@ -452,7 +494,7 @@ async def report_function(bot: Bot, message: GroupMessageEvent) -> None:
             del lastattime[uid]
         atset = set()
         for seg in msg:
-            if seg[0] == "at" and seg[1] != "all" and int(seg[1]) != uid:
+            if seg[0] in ("at", "atv2") and seg[1] != "all" and int(seg[1]) != uid:
                 atset.add(int(seg[1]))
         for toid in atset:
             if toid not in lastattime:

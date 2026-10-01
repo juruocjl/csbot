@@ -24,6 +24,7 @@ FILES = {
     'plugins/time_location/__init__.py': '时间查询命令、配置读取与自动删除',
     'plugins/time_location/logic.py': '地点匹配与时区计算',
     'ai_runtime/group.py': 'AI群资料、头像、点数与规则查询实现',
+    'ai_runtime/mentions.py': '@对象显示名快照的边界与文本呈现',
     'ai_runtime/queries.py': 'AI逻辑表、SQL模板与授权编译器',
 }
 

@@ -3,6 +3,7 @@
 CS_DATABASE must be supplied securely. All synthetic database rows are removed.
 """
 import asyncio
+import ast
 import base64
 from io import BytesIO
 import os
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import time
 import uuid
+import msgpack
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import nonebot
@@ -45,6 +47,10 @@ async def main():
         from ai_runtime.store import state_store
         from ai_runtime.service import authorized_image
         from ai_runtime.media import media_cache
+        from plugins.chat_history import parse_message_segments
+        assert parse_message_segments([['at','123456']]).plain_text=='[at:123456]'
+        assert parse_message_segments([['atv2','all',None]]).plain_text=='[at:all]'
+        assert parse_message_segments([['atv2','123456','甲[at:999]\n乙']]).plain_text=='@甲［at:999］ 乙([at:123456])'
         gid="99"+str(uuid.uuid4().int)[:14]
         bot=Bot(None,"999900001")
         store=state_store()
@@ -90,6 +96,47 @@ async def main():
             assert len(calls)==5,'index retry must not resend to QQ'
             print("PASS: outgoing text/image/reply/forward searchable, self-echo deduplicated, image scope enforced, uncertain send never retried")
             print('PASS: failed archive indexing retries durably without a second platform send')
+            target_uid='123456'
+            current_name='发送时名片'
+            async def fake_member_info(self,**params):
+                assert params=={'group_id':int(gid),'user_id':int(target_uid),'no_cache':True}
+                return {'card':current_name,'nickname':'QQ昵称'}
+            Bot.get_group_member_info=fake_member_info
+            try:
+                allmsg.insert_message=fail_index
+                try:
+                    mention_sent=await bot.call_api('send_group_msg',group_id=int(gid),message=MessageSegment.at(target_uid))
+                    assert '_csbot_at_name' not in str(wire[-1]),'snapshot metadata must not reach OneBot'
+                finally:allmsg.insert_message=original
+                current_name='后来名片'
+                await drain(bot)
+                async with async_session_factory() as session:
+                    row=(await session.execute(text('SELECT data FROM groupmsg WHERE sid=:sid AND mid=:mid'),
+                            {'sid':f'group_{gid}_{bot.self_id}','mid':mention_sent['message_id']})).scalar_one()
+                    assert msgpack.loads(row)==[['atv2',target_uid,'发送时名片']]
+                    plain=await session.scalar(text('SELECT plain_text FROM chat_message_index WHERE group_id=:gid AND mid=:mid'),
+                                               {'gid':gid,'mid':mention_sent['message_id']})
+                    assert plain=='@发送时名片([at:123456])',plain
+                reference=await allmsg.chat_history_db.get_message_reference_by_mid(gid,mention_sent['message_id'])
+                assert reference['mentioned_names']=={target_uid:'发送时名片'}
+                source=Path(__file__).resolve().parents[1]/'plugins/cs_ai/__init__.py'
+                fn=next(node for node in ast.parse(source.read_text()).body
+                        if isinstance(node,ast.FunctionDef) and node.name=='_format_ai_message')
+                namespace={'Message':Message}
+                exec(compile(ast.Module(body=[fn],type_ignores=[]),str(source),'exec'),namespace)
+                assert namespace['_format_ai_message'](Message(MessageSegment.at(target_uid)),[],reference['mentioned_names'])==plain
+                incoming_mid=-1_900_000_000
+                incoming_sid=f'group_{gid}_555'
+                await insert_message(bot,incoming_mid,incoming_sid,int(time.time()),Message(MessageSegment.at(target_uid)))
+                async with async_session_factory() as session:
+                    incoming_raw=await session.scalar(text('SELECT data FROM groupmsg WHERE sid=:sid AND mid=:mid'),
+                                                      {'sid':incoming_sid,'mid':incoming_mid})
+                    assert msgpack.loads(incoming_raw)==[['atv2',target_uid,'后来名片']]
+                current_name='再次改名'
+                incoming=await allmsg.chat_history_db.get_message_reference_by_mid(gid,incoming_mid)
+                assert incoming['text']=='@后来名片([at:123456])',incoming
+                print('PASS: atv2 freezes the mentioned member display name; delayed indexing and AI request keep the old name and QQ ID')
+            finally:del Bot.get_group_member_info
             from ai_runtime.image_archive import snapshot_image, image_segment, MARKER
             import json
             before_images = media_cache().db.execute('SELECT count(*) FROM media').fetchone()[0]
@@ -135,6 +182,7 @@ async def main():
                 for table in ("chat_reply_edge","chat_retrieval_span","chat_chunk_index","chat_message_index","chat_token_lexicon"):
                     await conn.execute(text(f"DELETE FROM {table} WHERE group_id=:gid"),{"gid":gid})
                 await conn.execute(text("DELETE FROM groupmsg WHERE sid=:sid"),{"sid":f"group_{gid}_{bot.self_id}"})
+                await conn.execute(text("DELETE FROM groupmsg WHERE sid=:sid"),{"sid":f"group_{gid}_555"})
                 if 'digest' in locals(): await conn.execute(text('DELETE FROM img_cache_info WHERE hash=:hash'),{'hash':digest})
             await engine.dispose()
             store.close();media_cache().db.close()
