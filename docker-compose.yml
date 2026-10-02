@@ -32,6 +32,14 @@ services:
       - ./dist/:/usr/share/nginx/html/
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  homepage:
+    image: nginx:alpine
+    container_name: csbot-homepage
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./assets/homepage.conf:/etc/nginx/conf.d/default.conf:ro
   napcat:
     image: mlikiowa/napcat-docker:latest
     container_name: csbot-napcat
