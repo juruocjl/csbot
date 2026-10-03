@@ -6,7 +6,6 @@ from nonebot import get_bot
 from nonebot import logger
 
 import asyncio
-import re
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -22,6 +21,7 @@ require("models")
 from ..models import LiveStatus
 
 from .config import Config
+from .douyu import fetch_douyu_status
 
 __plugin_meta__ = PluginMetadata(
     name="live_watcher",
@@ -56,11 +56,9 @@ livestate = on_command("直播状态", priority=10, block=True)
 async def get_live_status(liveid):
     await asyncio.sleep(1)
     if liveid.startswith("dy_"):
-        async with get_session().get("https://www.doseeing.com/room/"+liveid.split('_')[1]) as res:
-            data = await res.text() 
-            islive = int('<span>直播中</span>' in data)
-            nickname = re.findall(r'<title>(.*?)</title>', data, re.IGNORECASE)[1][:-10]
-            return islive, nickname
+        status = await fetch_douyu_status(get_session(), liveid)
+        nickname = status.nickname + ("（回放）" if status.is_replay else "")
+        return status.islive, nickname
     if liveid.startswith("bili_"):
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.111 Safari/537.36"}
         async with get_session().get("https://api.live.bilibili.com/room/v1/Room/room_init?id="+liveid.split('_')[1], headers=headers) as res:
@@ -96,8 +94,10 @@ async def live_watcher():
             return
         except Exception:
             logger.exception(f"[live_watcher] failed to fetch live status: {liveid}")
+            new_live_state += f"{liveid} 查询失败\n"
             continue
         if live_status is None:
+            new_live_state += f"{liveid} 查询失败\n"
             continue
         islive, nickname = live_status
         logger.info(f"[live_watcher] {nickname} {islive}")
@@ -111,7 +111,7 @@ async def live_watcher():
                 )
         await db.set_live_status(liveid, islive)
     global now_live_state
-    now_live_state = new_live_state.strip()
+    now_live_state = new_live_state.strip() or "未配置直播监控房间"
 
 
 @livestate.handle()
