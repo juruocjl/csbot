@@ -6,6 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {flushMemory} from './mneme.mjs';
 import {prepareMemorySummary} from './memory-policy.mjs';
 import {configureMemory,sources,saveSummary,foundationalContext} from './layered-memory.mjs';
+import {registerProxyFetch} from './proxy-fetch.mjs';
 
 export const name = 'csbot-bridge';
 export const inject = ['agents', 'sessionPersistence', 'compaction', 'tools', 'systemPrompt', 'llm'];
@@ -34,6 +35,8 @@ export function apply(ctx) {
   });
   (async () => {
     await ctx.get('loader')?.await();
+    if(process.env.CSBOT_WEB_ENABLED==='1' && process.env.CSBOT_FETCH_PROXY_URL)
+      registerProxyFetch(ctx,process.env.CSBOT_FETCH_PROXY_URL);
     emit({type:'ready'});
     const req = await request;
     if(req.remember)inputEvidence.push({id:'request:'+randomUUID(),kind:'user',text:req.text});
@@ -116,12 +119,13 @@ export function apply(ctx) {
     const allowedFiles = new Set((req.readPaths ?? []).map(path => realpathSync(path)));
     const allow = new Set(['read', 'read_image', 'execute_python', 'memory_search', 'memory_save', 'memory_forget']);
     if(process.env.CSBOT_WEB_ENABLED==='1'){allow.add('web_search');allow.add('web_fetch');}
+    if(process.env.CSBOT_WEB_ENABLED==='1' && process.env.CSBOT_FETCH_PROXY_URL)allow.add('web_fetch_proxy');
     let toolCount = 0, searchCount=0, webCount=0;
     ctx.tools.guard(exec => {
       if (!allow.has(exec.name)) return 'This tool is not enabled in CSBot.';
       if (++toolCount > 40) return 'Tool budget exhausted. Answer with available evidence.';
       if(exec.name==='web_search' && ++searchCount>3)return 'Search budget exhausted. Use the sources already returned or acknowledge uncertainty.';
-      if(['web_search','web_fetch'].includes(exec.name) && ++webCount>8)return 'Web budget exhausted.';
+      if(['web_search','web_fetch','web_fetch_proxy'].includes(exec.name) && ++webCount>8)return 'Web budget exhausted.';
       if(exec.name==='web_search' && (!Array.isArray(exec.arguments.queries)||exec.arguments.queries.some(q=>typeof q!=='string'||q.length>300)))return 'Use short public terms, at most 300 characters per query; never send private chat.';
       if (exec.name === 'read' || exec.name === 'read_image') {
         if(exec.name==='read_image' && /^https?:\/\//i.test(String(exec.arguments.file_path ?? '')))
