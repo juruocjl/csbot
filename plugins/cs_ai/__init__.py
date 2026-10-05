@@ -1020,6 +1020,12 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         guard=guard,vision=config.cs_ai_vision,thinking=config.cs_ai_enable_thinking)
 
 
+def _ai_chat_link(chat_id: str) -> str:
+    from ai_runtime.store import state_store
+    target=state_store().short_run_id(chat_id) or chat_id
+    return config.cs_domain+f'/ai-chat?chatId={target}'
+
+
 async def ai_ask2(
     bot: Bot,
     uid: str,
@@ -1065,12 +1071,12 @@ async def ai_ask2(
             try:accepted=await steer_run(target,f'QQ用户 {uid} 补充当前问题：{text}')
             except ValueError as exc:
                 publish(target,{'type':'supplement','text':text,'delivery':'unknown'})
-                return MessageSegment.at(uid)+' '+str(exc)+' '+config.cs_domain+f'/ai-chat?chatId={target}'
+                return MessageSegment.at(uid)+' '+str(exc)+' '+_ai_chat_link(target)
             if accepted:
                 publish(target,{'type':'supplement','text':text,'delivery':'accepted'})
                 from ..allmsg.outgoing import current_run
                 current_run.set(target)
-                return MessageSegment.at(uid)+' 补充收到了，会接着一起看。'+config.cs_domain+f'/ai-chat?chatId={target}'
+                return MessageSegment.at(uid)+' 补充收到了，会接着一起看。'+_ai_chat_link(target)
 
     if notify:
         if config.cs_ai_engine=='dsh':
@@ -1078,7 +1084,7 @@ async def ai_ask2(
             try:register(chat_id,group_id,uid,text)
             except ValueError as exc:return MessageSegment.at(uid)+' '+str(exc)
         try:
-            await notify(MessageSegment.at(uid)+' 我看看，记录在这里：'+config.cs_domain+f'/ai-chat?chatId={chat_id}')
+            await notify(MessageSegment.at(uid)+' 我看看，记录在这里：'+_ai_chat_link(chat_id))
         except Exception:
             logger.warning('AI progress notification failed; continuing the registered request')
 

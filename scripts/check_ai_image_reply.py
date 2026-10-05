@@ -23,8 +23,8 @@ async def main():
         from ai_runtime.media import media_cache
         from ai_runtime.store import state_store
         source=Path(__file__).resolve().parents[1]/'plugins/cs_ai/__init__.py'
-        function=next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.AsyncFunctionDef) and n.name=='ai_ask2')
-        module=ast.Module(body=[function],type_ignores=[])
+        functions=[n for n in ast.parse(source.read_text()).body if isinstance(n,(ast.AsyncFunctionDef,ast.FunctionDef)) and n.name in ('ai_ask2','_ai_chat_link')]
+        module=ast.Module(body=functions,type_ignores=[])
         raw=BytesIO();Image.new('RGB',(8,8),'blue').save(raw,format='PNG')
         cache=media_cache();digest=cache.put(raw.getvalue(),private=True)
         assert not list(cache.full.glob('*.png')) and not list(cache.small.glob('*.png'))
@@ -51,15 +51,15 @@ async def main():
         async def notify(message):
             # The URL must reference an already registered request.
             linked=str(message).split('chatId=')[-1]
-            assert store.get_run(linked)
+            assert store.resolve_run_id(linked,'g','123')
             notifications.append(str(message))
         module=SimpleNamespace(current_run=contextvars.ContextVar('fixture_run'))
         with patch.dict(sys.modules,{'plugins.allmsg.outgoing':module}),patch('ai_runtime.runner.steer_run',AsyncMock(return_value=True)):
             response=await namespace['ai_ask2'](None,'123','group_g_123',None,Message('补充：还有这个'),Message('补充：还有这个'),chat_id='unused-id',notify=notify)
-            assert f'chatId={key}' in str(response) and not notifications and not store.get_run('unused-id')
+            assert f'chatId={store.short_run_id(key)}' in str(response) and not notifications and not store.get_run('unused-id')
         with patch('ai_runtime.runner.steer_run',AsyncMock(return_value=False)):
             await namespace['ai_ask2'](None,'123','group_g_123',None,Message('补充：错过了'),Message('补充：错过了'),chat_id='fallback-id',notify=notify)
-            assert len(notifications)==1 and 'chatId=fallback-id' in notifications[0]
+            assert len(notifications)==1 and f'chatId={store.short_run_id("fallback-id")}' in notifications[0]
         print('PASS: inserted QQ supplement links existing run without phantom notification; late supplement registers before notifying')
         namespace['ai_ask_main']=AsyncMock(side_effect=RuntimeError('fixture model config failure'))
         await namespace['ai_ask2'](None,'123','group_g_123',None,Message('test'),Message('test'),chat_id='failed-id',notify=notify)

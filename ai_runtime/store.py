@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import fcntl
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -41,6 +43,8 @@ class StateStore:
           status TEXT NOT NULL, request TEXT NOT NULL, response TEXT, error TEXT,
           cutoff INTEGER NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS runs_scope_time ON runs(scope,created_at);
+        CREATE TABLE IF NOT EXISTS run_aliases (
+          short_id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE REFERENCES runs(id));
         CREATE TABLE IF NOT EXISTS scopes (
           id TEXT PRIMARY KEY, cursor INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS blocks (
@@ -58,6 +62,10 @@ class StateStore:
         """)
         if 'recalled_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(outbound)')}:
             self.db.execute('ALTER TABLE outbound ADD COLUMN recalled_at INTEGER')
+        # Assign old records in insertion order once. Published aliases never
+        # change when a newer run has the same UUID suffix.
+        for row in self.db.execute('SELECT r.id FROM runs r LEFT JOIN run_aliases a ON a.run_id=r.id WHERE a.run_id IS NULL ORDER BY r.rowid').fetchall():
+            self._assign_run_alias(row['id'])
         # No blind resend/replay after a crash: transport outcome may be unknown.
         self.db.execute("UPDATE runs SET status='interrupted',error='HostRestarted' WHERE status IN ('queued','running')")
         self.db.execute("UPDATE outbound SET status='unknown',error='HostRestarted' WHERE status='pending'")
@@ -94,8 +102,34 @@ class StateStore:
                      ("failed" if error else "sent" if mid is not None else "unknown", mid, error, key))
 
     def register_run(self, key: str, scope: str, gid: str, uid: str, channel: str, request: str):
-        self.execute("INSERT INTO runs(id,scope,group_id,user_id,channel,created_at,status,request) VALUES(?,?,?,?,?,?,'queued',?)",
-                     (key, scope, gid, uid, channel, int(time.time()), request))
+        with self.lock, self.db:
+            self.db.execute("INSERT INTO runs(id,scope,group_id,user_id,channel,created_at,status,request) VALUES(?,?,?,?,?,?,'queued',?)",
+                            (key, scope, gid, uid, channel, int(time.time()), request))
+            self._assign_run_alias(key)
+
+    def _assign_run_alias(self, key: str):
+        try: compact = uuid.UUID(key).hex
+        except ValueError: compact = hashlib.sha256(key.encode()).hexdigest()
+        for length in range(12, len(compact)+1, 4):
+            candidate = compact[-length:]
+            if not self.db.execute('SELECT 1 FROM run_aliases WHERE short_id=?', (candidate,)).fetchone():
+                self.db.execute('INSERT INTO run_aliases(short_id,run_id) VALUES(?,?)', (candidate, key))
+                return
+        raise ValueError('AI short ID could not be allocated')
+
+    def short_run_id(self, key: str) -> str | None:
+        rows = self.rows('SELECT short_id FROM run_aliases WHERE run_id=?', (key,))
+        return rows[0]['short_id'] if rows else None
+
+    def resolve_run_id(self, key: str, gid: str, uid: str) -> str | None:
+        if not gid or not uid or not isinstance(key, str): return None
+        if re.fullmatch(r'[0-9a-fA-F]{12,32}', key):
+            rows = self.rows('SELECT run_id FROM run_aliases WHERE short_id=?', (key.lower(),))
+            target = rows[0]['run_id'] if rows else None
+        elif re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', key):
+            target = key.lower()
+        else: return None
+        return target if target and self.can_read(target, gid, uid) else None
 
     def get_run(self, key: str) -> dict | None:
         rows = self.rows("SELECT * FROM runs WHERE id=?", (key,))
@@ -116,7 +150,8 @@ class StateStore:
 
     def can_read(self, key: str, gid: str, uid: str) -> bool:
         row = self.get_run(key)
-        return bool(row and row["group_id"] == gid and (row["channel"] != "web" or row["user_id"] == uid))
+        return bool(gid and uid and row and row["group_id"] == gid and
+                    (row["channel"] in ('qq', 'report') or (row["channel"] == 'web' and row["user_id"] == uid)))
 
 
 _store: StateStore | None = None

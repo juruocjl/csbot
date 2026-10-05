@@ -3234,6 +3234,15 @@ async def ai_conversations(before: int | None=Body(None,embed=True),info: AuthSe
         raise HTTPException(status_code=400,detail="无效的列表游标") from None
 
 
+@app.post('/api/ai/resolve', response_model=AIAskResponse, summary='解析有权限查看的AI对话长短编号')
+async def ai_resolve(chatId: str=Body(..., embed=True), info: AuthSession=Depends(get_current_user)):
+    from ai_runtime.store import state_store
+    target=state_store().resolve_run_id(chatId,info.group_id,info.user_id)
+    if target is None:
+        raise HTTPException(status_code=404,detail='Record not found')
+    return AIAskResponse(chatId=target)
+
+
 @app.post("/api/ai/history",summary="个人会话最近对话")
 async def personal_ai_history(conversation: str=Body("default",embed=True),info: AuthSession=Depends(get_current_user)):
     from ai_runtime.runner import scope_key
