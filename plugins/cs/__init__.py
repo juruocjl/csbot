@@ -584,6 +584,6 @@ async def matchteammate_function(message: MessageEvent, args: Message = CommandA
             data.append((title, result[0][0], baseinfo.name, fmt.format(value=result[0][1], count=result[0][2])))
         else:
             data.append((title, "", "虚位以待", fmt.format(value=float("nan"), count=float("nan"))))
-    image = await gen_teammate_image(steamid, time_type, data)
+    image = await gen_teammate_image(steamid, time_type, data, archive_data=results)
     await matchteammate.finish(image_segment(image))
     

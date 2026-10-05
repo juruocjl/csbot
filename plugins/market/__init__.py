@@ -209,7 +209,8 @@ async def get_baojia_image(title: str = "当前底价"):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
         temp_file.flush()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 120 + len(data) * 60, archive_title='市场报价 '+title)
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 120 + len(data) * 60, archive_title='市场报价 '+title,
+            archive_snapshot={'rows': data})
     return img
 
 @baojia.handle()

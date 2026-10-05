@@ -157,7 +157,7 @@ async def main():
             else: raise AssertionError('cross-group metadata access')
             async with async_session_factory() as session:
                 snapshot_text=await session.scalar(text('SELECT plain_text FROM chat_message_index WHERE group_id=:gid AND mid=:mid'),{'gid':gid,'mid':snapshot_sent['message_id']})
-                assert '比赛结果快照' in snapshot_text and '13:8' in snapshot_text
+                assert '比赛结果快照' in snapshot_text and 'csdata.image' in snapshot_text and '13:8' not in snapshot_text
             original_get_image = allmsg.get_image
             async def no_download(*a, **kw): raise AssertionError('echo downloaded already archived image')
             allmsg.get_image = no_download

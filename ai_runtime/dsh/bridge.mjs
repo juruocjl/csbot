@@ -54,6 +54,10 @@ export function apply(ctx) {
     ctx.on('session/event',(session,event)=>{
       if(session.id!==req.sessionId)return;
       if(['tool/call','tool/result'].includes(event.type))record({type:event.type,data:event.data,time:event.time});
+      if(event.type==='system/message' || (event.type==='user/message' && event.data.source?.kind==='plugin' && event.data.source?.plugin!=='csbot-report')) {
+        const text=(event.type==='system/message' ? event.data.message?.content??[] : event.data.content??[]).filter(block=>block.type==='text').map(block=>block.text).join('\n');
+        if(text)record({type:'context',id:String(event.seq),title:event.type==='system/message'?'系统提示':event.data.source.plugin==='csbot-context'?'本轮身份、风格与群聊资料':'运行时资料与记忆',text,time:event.time});
+      }
     });
     async function rpc(method, data) {
       const id=randomUUID();

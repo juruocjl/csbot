@@ -303,6 +303,7 @@ async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | Non
         
         # 使用 cookie 设置 token（替代 localStorage）
         await page.setCookie({'name': 'token', 'value': token, 'url': f'{LOCAL_URL}', 'path': '/', 'httpOnly': False, 'secure': False})
+        await page.evaluateOnNewDocument('() => { window.__CSBOT_CAPTURE_METADATA__ = true; }')
 
         # 访问目标页面并等待网络空闲
         final_path = path
@@ -350,6 +351,25 @@ async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | Non
         source = page_source(path)
         if source is not None:
             screenshot = await capture_page_image(page, {'fullPage': True}, title='群内分享 '+source['page'], source=source, selector='.content')
+            try:
+                # Preserve complete cached model columns independently of UI schemas.
+                from ai_runtime.image_archive import ArchiveImage, snapshot_image
+                providers = {'/match': ('get_match_detail','get_match_extra'),
+                             '/match-gp': ('get_match_gp_detail','get_match_gp_extra'),
+                             '/match-faceit': ('get_match_faceit_detail', None)}
+                if isinstance(screenshot, ArchiveImage) and source['page'] in providers and source['params'].get('id'):
+                    detail_method, extra_method = providers[source['page']]
+                    match_id = source['params']['id']
+                    analysis = {'match_id': match_id, 'players': await getattr(db_val,detail_method)(match_id)}
+                    if extra_method: analysis['extra'] = await getattr(db_val,extra_method)(match_id)
+                    screenshot = snapshot_image(screenshot,screenshot.metadata['title'],screenshot.metadata['snapshot'] | {'analysis_data':analysis},source=source)
+                steam_id = source['params'].get('steamId') or next((item['params'].get('steamId') for item in screenshot.metadata['snapshot'].get('responses', []) if item['api'] == '/api/player/base'), None) if isinstance(screenshot, ArchiveImage) else None
+                if isinstance(screenshot, ArchiveImage) and source['page'] == '/data' and steam_id:
+                    analysis = {'steamid': steam_id, 'base': await db_val.get_base_info(steam_id), 'detail': await db_val.get_detail_info(steam_id)}
+                    screenshot = snapshot_image(screenshot,screenshot.metadata['title'],screenshot.metadata['snapshot'] | {'analysis_data':analysis},source=source)
+            except Exception:
+                logger.warning('Complete image analysis metadata unavailable; retaining original screenshot')
+                screenshot = bytes(screenshot)
         else:
             screenshot = await page.screenshot({'fullPage': True})
             
@@ -3241,6 +3261,16 @@ async def ai_resolve(chatId: str=Body(..., embed=True), info: AuthSession=Depend
     if target is None:
         raise HTTPException(status_code=404,detail='Record not found')
     return AIAskResponse(chatId=target)
+
+
+@app.post('/api/ai/context', summary='读取本轮实际注入的上下文，旧记录仅从原生归档恢复')
+async def ai_context(chatId: str=Body(..., embed=True), info: AuthSession=Depends(get_current_user)):
+    from ai_runtime.store import state_store
+    from ai_runtime.run_context import run_context
+    store=state_store()
+    if not store.can_read(chatId,info.group_id,info.user_id):
+        raise HTTPException(status_code=404,detail='Record not found')
+    return await asyncio.to_thread(run_context,store,store.get_run(chatId))
 
 
 @app.post("/api/ai/history",summary="个人会话最近对话")

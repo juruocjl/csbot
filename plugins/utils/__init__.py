@@ -150,14 +150,15 @@ def local_record_segment(path: str | Path) -> MessageSegment:
     encoded = base64.b64encode(data).decode("ascii")
     return MessageSegment.record(f"base64://{encoded}")
 
-async def screenshot_html_to_png(url: str, width: int, height: int, *, archive_title="数据卡片", archive_source=None):
+async def screenshot_html_to_png(url: str, width: int, height: int, *, archive_title="数据卡片", archive_source=None, archive_snapshot=None):
     browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
     page = await browser.newPage()
     await page.setViewport({'width': width, 'height': height})
     await page.goto(url)
     await asyncio.sleep(1)
-    from ai_runtime.image_archive import capture_page_image
-    image = await capture_page_image(page, title=archive_title, source=archive_source)
+    from ai_runtime.image_archive import snapshot_image
+    content = await page.screenshot()
+    image = snapshot_image(content, archive_title, archive_snapshot, source=archive_source) if archive_snapshot is not None else bytes(content)
     await browser.close()
     return image
 

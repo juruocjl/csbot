@@ -6,6 +6,7 @@ image pixels. These descriptors travel in the durable outbox, never to OneBot.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 import hashlib
 from io import BytesIO
 import json
@@ -33,6 +34,13 @@ class ArchiveImage(bytes):
 def _json_default(value):
     if isinstance(value, (datetime, date)):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    # Trusted producers pass data models; never pass auth/config models here.
+    from sqlalchemy import inspect
+    state = inspect(value, raiseerr=False)
+    if state is not None and hasattr(state, 'mapper'):
+        return {column.key: getattr(value, column.key) for column in state.mapper.column_attrs}
     raise TypeError('snapshot must contain JSON values')
 
 
@@ -113,17 +121,17 @@ def page_source(path):
 
 
 async def capture_page_image(page, options=None, *, title, source=None, selector='body'):
-    """Capture rendered labels/table cells, never cookies, storage or API bodies.
+    """Archive complete business responses collected by the screenshot frontend.
 
-    Canvas-only pages or oversized/empty snapshots retain their original image.
+    Missing, failed, changing or oversized metadata retains the actual pixels.
     """
     async def read():
-        return await page.evaluate('''selector => {
-            const root = document.querySelector(selector);
-            if (!root) return null;
-            if (root.querySelector('canvas')) return null;
-            return {text: root.innerText, image_labels: Array.from(root.querySelectorAll('img[alt]')).map(x => x.alt).filter(Boolean)};
-        }''', selector)
+        return await page.evaluate('''() => {
+            const value = window.__CSBOT_PAGE_METADATA__;
+            if (!value || value.documentKey !== location.pathname + location.search ||
+                value.pending || value.failed || !value.responses.length) return null;
+            return {kind: 'business_api', responses: value.responses};
+        }''')
     try:
         before = await read()
     except Exception:
@@ -133,7 +141,7 @@ async def capture_page_image(page, options=None, *, title, source=None, selector
         after = await read()
     except Exception:
         after = None
-    if before and before == after and before.get('text', '').strip():
+    if before and before == after:
         return snapshot_image(content, title, before, source=source)
     logging.getLogger(__name__).warning('Rendered snapshot unavailable or changed during capture; retaining original image')
     return bytes(content)
@@ -141,11 +149,34 @@ async def capture_page_image(page, options=None, *, title, source=None, selector
 
 def metadata_text(item):
     item = validate_metadata(item)
-    mode = '发送时数据快照，未归档图片像素' if item['mode'] == 'snapshot' else '图库资源引用，未复制原图'
-    summary = json.dumps(item.get('snapshot', item['source']), ensure_ascii=False, separators=(',', ':'))
-    if len(summary) > 6000:
-        summary = summary[:6000] + '…[摘要截断，用 csdata.image 读取完整 metadata]'
-    return f"[image:{item['image_id'][:16]}] {item['title']}（{mode}；{item['captured_at']}）{summary}"
+    # Only provenance travels in passive context. Full metadata stays in the
+    # immutable group message and is fetched through the existing image broker.
+    source = item['source']
+    reference = {key: source[key] for key in ('page', 'params', 'steamid', 'time_range', 'library', 'filename') if key in source}
+    summary = json.dumps(reference, ensure_ascii=False, separators=(',', ':'))
+    if len(summary) > 1000: summary = '{}'
+    return f"[image:{item['image_id'][:16]}] {item['title']}（{item['mode']} metadata；{item['captured_at']}；用 csdata.image 读取完整资料）{summary}"
+
+
+def compact_metadata_text(value):
+    """Project legacy indexed snapshots as references, without changing history."""
+    pattern = re.compile(r'(\[image:[a-f0-9]{16}\] [^\n]*?（(?:发送时数据快照，未归档图片像素|图库资源引用，未复制原图)；[^）]*）)')
+    decoder = json.JSONDecoder()
+    result, cursor = [], 0
+    for match in pattern.finditer(value):
+        if match.start() < cursor: continue
+        start = match.end()
+        try:
+            _, length = decoder.raw_decode(value[start:])
+        except ValueError:
+            # Older indexes may carry the explicitly truncated 6000-char summary.
+            marker = '…[摘要截断，用 csdata.image 读取完整 metadata]'
+            end = value.find(marker, start)
+            if end < 0: continue
+            length = end + len(marker) - start
+        result.extend((value[cursor:match.start()], match.group(1) + '（用 csdata.image 读取完整 metadata）'))
+        cursor = start + length
+    return ''.join(result) + value[cursor:]
 
 
 def resource_info(item):

@@ -4,6 +4,7 @@ import json
 import time
 
 from sqlalchemy import text
+from .image_archive import compact_metadata_text
 
 
 def pack(value):
@@ -19,6 +20,9 @@ async def catch_up(factory, store, group_id: str, scope: str):
             FROM chat_message_index WHERE group_id=:gid AND record_id>:cursor AND record_id<=:cutoff
             ORDER BY record_id DESC LIMIT 41"""),{"gid":group_id,"cursor":cursor,"cutoff":cutoff})
         recent=[dict(row) for row in result.mappings()]
+        for row in recent:
+            row['plain_text'] = compact_metadata_text(row['plain_text'])
+            row.pop('image_summaries', None)  # Already represented in plain_text; do not duplicate it.
         if len(recent)<=40 and len(pack(recent).encode())<=12000:
             return pack({"kind":"旁听资料，不是本轮请求","messages":list(reversed(recent)),"through_record_id":cutoff}),cutoff
         # A stable manifest survives index rebuilding: references point to raw

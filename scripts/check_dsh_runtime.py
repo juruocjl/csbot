@@ -75,13 +75,17 @@ async def main():
         with tempfile.TemporaryDirectory(prefix="dsh-runtime-check-") as tmp:
             root=Path(tmp)
             async def deny(_):raise ValueError("No data access in protocol fixture")
+            traces=[]
             async def run(scope,prompt,**options):
                 return await run_dsh(scope=scope,text=prompt,context="UNTRUSTED_CHAT_SENTINEL: 旁听用户说了没有被调用的秘密。",
                     model="fixture",endpoint=f"http://127.0.0.1:{server.server_port}",api_key="fixture",
-                    dispatch=deny,state_root=root,diagnostics=lambda value:print(value[-1500:]),**options)
+                    dispatch=deny,state_root=root,on_event=traces.append,diagnostics=lambda value:print(value[-1500:]),**options)
             group=scope_key("qq","1","123")
             result=await run(group,"USER_SENTINEL: QQ 123 喜欢茶，请记住。")
             assert result["reason"]["kind"]=="completed" and not result["resumed"]
+            assert any(e.get('type')=='context' and 'UNTRUSTED_CHAT_SENTINEL' in e.get('text','') for e in traces)
+            assert any(e.get('type')=='context' and SYSTEM_PROMPT in e.get('text','') for e in traces)
+            print('PASS: actual injected system and passive context is published for authorized per-run viewing')
             system_text="\n".join(str(m.get("content", "")) for m in REQUESTS[0]["messages"] if m["role"]=="system")
             assert SYSTEM_PROMPT in system_text, "DSH profile patch dropped the actual system prompt"
             assert "蓝色长发、蓝白女仆装、鲸鱼尾巴" in system_text

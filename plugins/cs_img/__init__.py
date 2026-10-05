@@ -154,7 +154,8 @@ async def gen_rank_image2(datas: list[tuple[str, tuple[float, int]]], min_value:
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
         temp_file.flush()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 200 + len(datas) * 90, archive_title=title)
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 850, 200 + len(datas) * 90, archive_title=title,
+            archive_snapshot={'rows': datas, 'min_value': min_value, 'max_value': max_value, 'format': format})
     return img
 
 async def gen_matches_image(datas: list[MatchStatsPW], data_extra: list[MatchStatsPWExtra | None], steamid: str, name: str):
@@ -205,7 +206,8 @@ async def gen_matches_image(datas: list[MatchStatsPW], data_extra: list[MatchSta
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
         temp_file.flush()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 570, 100 + len(datas) * 80, archive_title='比赛记录', archive_source={'steamid': steamid, 'match_ids': [m.mid for m in datas]})
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 570, 100 + len(datas) * 80, archive_title='比赛记录', archive_source={'steamid': steamid, 'match_ids': [m.mid for m in datas]},
+            archive_snapshot={'steamid': steamid, 'name': name, 'matches': datas, 'extra': data_extra})
     return img
 
 async def gen_stats_image(baseinfo: SteamBaseInfo, detailinfo: SteamDetailInfo):
@@ -256,10 +258,11 @@ async def gen_stats_image(baseinfo: SteamBaseInfo, detailinfo: SteamDetailInfo):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
         temp_file.flush()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 700, archive_title='玩家战绩', archive_source={'steamid': baseinfo.steamid})
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 700, archive_title='玩家战绩', archive_source={'steamid': baseinfo.steamid},
+            archive_snapshot={'base': baseinfo, 'detail': detailinfo})
     return img
 
-async def gen_teammate_image(steamid: str, timetype: str, data: list[tuple[str, str, str, str]]):
+async def gen_teammate_image(steamid: str, timetype: str, data: list[tuple[str, str, str, str]], *, archive_data=None):
     """
     data: list of (title, steamid, name, content)
     """
@@ -281,7 +284,8 @@ async def gen_teammate_image(steamid: str, timetype: str, data: list[tuple[str, 
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix=".html") as temp_file:
         temp_file.write(html)
         temp_file.flush()
-        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 60 + 105 * len(data), archive_title='队友统计', archive_source={'time_range': timetype})
+        img = await screenshot_html_to_png(path_to_file_url(temp_file.name), 480, 60 + 105 * len(data), archive_title='队友统计', archive_source={'steamid': steamid, 'time_range': timetype},
+            archive_snapshot={'rows': data, 'statistics': archive_data})
     return img
 
 def red_to_green_color(score):

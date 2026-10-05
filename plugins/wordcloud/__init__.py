@@ -86,7 +86,7 @@ async def get_wordcloud(groud_id, user_id = "%", time_type = "全部"):
     ).generate_from_frequencies(wordcount).to_image().save(buffer, format='PNG') 
     from ai_runtime.image_archive import snapshot_image
     return snapshot_image(buffer, '群聊词云', {'user_id': user_id, 'time_range': time_type,
-                          'word_frequencies': dict(sorted(wordcount.items(), key=lambda row: row[1], reverse=True)[:200])})
+                          'word_frequencies': dict(wordcount)})
 
 @wordcloud.handle()
 async def wordcloud_function(message: GroupMessageEvent, args: Message = CommandArg()):
