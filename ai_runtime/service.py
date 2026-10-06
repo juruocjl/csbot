@@ -17,6 +17,7 @@ from sqlalchemy import text
 from .context import catch_up,fetch_block
 from .data import DataBroker
 from .group import GroupKnowledge, CALLS as GROUP_CALLS
+from .image_identity import with_image_identities
 from .media import media_cache
 from .runner import run_dsh,scope_key
 from .store import state_store
@@ -110,7 +111,7 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     if method=="block": return await fetch_block(factory,store,gid,request["id"])
                     if method=="image":
                         image=await authorized_image(factory,gid,request["id"])
-                        return pin_image(image)
+                        return pin_image(await with_image_identities(image,broker,group))
                     return await broker.dispatch(request)
                 if channel=="qq":
                     context,cutoff=await catch_up(factory,store,gid,scope)
