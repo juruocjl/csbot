@@ -28,7 +28,7 @@ async def with_image_identities(image, broker, group):
     for row in result['rows']:
         current = members.get(row['uid']) if members is not None else None
         bindings.append(row | {
-            'qq_nickname': current['nickname'] if current else row['cached_qq_nickname'],
+            'qq_nickname': current['nickname'] if current else row['cached_qq_nickname'] if members is None else None,
             'qq_card': current['card'] if current else None,
             'in_current_qq_group': row['uid'] in members if members is not None else None,
         })

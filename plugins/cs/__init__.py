@@ -426,6 +426,7 @@ async def scoretrend_function(message: MessageEvent, args: Message = CommandArg(
 
     series: list[tuple[str, list[datetime], list[int]]] = []
     skipped: list[str] = []
+    archive_series = []
     for target_uid in dedup_uids:
         steamid = await db_val.get_steamid(target_uid)
         if not steamid:
@@ -443,6 +444,8 @@ async def scoretrend_function(message: MessageEvent, args: Message = CommandArg(
         xs = [datetime.fromtimestamp(ts) for ts, _ in history]
         ys = [score for _, score in history]
         series.append((label, xs, ys))
+        archive_series.append({'qq': target_uid, 'steamid': steamid, 'nickname': nickname, 'member': label,
+                               'points': [{'time': x.isoformat(), 'score': y} for x, y in zip(xs, ys)]})
 
     if not series:
         tip = f"这些人没有可用的天梯分数变化数据（时间：{time_type}）。"
@@ -474,7 +477,7 @@ async def scoretrend_function(message: MessageEvent, args: Message = CommandArg(
         await scoretrend.send("以下成员已跳过：" + "，".join(skipped))
     from ai_runtime.image_archive import snapshot_image
     image_bytes = snapshot_image(image_bytes, '天梯分数变化', {'time_range': time_type,
-        'series': [{'member': label, 'points': [{'time': x.isoformat(), 'score': y} for x, y in zip(xs, ys)]} for label, xs, ys in series], 'skipped': skipped})
+        'series': archive_series, 'skipped': skipped})
     await scoretrend.finish(image_segment(image_bytes))
         
 @matches.handle()

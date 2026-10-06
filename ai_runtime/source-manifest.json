@@ -7,7 +7,7 @@
     "plugins/cs_db_val/__init__.py": "55159bdafa1b9eae7ad4624ca1d9c219fd2b10d8f3f0461ab58825d6d18ee004",
     "plugins/models/__init__.py": "024bf9eafad8c8eb39f94e9422f6d6e263d02d5d141b91050086adb2c02907f0",
     "plugins/utils/__init__.py": "09059d73b44382d2426456edb08a7448bba4b373288df5a0a9f7eca05dd343e4",
-    "plugins/cs/__init__.py": "fae216e82158055b386ca54d6006cfd6acbfad959a0caca5b960be15d6d12459",
+    "plugins/cs/__init__.py": "445e46dbd48ac018d0994213f59049161f13361cb64beca0f2676bc49ad4149e",
     "plugins/cs_report/__init__.py": "3e94d514450f198607d2fadf48f2d53413ed945392b8958fe72ba7ba0c0752a5",
     "plugins/small_funcs/__init__.py": "6c33adc5e0d1ff387e8725c71a74ac2170771adab14af9ad5637c1197f9e7ccd",
     "plugins/time_location/__init__.py": "4bc2c8247321f2d471a644c568a0c316fe78c63753a2843c537cdbd7061caad5",
