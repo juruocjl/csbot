@@ -12,8 +12,8 @@
     "plugins/small_funcs/__init__.py": "6c33adc5e0d1ff387e8725c71a74ac2170771adab14af9ad5637c1197f9e7ccd",
     "plugins/time_location/__init__.py": "4bc2c8247321f2d471a644c568a0c316fe78c63753a2843c537cdbd7061caad5",
     "plugins/time_location/logic.py": "2ec872b11e1bf198bfdad929adaddadc06a8ddd480963b02e4247e8070a74e5f",
-    "ai_runtime/group.py": "654a8d98d082641c05de0bc6f921f476b962fef7aad3c1095de895dd0f1b5e31",
+    "ai_runtime/group.py": "177ed01f4f6709acb3af7e95ceaa2347fbc6e42bb2063a94bb2283563971a928",
     "ai_runtime/mentions.py": "79ac9ea5edceffdad3d191125142778a5421ed0a88a681495bc578658770e338",
-    "ai_runtime/queries.py": "9efff275508e9b70a62853ba9e9caf461f18dc3b109f1787af097f0fbc14cdcf"
+    "ai_runtime/queries.py": "efb3ae48817c33f1d52ba1ac7aa00483251202949488ed353c24a7749a6226ba"
   }
 }

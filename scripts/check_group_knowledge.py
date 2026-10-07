@@ -45,9 +45,12 @@ class Checks(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(rows['truncated'])
         self.assertNotIn('private', rows['rows'][0])
         info = await self.group.call('member_info', {'uid': '2'})
-        self.assertEqual(info['member']['role'], 'member')
+        self.assertNotIn('role', info['member'])
+        self.assertNotIn('role', rows['rows'][0])
         result = await self.group.call('group_admins', {})
-        self.assertEqual([r['uid'] for r in result['qq_roles']], ['1'])
+        self.assertEqual(result['active_uid'], '2')
+        self.assertEqual(result['set_nickname_allowed_uid'], '2')
+        self.assertNotIn('qq_roles', result)
         self.assertEqual(result['election_state']['rows'][0]['value'], '2')
         self.assertEqual(self.bot.calls, 1)
         for name, params in [('member_info', {'uid': '999'}), ('member_avatar', {'uid': '999'}),
@@ -61,11 +64,46 @@ class Checks(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(rules['scheduled_election_enabled'])
         self.assertFalse(rules['punishment_ban_enabled'])
 
-    async def test_platform_failure_does_not_fake_members(self):
+    async def test_bot_admin_independent_of_platform_roles_and_failure(self):
         def fail(): raise RuntimeError('secret must not leak')
         group = GroupKnowledge(Broker(), bot_provider=fail)
-        with self.assertRaisesRegex(ValueError, 'roles are unknown'):
-            await group.call('group_admins', {})
+        result = await group.call('group_admins', {})
+        self.assertEqual(result['active_uid'], '2')
+        self.assertEqual(result['set_nickname_allowed_uid'], '2')
+        self.assertIsNone(group._members)
+        with self.assertRaisesRegex(ValueError, 'names are unknown'):
+            await group.call('group_members', {})
+
+    async def test_stale_qq_admin_is_not_exposed_or_granted_privileges(self):
+        class StaleBot(Bot):
+            async def get_group_member_list(self, **kw):
+                return [{'user_id': 2, 'nickname': '现任', 'role': 'member'},
+                        {'user_id': 3, 'nickname': '已撤销', 'role': 'admin'}]
+        group = GroupKnowledge(Broker(), bot_provider=StaleBot)
+        result = await group.call('group_admins', {})
+        self.assertEqual(result['active_uid'], '2')
+        self.assertEqual(result['set_nickname_allowed_uid'], '2')
+        self.assertIsNone(group._members)
+        info = await group.call('member_info', {'uid': '3'})
+        self.assertEqual(info['member']['nickname'], '已撤销')
+        self.assertNotIn('role', info['member'])
+        self.assertTrue(all('role' not in row for row in await group.members()))
+
+    async def test_inactive_missing_and_invalid_bot_state(self):
+        class StateBroker(Broker):
+            def __init__(self, rows, truncated=False):
+                self.rows, self.truncated = rows, truncated
+            async def call(self, name):
+                return {'rows': self.rows, 'truncated': self.truncated}
+        for rows in ([], [{'key': 'selected_uid', 'value': '2'}],
+                     [{'key': 'selected_uid', 'value': '2'}, {'key': 'active', 'value': '0'}]):
+            with self.subTest(rows=rows):
+                result = await GroupKnowledge(StateBroker(rows)).call('group_admins', {})
+                self.assertIsNone(result['active_uid'])
+                self.assertIsNone(result['set_nickname_allowed_uid'])
+        for broker in (StateBroker([{'key': 'active', 'value': 'invalid'}]), StateBroker([], True)):
+            with self.assertRaisesRegex(ValueError, 'privileges cannot be confirmed'):
+                await GroupKnowledge(broker).call('group_admins', {})
 
     async def test_avatar_fixed_url_private_cache(self):
         buffer = BytesIO(); Image.new('RGB', (16, 16), 'blue').save(buffer, format='JPEG')

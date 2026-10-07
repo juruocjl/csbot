@@ -12,10 +12,10 @@ import aiohttp
 from PIL import Image
 
 CALLS = {
-    'group_members': {'params': {'search': '', 'offset': 0, 'limit': 50}, 'description': 'QQ当前成员，按QQ/昵称/群名片匹配；分页，返回 total/truncated。昵称重复须确认QQ。'},
-    'member_info': {'params': {'uid': '必填QQ字符串'}, 'description': '本群当前成员的QQ昵称、群名片、实际角色、头像地址；不会查群外陌生人。'},
+    'group_members': {'params': {'search': '', 'offset': 0, 'limit': 50}, 'description': 'QQ接口返回的成员快照，按QQ/昵称/群名片匹配；分页，返回 total/truncated。不提供QQ角色；昵称重复须确认QQ。'},
+    'member_info': {'params': {'uid': '必填QQ字符串'}, 'description': '本群成员的QQ昵称、群名片、头像地址；不提供QQ角色，不会查群外陌生人。'},
     'member_avatar': {'params': {'uid': '必填QQ字符串'}, 'description': '核验本群成员后下载QQ头像，返回只读full_path/thumbnail_path供read_image查看；不自动发送。'},
-    'group_admins': {'params': {}, 'description': 'QQ实时群主/管理员，另附机器人竞选状态；查询失败不会用旧状态冒充实时权限。'},
+    'group_admins': {'params': {}, 'description': '机器人自维护的在位竞选管理员及设置昵称权限，仅查询本群数据库状态，不查询或提供QQ角色。'},
     'election_rules': {'params': {}, 'description': '实际复读/管理员竞选规则、时间窗口、当前群是否启用定时竞选/禁言。'},
     'points_today': {'params': {'uid': '可选QQ字符串', 'day': 0}, 'description': '复读业务日（本机时区23:55起）常规点、奖励点、惩罚触发次数；day=1为上一业务日。不传uid返回有流水者排行，并非竞选概率。'},
 }
@@ -74,7 +74,8 @@ class GroupKnowledge:
         self._avatars = {}
 
     async def members(self):
-        # One fresh snapshot per invocation, including unbound members.
+        # One name/membership snapshot per invocation. Platform roles are
+        # deliberately discarded, including when no_cache=True was requested.
         if self._members is None:
             try:
                 async with asyncio.timeout(8):
@@ -86,16 +87,38 @@ class GroupKnowledge:
                     if str(item.get('group_id', self.gid)) != self.gid:
                         raise ValueError('unexpected group')
                     uid = qq_id(str(item['user_id']))
-                    role = item.get('role')
                     rows.append({'uid': uid, 'nickname': str(item.get('nickname') or '')[:200],
                                  'card': str(item.get('card') or '')[:200],
-                                 'role': role if role in {'owner', 'admin', 'member'} else 'unknown',
                                  'avatar_url': f'https://q1.qlogo.cn/g?b=qq&nk={uid}&s=640'})
                 self._members = sorted(rows, key=lambda row: int(row['uid']))
                 self._members_checked = checked_at()
             except Exception:
-                raise ValueError('QQ member lookup failed; current membership, names and roles are unknown') from None
+                raise ValueError('QQ member lookup failed; current membership and names are unknown') from None
         return self._members
+
+    def member_provenance(self):
+        return {'source': 'OneBot get_group_member_list (names/membership only)',
+                'fetched_at': self._members_checked}
+
+    async def election_admin(self):
+        state = await self.broker.call('election_state')
+        if state.get('truncated'):
+            raise ValueError('incomplete election state; bot privileges cannot be confirmed')
+        values = {row['key']: row['value'] for row in state['rows']}
+        selected = values.get('selected_uid') or None
+        if selected is not None:
+            selected = qq_id(selected)
+        # Match setcard_function's adminqq + int(adminqqalive) condition;
+        # missing state is inactive, and malformed state must not grant access.
+        try:
+            active = bool(int(values.get('active', '0')))
+        except (TypeError, ValueError):
+            raise ValueError('invalid election state; bot privileges cannot be confirmed') from None
+        uid = selected if active else None
+        return {'active_uid': uid, 'selected_uid': selected,
+                'set_nickname_allowed_uid': uid,
+                'source': 'local_storage adminqq/adminqqalive (authenticated group)',
+                'fetched_at': checked_at(), 'election_state': state}
 
     async def member(self, uid):
         qq_id(uid)
@@ -141,6 +164,8 @@ class GroupKnowledge:
     def rules(self):
         config = self.settings_provider()
         return {
+            'authority': '管理员指机器人自维护的竞选管理员；设置昵称与转让资格以本群adminqq/adminqqalive和具体命令条件为准，用group_admins/election_state查询。AI不提供QQ角色；旧工具或聊天里的QQ角色不作为当前依据。规则和动态数值不保存为永久记忆。',
+            'set_nickname': '设置昵称仅允许uid等于本群adminqq且int(adminqqalive)非零的在位竞选管理员；QQ群主或其他QQ管理员不会仅凭QQ角色获得此命令权限。',
             'source': 'plugins/fudu + plugins/allmsg (deployed implementation)',
             'fetched_at': checked_at(),
             'scheduled_election_enabled': self.gid in {str(g) for g in config['cs_group_list']},
@@ -155,7 +180,6 @@ class GroupKnowledge:
             'points': '常规点与奖励点分开；奖励点不参与禁言/下放概率。同一句的已有参与者再复读或使用TS poke为5，新参与者依加入顺序加1、2、3、4…（并非封顶3）；每个新参与者给原发送者奖励1。指定@一人的sb/傻逼/艾斯比额外5；禁言操作给操作者按秒加点、解除禁言50。设置昵称的帮助写加20，但当前加点语句在finish之后，成功路径不会执行，不能声称一定加20。',
             'punishment': '普通成员max(0.02,tanh((本次点数*加点后累计常规点-50)/500))；竞选在位管理员max(0,tanh((本次点数*加点后累计常规点/100-50)/500))。',
             'zero_point_meaning': '常规point=0记录一次普通成员惩罚触发；未启用禁言的群也会记此记录，因此不是实际QQ禁言次数。下次触发的禁言分钟数=本业务日触发次数+1。',
-            'authority': '竞选状态与QQ权限分开；QQ管理员可能由群主手动修改，以group_admins实际角色为准。规则和实时数值不应保存为永久不变的记忆。',
         }
 
     async def call(self, name, params):
@@ -183,19 +207,15 @@ class GroupKnowledge:
                              'window_end': datetime.fromtimestamp(end).astimezone().isoformat(),
                              'note': '复读点数排行不是竞选权重排行；惩罚触发次数不代表实际禁言次数。'}
         if name == 'member_info':
-            return {'member': await self.member(params.get('uid')), 'source': 'OneBot get_group_member_list', 'fetched_at': self._members_checked}
+            return {'member': await self.member(params.get('uid')), **self.member_provenance()}
         if name == 'member_avatar':
             return await self.avatar(params.get('uid'))
         if name == 'group_admins':
-            members = await self.members()
-            state = await self.broker.call('election_state')
-            return {'qq_roles': [row for row in members if row['role'] in {'owner', 'admin'}],
-                    'roles_complete': all(row['role'] != 'unknown' for row in members),
-                    'election_state': state, 'source': 'OneBot get_group_member_list', 'fetched_at': self._members_checked}
+            return await self.election_admin()
         offset, limit = params.get('offset', 0), params.get('limit', 50)
         search = params.get('search', '')
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100 or not isinstance(search, str) or len(search) > 100:
             raise ValueError('invalid member search/page')
         rows = [row for row in await self.members() if any(search.casefold() in row[key].casefold() for key in ('uid', 'nickname', 'card'))]
         return {'rows': rows[offset:offset+limit], 'total': len(rows), 'truncated': offset+limit < len(rows),
-                'source': 'OneBot get_group_member_list', 'fetched_at': self._members_checked}
+                **self.member_provenance()}
