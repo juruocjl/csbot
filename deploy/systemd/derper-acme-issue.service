@@ -1,0 +1,16 @@
+[Unit]
+Description=Issue shared ave-mujica.top and wildcard certificate using Alibaba Cloud DNS-01
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+EnvironmentFile=/etc/derper-acme/aliyun.env
+EnvironmentFile=/etc/derper-acme/account.env
+StandardOutput=journal
+StandardError=null
+TimeoutStartSec=15min
+# Reuse the registered ACME account. Issuance does not deploy or reload services.
+ExecStart=/usr/bin/flock --nonblock /run/lock/ave-mujica-acme.lock /usr/local/sbin/derper-acme-run --path=/var/lib/derper-acme --email=${DERPER_ACME_EMAIL} --dns=alidns --domains=ave-mujica.top --domains=*.ave-mujica.top run

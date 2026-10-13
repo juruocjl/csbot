@@ -1,0 +1,17 @@
+[Unit]
+Description=Renew shared ave-mujica.top and wildcard certificate using Alibaba Cloud DNS-01
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+EnvironmentFile=/etc/derper-acme/aliyun.env
+EnvironmentFile=/etc/derper-acme/account.env
+StandardOutput=journal
+StandardError=null
+TimeoutStartSec=15min
+# Deployment is also retried after a previous successful renewal with a failed reload.
+ExecStart=/usr/bin/flock --nonblock /run/lock/ave-mujica-acme.lock /usr/local/sbin/derper-acme-run --path=/var/lib/derper-acme --email=${DERPER_ACME_EMAIL} --dns=alidns --domains=ave-mujica.top --domains=*.ave-mujica.top renew --days=30
+ExecStartPost=/usr/local/sbin/ave-mujica-cert-deploy
