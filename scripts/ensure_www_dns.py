@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Inspect or add the fixed www CNAME using inherited AliDNS credentials."""
+"""Inspect or add the fixed www/cs CNAMEs using inherited AliDNS credentials."""
 
 import argparse
 import base64
@@ -54,13 +54,13 @@ def api(action, parameters):
     return result
 
 
-def records():
-    result = api("DescribeDomainRecords", {"DomainName": DOMAIN, "RRKeyWord": "www",
+def records(label="www"):
+    result = api("DescribeDomainRecords", {"DomainName": DOMAIN, "RRKeyWord": label,
                                            "PageSize": "500", "PageNumber": "1"})
     if int(result["TotalCount"]) > 500:
         raise ValueError("record query incomplete")
     return [record for record in result.get("DomainRecords", {}).get("Record", [])
-            if record.get("RR", "").lower() == "www"]
+            if record.get("RR", "").lower() == label]
 
 
 def expected(records):
@@ -71,44 +71,46 @@ def expected(records):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--label", choices=("www", "cs"), default="www")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--backup-dir", type=Path)
     args = parser.parse_args()
+    prefix = args.label.upper() + "_DNS"
     os.umask(0o077)
     try:
-        before = records()
-        print("WWW_DNS_RECORD_COUNT=" + str(len(before)))
+        before = records(args.label)
+        print(prefix + "_RECORD_COUNT=" + str(len(before)))
         for record in before:
             view = {key: record.get(key) for key in ("RR", "Type", "Status")}
             if record.get("Type") in ("A", "AAAA", "CNAME"):
                 view["Value"] = record.get("Value")
             print(json.dumps(view))
         if expected(before):
-            print("WWW_DNS_RESULT already_configured")
+            print(prefix + "_RESULT already_configured")
             return
         if not args.apply:
-            print("WWW_DNS_RESULT not_configured")
+            print(prefix + "_RESULT not_configured")
             return
         if before:
-            raise APIError("EXISTING_WWW_RECORD_CONFLICT")
+            raise APIError("EXISTING_" + args.label.upper() + "_RECORD_CONFLICT")
         if args.backup_dir is None:
             raise APIError("BACKUP_DIRECTORY_REQUIRED")
         args.backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        before_file = args.backup_dir / "dns-www-before.json"
+        before_file = args.backup_dir / ("dns-" + args.label + "-before.json")
         with before_file.open("x") as file:
             json.dump({"domain": DOMAIN, "records": before}, file)
-        api("AddDomainRecord", {"DomainName": DOMAIN, "RR": "www", "Type": "CNAME",
+        api("AddDomainRecord", {"DomainName": DOMAIN, "RR": args.label, "Type": "CNAME",
                                 "Value": DOMAIN, "TTL": "600", "Line": "default"})
-        after = records()
-        (args.backup_dir / "dns-www-after.json").write_text(json.dumps(after))
+        after = records(args.label)
+        (args.backup_dir / ("dns-" + args.label + "-after.json")).write_text(json.dumps(after))
         if not expected(after):
             raise APIError("RECORD_VERIFICATION_FAILED")
-        print("WWW_DNS_RESULT created_CNAME_to_" + DOMAIN)
+        print(prefix + "_RESULT created_CNAME_to_" + DOMAIN)
     except APIError as error:
-        print("WWW_DNS_RESULT failed code=" + str(error))
+        print(prefix + "_RESULT failed code=" + str(error))
         raise SystemExit(1)
     except (OSError, ValueError, KeyError):
-        print("WWW_DNS_RESULT failed code=REQUEST_OR_CONFIGURATION_ERROR")
+        print(prefix + "_RESULT failed code=REQUEST_OR_CONFIGURATION_ERROR")
         raise SystemExit(1)
 
 
