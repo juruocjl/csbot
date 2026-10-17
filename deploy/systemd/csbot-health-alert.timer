@@ -1,0 +1,11 @@
+[Unit]
+Description=Check CSBot health every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=csbot-health-alert.service
+
+[Install]
+WantedBy=timers.target

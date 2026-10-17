@@ -1,0 +1,18 @@
+[Unit]
+Description=Check CSBot host health and alert the configured QQ administrator
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/csbot-health-alert.py
+TimeoutStartSec=90
+RuntimeDirectory=csbot-health-alert
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0077
+MemoryMax=96M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
