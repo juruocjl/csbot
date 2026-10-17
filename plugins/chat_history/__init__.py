@@ -63,6 +63,7 @@ LEXICON_MAX_TERMS = 2000
 LEXICON_MIN_FREQ = 3
 LEXICON_MIN_DOC_FREQ = 2
 LEXICON_MAX_DOC_FREQ_RATIO = 0.005
+LEXICON_QUERY_BATCH_SIZE = 1000
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_\u4e00-\u9fff]+")
 CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
@@ -887,22 +888,22 @@ class DataManager:
         if not term_freq:
             return 0
 
-        if replace:
-            selected_terms = set(term_freq.keys())
-        else:
-            selected_terms = set(term_freq.keys())
+        if not replace:
+            selected_terms = list(term_freq)
             async with async_session_factory() as session:
-                result = await session.execute(
-                    select(ChatTokenLexicon).where(
-                        ChatTokenLexicon.group_id == group_id,
-                        ChatTokenLexicon.term.in_(selected_terms),
+                # asyncpg limits each query to 32767 bind parameters. A group's
+                # candidate vocabulary can be much larger than the kept lexicon.
+                for offset in range(0, len(selected_terms), LEXICON_QUERY_BATCH_SIZE):
+                    result = await session.execute(
+                        select(ChatTokenLexicon).where(
+                            ChatTokenLexicon.group_id == group_id,
+                            ChatTokenLexicon.term.in_(selected_terms[offset:offset + LEXICON_QUERY_BATCH_SIZE]),
+                        )
                     )
-                )
-                existing = {row.term: row for row in result.scalars().all()}
-            for term, row in existing.items():
-                term_freq[term] += row.freq
-                doc_freq[term] += row.doc_freq
-                last_seen[term] = max(last_seen.get(term, 0), row.last_seen)
+                    for row in result.scalars():
+                        term_freq[row.term] += row.freq
+                        doc_freq[row.term] += row.doc_freq
+                        last_seen[row.term] = max(last_seen.get(row.term, 0), row.last_seen)
 
         total_docs_for_score = max(total_docs, max(doc_freq.values(), default=0))
         max_enabled_doc_freq = total_docs_for_score
