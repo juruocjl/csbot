@@ -100,7 +100,9 @@ async def _drain(bot: Bot):
         try:
             sid = f"group_{row['group_id']}_{row['bot_id']}"
             await insert_message(bot, row["message_id"], sid, row["created_at"], searchable_message(json.loads(row["payload"])),strict_index=True)
-            record_id = await db.get_id_by_mid(row["message_id"], row["group_id"])
+            record_id = await db.get_id_by_mid(
+                row["message_id"], row["group_id"], timestamp=row["created_at"], sid=sid,
+            )
             store.execute("UPDATE outbound SET status='indexed',record_id=?,payload='[]' WHERE id=?", (record_id, row["id"]))
         except Exception:
             logger.exception("outgoing archive indexing failed; retained for retry")

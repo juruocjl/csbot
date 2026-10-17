@@ -54,6 +54,9 @@ __plugin_meta__ = PluginMetadata(
 
 
 config = get_plugin_config(Config)
+# Send staging and the platform echo can differ by a few seconds. A numeric
+# message ID alone can also refer to an unrelated historical message.
+MESSAGE_DEDUP_SECONDS = 120
 
 plt.rcParams["font.sans-serif"] = [
     "WenQuanYi Micro Hei",
@@ -73,7 +76,9 @@ class DataManager:
                 await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
                                       {"key": f"group-message:{gid}:{mid}"})
                 existing = await session.scalar(select(GroupMsg.id).where(
-                    GroupMsg.mid == mid, GroupMsg.sid.like(f"group\\_{gid}\\_%", escape="\\")
+                    GroupMsg.mid == mid,
+                    GroupMsg.sid == sid,
+                    GroupMsg.timestamp.between(timestamp - MESSAGE_DEDUP_SECONDS, timestamp + MESSAGE_DEDUP_SECONDS),
                 ).order_by(GroupMsg.id.asc()).limit(1))
                 if existing is not None:
                     return existing
@@ -103,13 +108,22 @@ class DataManager:
                     session.add(GroupMember(gid=gid, uid=uid))
     
 
-    async def get_id_by_mid(self, mid: int, group_id: str | None = None) -> int:
+    async def get_id_by_mid(
+        self, mid: int, group_id: str | None = None, *,
+        timestamp: int | None = None, sid: str | None = None,
+    ) -> int:
         async with async_session_factory() as session:
             stmt = select(GroupMsg.id).where(GroupMsg.mid == mid)\
                 .order_by(GroupMsg.timestamp.desc())\
                 .limit(1)
             if group_id is not None:
                 stmt = stmt.where(GroupMsg.sid.like(f"group\\_{group_id}\\_%", escape="\\"))
+            if sid is not None:
+                stmt = stmt.where(GroupMsg.sid == sid)
+            if timestamp is not None:
+                stmt = stmt.where(GroupMsg.timestamp.between(
+                    timestamp - MESSAGE_DEDUP_SECONDS, timestamp + MESSAGE_DEDUP_SECONDS,
+                ))
             
             result = await session.execute(stmt)
             row_id = result.scalar()
@@ -268,7 +282,7 @@ async def snapshot_outgoing_ats(bot: Bot, group_id: str, payload: list[dict]) ->
 
 async def insert_message(bot: Bot, mid: int, sid: str, timestamp: int, message: Message, *, strict_index: bool = False) -> str:
     # A platform echo must not re-download images already archived semantically.
-    existing = await db.get_id_by_mid(mid, sid.split('_')[1])
+    existing = await db.get_id_by_mid(mid, sid.split('_')[1], timestamp=timestamp, sid=sid)
     if existing > 0:
         await chat_history_db.index_group_message(existing)
         return hashlib.sha256(str(existing).encode()).hexdigest()

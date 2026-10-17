@@ -176,6 +176,34 @@ async def main():
             await drain(bot)
             assert len(calls) == calls_before and not store.rows("SELECT id FROM outbound WHERE status='sent'")
             print('PASS: metadata searchable and group scoped; QQ pixels unchanged; no cached originals/thumbnails; echo and forward retry preserve metadata without re-sending')
+            # A recycled platform ID must not link a new send to old history or
+            # to another sender. Keep both historical raw rows unchanged.
+            collision_mid=next_mid+1
+            now=int(time.time())
+            own_sid=f'group_{gid}_{bot.self_id}'
+            old_bytes=msgpack.dumps([['text','historical collision fixture']])
+            old_id=await allmsg.db.insert_groupmsg(collision_mid,own_sid,now-120*86400,old_bytes)
+            foreign_id=await allmsg.db.insert_groupmsg(collision_mid,f'group_{gid}_555',now,old_bytes)
+            allmsg.insert_message=fail_index
+            try:
+                await bot.call_api('send_group_msg',group_id=int(gid),message='current collision fixture')
+            finally:allmsg.insert_message=original
+            calls_before=len(calls)
+            await drain(bot)
+            current_id=await allmsg.db.get_id_by_mid(collision_mid,gid,timestamp=now,sid=own_sid)
+            assert current_id>0 and current_id not in {old_id,foreign_id}
+            archived=store.rows('SELECT status,record_id FROM outbound WHERE message_id=?',(collision_mid,))
+            assert len(archived)==1 and archived[0]['status']=='indexed' and archived[0]['record_id']==current_id
+            await insert_message(bot,collision_mid,own_sid,now+1,Message('current collision fixture'),strict_index=True)
+            assert await allmsg.db.insert_groupmsg(collision_mid,own_sid,now+1,b'not stored')==current_id
+            assert len(calls)==calls_before,'collision archive/echo must never resend'
+            async with async_session_factory() as session:
+                rows=list((await session.execute(text('SELECT id,"timeStamp",data FROM groupmsg WHERE mid=:mid AND sid LIKE :sid'),
+                    {'mid':collision_mid,'sid':f'group_{gid}_%'})).mappings())
+                assert len(rows)==3
+                historical=next(row for row in rows if row['id']==old_id)
+                assert historical['timeStamp']==now-120*86400 and historical['data']==old_bytes
+            print('PASS: recycled message ID keeps old history and other senders separate; delayed archive selects the new record and echo deduplicates without resend')
         finally:
             async with engine.begin() as conn:
                 await conn.execute(text("DELETE FROM chat_chunk_message WHERE chunk_id IN (SELECT id FROM chat_chunk_index WHERE group_id=:gid)"),{"gid":gid})

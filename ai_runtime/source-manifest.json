@@ -3,7 +3,7 @@
   "files": {
     "plugins/fudu/__init__.py": "c687d9d0bcd0e42b00f62f2c684b609a74503139d0cf01fad72f3bfd6b1259a9",
     "plugins/fudu/config.py": "8f8849f0fe979ff3ee52f1580d5bb198deabc052942354d67a3fb73c4b4a9289",
-    "plugins/allmsg/__init__.py": "5cbe1809ca81d9e28674d325f6e29e6ea675cb74ba308d2f81eb7a7de707109d",
+    "plugins/allmsg/__init__.py": "4cd47b55eae04d09baa896ad4b7026ff328bd956075b351f2ed80421ccc1614a",
     "plugins/cs_db_val/__init__.py": "55159bdafa1b9eae7ad4624ca1d9c219fd2b10d8f3f0461ab58825d6d18ee004",
     "plugins/models/__init__.py": "024bf9eafad8c8eb39f94e9422f6d6e263d02d5d141b91050086adb2c02907f0",
     "plugins/utils/__init__.py": "09059d73b44382d2426456edb08a7448bba4b373288df5a0a9f7eca05dd343e4",
