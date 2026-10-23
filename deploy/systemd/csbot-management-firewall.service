@@ -1,0 +1,13 @@
+[Unit]
+Description=Restrict CSBot management ports on the public interface
+Wants=network-online.target
+After=network-online.target docker.service tailscaled.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/csbot-management-firewall.sh eth0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target docker.service

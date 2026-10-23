@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:15-alpine  # 改用 postgres 镜像 (推荐 alpine 版本，体积小)
+    image: postgres:15.19-alpine
     container_name: csbot-database
     restart: unless-stopped
     environment:
@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: postgres  # 默认超级用户，相当于 MySQL 的 root
       POSTGRES_DB: csbot       # 对应 MYSQL_DATABASE
     ports:
-      - "5432:5432"            # PostgreSQL 默认端口是 5432
+      - "127.0.0.1:5432:5432"  # 远程管理使用 SSH 隧道
     volumes:
       # 注意：PostgreSQL 容器内的数据目录是 /var/lib/postgresql/data
       - ./pg_data:/var/lib/postgresql/data 
@@ -19,13 +19,13 @@ services:
     image: adminer
     restart: unless-stopped
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
   nginx:
-    image: nginx:alpine
+    image: nginx:1.30.6-alpine
     container_name: csbot-nginx
     restart: unless-stopped
     ports:
-      - "1234:80"
+      - "127.0.0.1:1234:80"
     volumes:
       - ./assets/default.conf:/etc/nginx/templates/default.conf.template
       - ./imgs/:/usr/share/nginx/imgs/
@@ -33,7 +33,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
   homepage:
-    image: nginx:alpine
+    image: nginx:1.30.6-alpine
     container_name: csbot-homepage
     restart: unless-stopped
     ports:
@@ -53,7 +53,7 @@ services:
     environment:
       ACCOUNT: "669299191"
     ports:
-      - 6099:6099
+      - "127.0.0.1:6099:6099"
     restart: unless-stopped
     volumes:
       - ./napcat/config:/app/napcat/config
