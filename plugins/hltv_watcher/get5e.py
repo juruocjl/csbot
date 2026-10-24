@@ -12,7 +12,7 @@ from nonebot import logger, require
 from .logic import (
     SHANGHAI,
     EventInfo,
-    discovery_time_window,
+    discovery_time_windows,
     parse_event_list,
     parse_finished_matches,
 )
@@ -82,8 +82,10 @@ async def _request_json(
     return payload
 
 
-def _discovery_payload(page_token: str, now: datetime) -> dict[str, Any]:
-    start, end = discovery_time_window(now)
+def _discovery_payload(
+    page_token: str, window: tuple[str, str]
+) -> dict[str, Any]:
+    start, end = window
     return {
         "tournaments_options": {
             "cursor": "",
@@ -107,26 +109,27 @@ async def fetch_events(now: datetime | None = None) -> list[EventInfo]:
     """
     now = now or datetime.now(SHANGHAI)
     events: dict[int, EventInfo] = {}
-    page_token = ""
-    for page in range(MAX_DISCOVERY_PAGES):
-        payload = await _request_json(
-            "POST",
-            EVENT_LIST_URL,
-            data=_discovery_payload(page_token, now),
-        )
-        for event in parse_event_list(payload):
-            events[event.event_id] = event
-
-        data = payload.get("data")
-        next_token = data.get("page_token") if isinstance(data, Mapping) else None
-        if not next_token:
-            break
-        if page + 1 == MAX_DISCOVERY_PAGES:
-            logger.warning(
-                f"5E 赛事列表还有更多分页，本轮只读取前 {MAX_DISCOVERY_PAGES} 页"
+    for window in discovery_time_windows(now):
+        page_token = ""
+        for page in range(MAX_DISCOVERY_PAGES):
+            payload = await _request_json(
+                "POST",
+                EVENT_LIST_URL,
+                data=_discovery_payload(page_token, window),
             )
-            break
-        page_token = str(next_token)
+            for event in parse_event_list(payload):
+                events[event.event_id] = event
+
+            data = payload.get("data")
+            next_token = data.get("page_token") if isinstance(data, Mapping) else None
+            if not next_token:
+                break
+            if page + 1 == MAX_DISCOVERY_PAGES:
+                logger.warning(
+                    f"5E 赛事列表还有更多分页，本轮窗口只读取前 {MAX_DISCOVERY_PAGES} 页"
+                )
+                break
+            page_token = str(next_token)
 
     if not events:
         raise FiveEApiError("5E 赛事列表为空，保留上一轮监视列表")

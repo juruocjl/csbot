@@ -18,11 +18,13 @@ no longer read. The model, time-location, and live-monitor environment values se
 their database rows on first startup; later changes are made through the admin page.
 
 `hltv_event_id_list` is maintained automatically. Every 30 minutes the watcher asks
-5EPlay for events in a bounded window (30 days back, 30 days ahead), keeps active
-events whose `teams` include a followed team or whose grade is Major/S/S+, drops
-finished events, and writes the resulting IDs back to this key. The lookback covers
-events that started days ago but are still running. A manual edit is
-overwritten by the next refresh. `hltv_followed_teams` defaults to
+5EPlay for two bounded windows (1 day back to 30 days ahead, and 30 days back to
+now) and unions them, keeps active events whose `teams` include a followed team or
+whose grade is Major/S/S+, drops finished events, and writes the resulting IDs back
+to this key. Two windows are needed because 5E caps a single query at about 21
+events: the first preserves far-future Major/S coverage while the second catches
+events that started days ago and are still running. A manual edit is overwritten by
+the next refresh. `hltv_followed_teams` defaults to
 `["TYLOO", "LVG", "FaZe", "BC.Game"]`; matching ignores case and punctuation, so
 `bcg` also matches `BC.Game`.
 
@@ -32,7 +34,7 @@ result is pushed. For other watched events, only matches involving a followed te
 are pushed, while all results are still stored for `/更新比赛`, `major_hw`, and the
 admin pages.
 
-Request budget: discovery is one list request per 30 minutes (two pages at most).
+Request budget: discovery is two list requests per 30 minutes (two windows, two pages each at most).
 The scheduler wakes once a minute, but each live event is polled only about once
 per 5 minutes; new/restarted schedules are spread across 30–290 seconds and at most
 two events are polled per minute, so results are not requested in one batch.

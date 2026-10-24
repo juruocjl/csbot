@@ -29,9 +29,10 @@ DEFAULT_FOLLOWED_TEAMS = ("TYLOO", "LVG", "FaZe", "BC.Game")
 # be picked up, then it is removed from the watch list.
 FINISHED_EVENT_GRACE_SECONDS = 2 * 60 * 60
 
-# Look back far enough to catch events that started before the current window
-# but are still running.  A one-day lookback silently dropped long events such
-# as a four-day C-tier event that started before the watcher was deployed.
+# 5E returns at most about 21 events per query.  One wide window therefore
+# cannot cover both long-running events and far-future Major/S events, so the
+# watcher asks for two overlapping windows and unions the results.
+DISCOVERY_RECENT_DAYS = 1
 DISCOVERY_LOOKBACK_DAYS = 30
 DISCOVERY_LOOKAHEAD_DAYS = 30
 
@@ -43,15 +44,24 @@ def compact(value: str) -> str:
     return "".join(ch for ch in str(value).casefold() if ch.isalnum())
 
 
-def discovery_time_window(now: datetime) -> tuple[str, str]:
-    """Return the 5E event-list time window as ``start_end`` strings."""
-    start = (now - timedelta(days=DISCOVERY_LOOKBACK_DAYS)).strftime(
-        "%Y-%m-%d 00:00:00"
-    )
-    end = (now + timedelta(days=DISCOVERY_LOOKAHEAD_DAYS)).strftime(
-        "%Y-%m-%d 23:59:59"
-    )
+def _event_window(now: datetime, days_before: int, days_after: int) -> tuple[str, str]:
+    start = (now - timedelta(days=days_before)).strftime("%Y-%m-%d 00:00:00")
+    end = (now + timedelta(days=days_after)).strftime("%Y-%m-%d 23:59:59")
     return start, end
+
+
+def discovery_time_windows(now: datetime) -> tuple[tuple[str, str], ...]:
+    """Two bounded 5E event-list windows.
+
+    The first covers current/upcoming events and preserves far-future Major/S
+    coverage.  The second reaches back far enough for events that started days
+    ago and are still running (for example a four-day event that began before
+    the watcher was deployed).
+    """
+    return (
+        _event_window(now, DISCOVERY_RECENT_DAYS, DISCOVERY_LOOKAHEAD_DAYS),
+        _event_window(now, DISCOVERY_LOOKBACK_DAYS, 0),
+    )
 
 
 def parse_event_id(value: Any) -> int | None:

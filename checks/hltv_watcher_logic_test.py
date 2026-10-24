@@ -107,19 +107,22 @@ class EventParsingTest(unittest.TestCase):
             ).is_major_tier
         )
 
-    def test_discovery_window_includes_long_running_events(self):
-        start, end = LOGIC.discovery_time_window(
+    def test_discovery_windows_cover_live_and_future_events(self):
+        windows = LOGIC.discovery_time_windows(
             datetime(2026, 10, 24, 12, tzinfo=LOGIC.SHANGHAI)
         )
+        starts = [LOGIC.parse_event_time(start) for start, _ in windows]
+        ends = [LOGIC.parse_event_time(end) for _, end in windows]
 
+        # One window must reach back over a long-running event; another must
+        # still cover upcoming Major/S events.
         self.assertLessEqual(
-            LOGIC.parse_event_time(start),
-            NOW - int(timedelta(days=10).total_seconds()),
+            min(starts), NOW - int(timedelta(days=10).total_seconds())
         )
         self.assertGreaterEqual(
-            LOGIC.parse_event_time(end),
-            NOW + int(timedelta(days=25).total_seconds()),
+            max(ends), NOW + int(timedelta(days=25).total_seconds())
         )
+        self.assertEqual(len(windows), 2)
 
     def test_event_time_and_json_round_trip(self):
         parsed = event(8050, "PGL 布加勒斯特大师赛 2026", teams=["TYLOO"])
