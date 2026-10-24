@@ -103,6 +103,26 @@ class RuntimeConfigLogicTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     LOGIC.encode_value(definition, value)
 
+    def test_followed_teams_round_trip(self) -> None:
+        definition = LOGIC.get_definition("hltv_followed_teams")
+        value, encoded = LOGIC.encode_value(
+            definition,
+            [" TYLOO ", "LVG", "FaZe", "BC.Game"],
+        )
+
+        self.assertEqual(value, ["TYLOO", "LVG", "FaZe", "BC.Game"])
+        self.assertEqual(
+            LOGIC.decode_value(definition, encoded),
+            ["TYLOO", "LVG", "FaZe", "BC.Game"],
+        )
+
+    def test_invalid_followed_teams_are_rejected(self) -> None:
+        definition = LOGIC.get_definition("hltv_followed_teams")
+        for value in ([""], [123], {}, "TYLOO", None):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    LOGIC.encode_value(definition, value)
+
 
 if __name__ == "__main__":
     unittest.main()

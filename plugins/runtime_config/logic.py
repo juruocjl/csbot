@@ -15,6 +15,8 @@ TimeZoneName = Annotated[str, StringConstraints(strip_whitespace=True, min_lengt
 TimeLocations = Annotated[dict[TimeLocationName, TimeZoneName], Field(max_length=50)]
 LiveWatchId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 LiveWatchList = Annotated[list[LiveWatchId], Field(max_length=200)]
+FollowedTeamName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+FollowedTeamList = Annotated[list[FollowedTeamName], Field(max_length=50)]
 
 
 @dataclass(frozen=True)
@@ -60,11 +62,25 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
     ),
     "hltv_event_id_list": RuntimeConfigDefinition(
         key="hltv_event_id_list",
-        name="监视的比赛",
-        description="需要定时检查结果更新的 5E 赛事 ID 列表。修改后下一次任务执行时生效。",
+        name="监视的赛事",
+        description=(
+            "由自动发现任务维护的 5E 赛事 ID 列表：关注队伍参加或 Major/S 级赛事会加入，"
+            "赛事结束后移除。手动修改会在下一轮刷新时被覆盖。"
+        ),
         annotation=list[PositiveInt],
         default=[],
         value_type="integer_list",
+    ),
+    "hltv_followed_teams": RuntimeConfigDefinition(
+        key="hltv_followed_teams",
+        name="关注的战队",
+        description=(
+            "关注队伍名称，不区分大小写并忽略标点（例如 BC.Game 也可写成 bcg）。"
+            "这些队伍参加的非 Major/S 级赛事会加入监视列表，且只推送涉及这些队伍的结果。"
+        ),
+        annotation=FollowedTeamList,
+        default=["TYLOO", "LVG", "FaZe", "BC.Game"],
+        value_type="string_list",
     ),
     "cs_time_locations": RuntimeConfigDefinition(
         key="cs_time_locations",

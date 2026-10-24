@@ -8,14 +8,34 @@
 ## Runtime configuration
 
 Administrators (`SUPERUSERS`) can edit database-backed configuration at `/admin/config`.
-The registered keys include `hltv_event_id_list`, `cs_season_id` (current season),
-`cs_last_season_id` (previous season), `cs_time_locations`, and `cs_ai_model`.
-The live-stream monitor list is available as `live_watch_list`.
+The registered keys include `hltv_event_id_list`, `hltv_followed_teams`, `cs_season_id`
+(current season), `cs_last_season_id` (previous season), `cs_time_locations`, and
+`cs_ai_model`. The live-stream monitor list is available as `live_watch_list`.
 Season values are JSON strings such as `"S21"` and `"S20"`; these are the initial
 defaults from the example configuration, not automatically detected seasons. Set
 the appropriate values in the admin page. The old season environment variables are
 no longer read. The model, time-location, and live-monitor environment values seed
 their database rows on first startup; later changes are made through the admin page.
+
+`hltv_event_id_list` is maintained automatically. Every 30 minutes the watcher asks
+5EPlay for events in a bounded window (one day back, 30 days ahead), keeps active
+events whose `teams` include a followed team or whose grade is Major/S/S+, drops
+finished events, and writes the resulting IDs back to this key. A manual edit is
+overwritten by the next refresh. `hltv_followed_teams` defaults to
+`["TYLOO", "LVG", "FaZe", "BC.Game"]`; matching ignores case and punctuation, so
+`bcg` also matches `BC.Game`.
+
+Only live events are polled for results (every 5 minutes); upcoming events are kept
+in the list but are not requested until they start. For Major/S/S+ events every new
+result is pushed. For other watched events, only matches involving a followed team
+are pushed, while all results are still stored for `/更新比赛`, `major_hw`, and the
+admin pages.
+
+Request budget: discovery is one list request per 30 minutes (two pages at most),
+result polling is one request per live event per 5 minutes with at most 8 live
+events per cycle, and requests are spaced by two seconds. A 403/429 response pauses
+polling for 30 minutes, and discovery failures back off from 5 to 60 minutes. The
+watcher never requests a full event history page or an upcoming event.
 
 Startup inserts missing configuration rows without overwriting saved values; adding
 registered keys does not require a schema migration. Subsequent queries and refresh
