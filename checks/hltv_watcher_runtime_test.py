@@ -30,7 +30,7 @@ FUNCTIONS = {
     "refresh_watch_list",
     "_send_notification",
     "_poll_event",
-    "_poll_watched_events",
+    "_poll_due_events",
 }
 
 
@@ -122,6 +122,7 @@ def load_runtime():
         "select_watch_events": LOGIC.select_watch_events,
         "should_poll_event": LOGIC.should_poll_event,
         "split_message": LOGIC.split_message,
+        "poll_schedule": {},
     }
     exec(compile(ast.Module(body=body, type_ignores=[]), str(PLUGIN / "__init__.py"), "exec"), namespace)
     return namespace, storage, runtime, bot, event_update, fetch_events, get_matches
@@ -221,11 +222,30 @@ class PollTest(unittest.TestCase):
         storage.data["hltv_event_meta"] = LOGIC.events_to_json([live, upcoming])
         get_matches.return_value = ("live", [])
 
-        asyncio.run(runtime["_poll_watched_events"](bot))
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now))
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now + 31))
 
         self.assertEqual(get_matches.await_count, 1)
         self.assertEqual(get_matches.await_args.args[0], 20)
 
+    def test_live_events_are_staggered(self):
+        runtime, storage, config, bot, event_update, fetch_events, get_matches = load_runtime()
+        now = int(time.time())
+        events = [make_event(100 + index, f"live-{index}") for index in range(4)]
+        config.values["hltv_event_id_list"] = [event.event_id for event in events]
+        storage.data["hltv_event_meta"] = LOGIC.events_to_json(events)
+        get_matches.return_value = ("live", [])
+
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now))
+        self.assertEqual(get_matches.await_count, 0)
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now + 31))
+        self.assertEqual(get_matches.await_count, 1)
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now + 98))
+        self.assertEqual(get_matches.await_count, 2)
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now + 170))
+        self.assertEqual(get_matches.await_count, 3)
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now + 240))
+        self.assertEqual(get_matches.await_count, 4)
 
     def test_rate_limit_cooldown_skips_polling(self):
         runtime, storage, config, bot, event_update, fetch_events, get_matches = load_runtime()
@@ -235,7 +255,7 @@ class PollTest(unittest.TestCase):
         storage.data["hltv_event_meta"] = LOGIC.events_to_json([live])
         storage.data["hltv_poll_cooldown"] = str(now + 600)
 
-        asyncio.run(runtime["_poll_watched_events"](bot))
+        asyncio.run(runtime["_poll_due_events"](bot, now_ts=now))
 
         self.assertEqual(get_matches.await_count, 0)
 

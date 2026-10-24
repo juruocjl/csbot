@@ -54,7 +54,8 @@ DISCOVERY_FAILURE_BASE_SECONDS = 5 * 60
 DISCOVERY_FAILURE_MAX_SECONDS = 60 * 60
 RATE_LIMIT_COOLDOWN_SECONDS = 30 * 60
 EVENT_REQUEST_DELAY_SECONDS = 2
-MAX_EVENTS_PER_CYCLE = 8
+EVENT_POLL_INTERVAL_SECONDS = 5 * 60
+MAX_EVENTS_PER_MINUTE = 2
 
 META_KEY = "hltv_event_meta"
 NEXT_REFRESH_KEY = "hltv_next_discovery"
@@ -62,6 +63,9 @@ DISCOVERY_FAILURES_KEY = "hltv_discovery_failures"
 POLL_COOLDOWN_KEY = "hltv_poll_cooldown"
 
 update_lock = asyncio.Lock()
+# event_id -> next poll timestamp.  Rebuilt after a restart; live events are
+# spread across the 5-minute interval instead of being polled in one batch.
+poll_schedule: dict[int, float] = {}
 
 
 async def _load_int(key: str, default: int = 0) -> int:
@@ -238,11 +242,12 @@ async def _poll_event(event: EventInfo, followed: list[str], bot: Bot) -> bool:
     return True
 
 
-async def _poll_watched_events(bot: Bot) -> None:
+async def _poll_due_events(bot: Bot, now_ts: int | None = None) -> None:
     event_ids: list[int] = await runtime_config.get("hltv_event_id_list")
     metadata = await _load_metadata()
     followed = await _followed_teams()
-    now_ts = int(time.time())
+    if now_ts is None:
+        now_ts = int(time.time())
 
     cooldown = await _load_int(POLL_COOLDOWN_KEY)
     if cooldown > now_ts:
@@ -270,7 +275,29 @@ async def _poll_watched_events(bot: Bot) -> None:
         if should_poll_event(event, now_ts):
             pollable.append(event)
 
-    pollable.sort(
+    # Drop schedule entries for events that are no longer live.
+    live_ids = {event.event_id for event in pollable}
+    for event_id in list(poll_schedule):
+        if event_id not in live_ids:
+            poll_schedule.pop(event_id, None)
+
+    # Spread newly discovered live events across one poll interval instead of
+    # requesting them all at the same moment.
+    total = len(pollable)
+    for index, event in enumerate(pollable):
+        if event.event_id in poll_schedule:
+            continue
+        offset = 30 + int(
+            index * (EVENT_POLL_INTERVAL_SECONDS - 30) / max(1, total)
+        )
+        poll_schedule[event.event_id] = now_ts + offset
+
+    due = [
+        event
+        for event in pollable
+        if poll_schedule[event.event_id] <= now_ts
+    ]
+    due.sort(
         key=lambda event: (
             event.status != "live",
             not event.is_major_tier,
@@ -278,19 +305,29 @@ async def _poll_watched_events(bot: Bot) -> None:
             event.event_id,
         )
     )
-    if len(pollable) > MAX_EVENTS_PER_CYCLE:
-        logger.warning(
-            f"本轮有 {len(pollable)} 个赛事需要抓取，超过上限 "
-            f"{MAX_EVENTS_PER_CYCLE}，只抓取前 {MAX_EVENTS_PER_CYCLE} 个"
+    if len(due) > MAX_EVENTS_PER_MINUTE:
+        logger.info(
+            f"本轮有 {len(due)} 个赛事到期，按每分钟上限只抓取 "
+            f"{MAX_EVENTS_PER_MINUTE} 个"
         )
-        pollable = pollable[:MAX_EVENTS_PER_CYCLE]
+        due = due[:MAX_EVENTS_PER_MINUTE]
 
-    for event in pollable:
+    for event in due:
+        logger.info(
+            f"抓取赛事 {event.name or event.event_id}({event.event_id}) 结果"
+        )
         ok = await _poll_event(event, followed, bot)
-        if not ok:
+        if ok:
+            poll_schedule[event.event_id] = (
+                now_ts
+                + EVENT_POLL_INTERVAL_SECONDS
+                + random.randint(-10, 10)
+            )
+        else:
             # A 5E error (rate limit, maintenance, network) usually affects the
             # whole API; stop this cycle instead of hammering the remaining
             # events.
+            poll_schedule[event.event_id] = now_ts + EVENT_POLL_INTERVAL_SECONDS
             logger.warning("本轮停止继续抓取赛事结果，避免连续请求 5E")
             break
         await asyncio.sleep(EVENT_REQUEST_DELAY_SECONDS)
@@ -298,11 +335,11 @@ async def _poll_watched_events(bot: Bot) -> None:
 
 @scheduler.scheduled_job(
     "cron",
-    minute="*/5",
+    minute="*",
     id="hltv",
     max_instances=1,
     coalesce=True,
-    misfire_grace_time=240,
+    misfire_grace_time=120,
 )
 async def scheduled_update_events() -> None:
     await _run_update(force_discovery=False)
@@ -321,4 +358,4 @@ async def _run_update(force_discovery: bool) -> None:
         if bot is None:
             logger.warning("没有已连接的 Bot，跳过本轮赛事结果抓取")
             return
-        await _poll_watched_events(bot)
+        await _poll_due_events(bot)
