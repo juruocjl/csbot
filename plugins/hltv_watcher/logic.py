@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -29,12 +29,29 @@ DEFAULT_FOLLOWED_TEAMS = ("TYLOO", "LVG", "FaZe", "BC.Game")
 # be picked up, then it is removed from the watch list.
 FINISHED_EVENT_GRACE_SECONDS = 2 * 60 * 60
 
+# Look back far enough to catch events that started before the current window
+# but are still running.  A one-day lookback silently dropped long events such
+# as a four-day C-tier event that started before the watcher was deployed.
+DISCOVERY_LOOKBACK_DAYS = 30
+DISCOVERY_LOOKAHEAD_DAYS = 30
+
 Match = tuple[str, str, str, str]
 
 
 def compact(value: str) -> str:
     """Case-fold and strip punctuation/spaces for tolerant name matching."""
     return "".join(ch for ch in str(value).casefold() if ch.isalnum())
+
+
+def discovery_time_window(now: datetime) -> tuple[str, str]:
+    """Return the 5E event-list time window as ``start_end`` strings."""
+    start = (now - timedelta(days=DISCOVERY_LOOKBACK_DAYS)).strftime(
+        "%Y-%m-%d 00:00:00"
+    )
+    end = (now + timedelta(days=DISCOVERY_LOOKAHEAD_DAYS)).strftime(
+        "%Y-%m-%d 23:59:59"
+    )
+    return start, end
 
 
 def parse_event_id(value: Any) -> int | None:

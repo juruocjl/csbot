@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 LOGIC_PATH = Path(__file__).parents[1] / "plugins" / "hltv_watcher" / "logic.py"
@@ -105,6 +105,20 @@ class EventParsingTest(unittest.TestCase):
                 grade="6",
                 grade_label="资格赛B级",
             ).is_major_tier
+        )
+
+    def test_discovery_window_includes_long_running_events(self):
+        start, end = LOGIC.discovery_time_window(
+            datetime(2026, 10, 24, 12, tzinfo=LOGIC.SHANGHAI)
+        )
+
+        self.assertLessEqual(
+            LOGIC.parse_event_time(start),
+            NOW - int(timedelta(days=10).total_seconds()),
+        )
+        self.assertGreaterEqual(
+            LOGIC.parse_event_time(end),
+            NOW + int(timedelta(days=25).total_seconds()),
         )
 
     def test_event_time_and_json_round_trip(self):

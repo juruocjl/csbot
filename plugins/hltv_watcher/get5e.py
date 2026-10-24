@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Mapping
 
 import aiohttp
 from nonebot import logger, require
 
-from .logic import SHANGHAI, EventInfo, parse_event_list, parse_finished_matches
+from .logic import (
+    SHANGHAI,
+    EventInfo,
+    discovery_time_window,
+    parse_event_list,
+    parse_finished_matches,
+)
 
 get_session = require("utils").get_session
 
@@ -18,8 +24,6 @@ EVENT_LIST_URL = "https://app.5eplay.com/api/csgo/tournament/csgo_event_list_v1"
 EVENT_SESSION_URL = "https://app.5eplay.com/api/tournament/event_session_list"
 
 REQUEST_TIMEOUT_SECONDS = 20
-DISCOVERY_DAYS_BEFORE = 1
-DISCOVERY_DAYS_AFTER = 30
 MAX_DISCOVERY_PAGES = 2
 
 REQUEST_HEADERS = {
@@ -79,12 +83,7 @@ async def _request_json(
 
 
 def _discovery_payload(page_token: str, now: datetime) -> dict[str, Any]:
-    start = (now - timedelta(days=DISCOVERY_DAYS_BEFORE)).strftime(
-        "%Y-%m-%d 00:00:00"
-    )
-    end = (now + timedelta(days=DISCOVERY_DAYS_AFTER)).strftime(
-        "%Y-%m-%d 23:59:59"
-    )
+    start, end = discovery_time_window(now)
     return {
         "tournaments_options": {
             "cursor": "",

@@ -18,9 +18,10 @@ no longer read. The model, time-location, and live-monitor environment values se
 their database rows on first startup; later changes are made through the admin page.
 
 `hltv_event_id_list` is maintained automatically. Every 30 minutes the watcher asks
-5EPlay for events in a bounded window (one day back, 30 days ahead), keeps active
+5EPlay for events in a bounded window (30 days back, 30 days ahead), keeps active
 events whose `teams` include a followed team or whose grade is Major/S/S+, drops
-finished events, and writes the resulting IDs back to this key. A manual edit is
+finished events, and writes the resulting IDs back to this key. The lookback covers
+events that started days ago but are still running. A manual edit is
 overwritten by the next refresh. `hltv_followed_teams` defaults to
 `["TYLOO", "LVG", "FaZe", "BC.Game"]`; matching ignores case and punctuation, so
 `bcg` also matches `BC.Game`.
