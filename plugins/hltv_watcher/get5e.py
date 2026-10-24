@@ -124,7 +124,7 @@ async def fetch_events(now: datetime | None = None) -> list[EventInfo]:
             break
         if page + 1 == MAX_DISCOVERY_PAGES:
             logger.warning(
-                "5E 赛事列表还有更多分页，本轮只读取前 %s 页", MAX_DISCOVERY_PAGES
+                f"5E 赛事列表还有更多分页，本轮只读取前 {MAX_DISCOVERY_PAGES} 页"
             )
             break
         page_token = str(next_token)

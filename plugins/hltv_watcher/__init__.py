@@ -146,10 +146,9 @@ async def refresh_watch_list(force: bool = False) -> None:
         NEXT_REFRESH_KEY,
         now_ts + DISCOVERY_INTERVAL_SECONDS + random.randint(0, 60),
     )
+    live_count = sum(1 for event in selected if event.status == "live")
     logger.info(
-        "赛事监视列表刷新完成: %s 个赛事，其中 %s 个进行中",
-        len(selected),
-        sum(1 for event in selected if event.status == "live"),
+        f"赛事监视列表刷新完成: {len(selected)} 个赛事，其中 {live_count} 个进行中"
     )
 
 
@@ -227,19 +226,14 @@ async def _poll_event(event: EventInfo, followed: list[str], bot: Bot) -> bool:
     if notify:
         text = build_message(event, list(reversed(notify)))
         logger.info(
-            "赛事 %s(%s) 新增 %s 场结果，推送 %s 场",
-            event.name or title,
-            event.event_id,
-            len(new_matches),
-            len(notify),
+            f"赛事 {event.name or title}({event.event_id}) 新增 "
+            f"{len(new_matches)} 场结果，推送 {len(notify)} 场"
         )
         await _send_notification(bot, text)
     else:
         logger.info(
-            "赛事 %s(%s) 新增 %s 场结果，均不涉及关注队伍，不推送",
-            event.name or title,
-            event.event_id,
-            len(new_matches),
+            f"赛事 {event.name or title}({event.event_id}) 新增 "
+            f"{len(new_matches)} 场结果，均不涉及关注队伍，不推送"
         )
     return True
 
@@ -253,7 +247,7 @@ async def _poll_watched_events(bot: Bot) -> None:
     cooldown = await _load_int(POLL_COOLDOWN_KEY)
     if cooldown > now_ts:
         logger.warning(
-            "5E 结果抓取处于冷却期，跳过本轮（还剩 %s 秒）", cooldown - now_ts
+            f"5E 结果抓取处于冷却期，跳过本轮（还剩 {cooldown - now_ts} 秒）"
         )
         return
 
@@ -286,10 +280,8 @@ async def _poll_watched_events(bot: Bot) -> None:
     )
     if len(pollable) > MAX_EVENTS_PER_CYCLE:
         logger.warning(
-            "本轮有 %s 个赛事需要抓取，超过上限 %s，只抓取前 %s 个",
-            len(pollable),
-            MAX_EVENTS_PER_CYCLE,
-            MAX_EVENTS_PER_CYCLE,
+            f"本轮有 {len(pollable)} 个赛事需要抓取，超过上限 "
+            f"{MAX_EVENTS_PER_CYCLE}，只抓取前 {MAX_EVENTS_PER_CYCLE} 个"
         )
         pollable = pollable[:MAX_EVENTS_PER_CYCLE]
 
