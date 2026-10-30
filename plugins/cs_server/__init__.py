@@ -19,6 +19,7 @@ import psutil
 import asyncio
 import uuid
 import hashlib
+import hmac
 from pathlib import Path
 from fastapi import FastAPI, Body, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1198,9 +1199,19 @@ async def handle_verify(event: GroupMessageEvent, args: Message = CommandArg()):
 
 app: FastAPI = get_app()
 
+# 安全加固：生产环境关闭自动生成的 OpenAPI 文档
+app.openapi_url = None
+app.docs_url = None
+app.redoc_url = None
+for _doc_path in ("/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"):
+    app.router.routes = [
+        _route for _route in app.router.routes
+        if getattr(_route, "path", None) != _doc_path
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境建议将 "*" 改为具体的网页域名
+    allow_origins=["https://cs.ave-mujica.top"],  # 安全加固：仅允许同源前端
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1627,10 +1638,15 @@ class MuteResponse(BaseModel):
     summary="强制禁言群成员",
     description="使用 .env 中配置的管理 token 对指定群成员进行禁言。"
 )
-async def mute_group_member(payload: MuteRequest):
+async def mute_group_member(
+    payload: MuteRequest,
+    _admin: AuthSession = Depends(get_current_admin),
+):
     if not config.mute_api_token:
         raise HTTPException(status_code=503, detail="Mute API token 未配置")
-    if payload.authToken != config.mute_api_token:
+    if not hmac.compare_digest(
+        payload.authToken.encode("utf-8"), config.mute_api_token.encode("utf-8")
+    ):
         raise HTTPException(status_code=403, detail="Token 无效")
     bot = get_bot()
     assert isinstance(bot, Bot)
