@@ -55,7 +55,7 @@ def load():
         elif isinstance(node,ast.AsyncFunctionDef) and node.name in FUNCTIONS:
             node.decorator_list=[]; nodes.append(node)
     storage, config = Storage(), Config()
-    store=SimpleNamespace(save_events=AsyncMock(),watched=AsyncMock(return_value=([],set())),
+    store=SimpleNamespace(save_events=AsyncMock(),watched=AsyncMock(return_value=([],set())),has_catalog=AsyncMock(return_value=True),
         default_ids=AsyncMock(return_value={'team-a'}),ingest=AsyncMock(),
         due_team=AsyncMock(return_value=None),delay_team=AsyncMock(),
         claim_delivery=AsyncMock(return_value=None),delivery_result=AsyncMock())
@@ -65,6 +65,7 @@ def load():
         'Bot':object,'Message':Message,'MessageSegment':MessageSegment,'ActionFailed':ActionFailed,
         'DEFAULT_FOLLOWED_TEAMS':LOGIC.DEFAULT_FOLLOWED_TEAMS,'EventInfo':LOGIC.EventInfo,
         'events_from_json':LOGIC.events_from_json,'events_to_json':LOGIC.events_to_json,
+        'event_is_active':LOGIC.event_is_active,
         'should_poll_event':LOGIC.should_poll_event,'poll_schedule':{},'FiveEApiError':ApiError,
         'legacy_results':PARSER.legacy_results,'event_update':AsyncMock(),'fetch_events':AsyncMock(),
         'get_event_schedule':AsyncMock(return_value=(None, [])),'get_bot':Mock()}
@@ -73,6 +74,18 @@ def load():
 
 
 class RuntimeAcceptance(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_global_discovery_retains_old_events_during_partial_team_refresh(self):
+        ns,storage,config,store=load()
+        storage.data['hltv_discovery_failures']='1'
+        storage.data['hltv_event_meta']=LOGIC.events_to_json([event(2)])
+        config.values['hltv_event_id_list']=[2]
+        store.watched.return_value=([event(1)],set())
+        await ns['_rebuild_watch_list']()
+        self.assertEqual(sorted(config.values['hltv_event_id_list']),[1,2])
+        storage.data['hltv_discovery_failures']='0'
+        await ns['_rebuild_watch_list']()
+        self.assertEqual(config.values['hltv_event_id_list'],[1])
+
     async def test_discovery_persists_derived_watch_list_and_preserves_failure_cache(self):
         ns,storage,config,store=load()
         selected=[event(1),event(2,'upcoming')]

@@ -31,6 +31,7 @@ from .logic import (
     EventInfo,
     events_from_json,
     events_to_json,
+    event_is_active,
     should_poll_event,
 )
 
@@ -160,6 +161,13 @@ async def _rebuild_watch_list() -> None:
     if not await schedule_store.has_catalog() and not await runtime_config.get("hltv_manual_event_ids"):
         return  # Initial discovery failed: retain the previous deployment's cache.
     selected, _ = await schedule_store.watched(await _followed_teams(), await runtime_config.get("hltv_manual_event_ids"))
+    if await _load_int(DISCOVERY_FAILURES_KEY):
+        # A partial team refresh must not erase the last successful global list.
+        combined = {event.event_id: event for event in selected}
+        for event in (await _load_metadata()).values():
+            if event_is_active(event, int(time.time())):
+                combined.setdefault(event.event_id, event)
+        selected = list(combined.values())
     ids = [event.event_id for event in selected]
     if sorted(await runtime_config.get("hltv_event_id_list")) != sorted(ids):
         await runtime_config.set("hltv_event_id_list", ids, "auto")
