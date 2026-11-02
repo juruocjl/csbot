@@ -1,13 +1,16 @@
 """QQ commands use the same authenticated pages as browser users."""
 import re
 
-from nonebot import logger, on_command, require
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot import get_plugin_config, logger, on_command, require
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message
 from nonebot.params import CommandArg
-from ai_runtime.image_archive import image_segment
+from ..utils.message_recall import send_temporary_image
 
+from .config import Config
 from .get5e import FiveEApiError, fetch_events
 from .store import schedule_store
+
+config = get_plugin_config(Config)
 
 
 follow_team = on_command("关注队伍", priority=10, block=True)
@@ -92,7 +95,7 @@ async def follows_handler(event: GroupMessageEvent):
     await my_follows.finish("\n".join(f"{t['name']} · 提醒群：{', '.join(t['groups']) or '未开启'}" for t in teams) or "还没有关注队伍，使用 /关注队伍 队名 添加")
 
 
-async def render_schedule(event, args, matcher, personal=False):
+async def render_schedule(bot: Bot, event, args, matcher, personal=False):
     page_text = args.extract_plain_text().strip() or "1"
     if not page_text.isdigit() or not 1 <= int(page_text) <= 10000:
         await matcher.finish("用法：/赛程 [页码] 或 /我的赛程 [页码]")
@@ -105,14 +108,18 @@ async def render_schedule(event, args, matcher, personal=False):
     except Exception:
         logger.exception("赛程截图失败")
         image = None
-    await matcher.finish(image_segment(image) if image else "生成赛程图片失败，请稍后重试")
+    if not image:
+        await matcher.finish("生成赛程图片失败，请稍后重试")
+        return
+    await send_temporary_image(bot, matcher.send, image, config.cs_schedule_auto_delete_seconds)
+    await matcher.finish()
 
 
 @schedule.handle()
-async def schedule_handler(event: GroupMessageEvent, args: Message = CommandArg()):
-    await render_schedule(event, args, schedule)
+async def schedule_handler(bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()):
+    await render_schedule(bot, event, args, schedule)
 
 
 @my_schedule.handle()
-async def my_schedule_handler(event: GroupMessageEvent, args: Message = CommandArg()):
-    await render_schedule(event, args, my_schedule, personal=True)
+async def my_schedule_handler(bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()):
+    await render_schedule(bot, event, args, my_schedule, personal=True)
