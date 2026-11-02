@@ -56,6 +56,7 @@ def parse_schedule_matches(event_id: int, rows: Any) -> list[dict]:
         matches[match_id] = {"id": match_id, "event_id": event_id,
             "event_name": str(event.get("disp_name") or ""), "stage": str(info.get("tt_stage_desc") or ""),
             "start_ts": number(info.get("plan_ts")), "format": number(info.get("format")),
+            "stars": min(5, number(info.get("star"))) if score(info.get("star")) is not None else None,
             "status": status, "team1": sides[0], "team2": sides[1],
             "score1": score1 if status in {"live", "finished"} else None,
             "score2": score2 if status in {"live", "finished"} else None,

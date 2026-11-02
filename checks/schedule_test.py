@@ -38,7 +38,7 @@ def event(eid=1, name="普通杯", teams=("A", "B"), ids=("csgo_tm_1", "hltv_tea
 
 
 def match(eid=1, mid="m1", status=0, names=("A", "B"), ids=("csgo_tm_1", "hltv_team_1"), start=None):
-    return {"mc_info": {"id": mid, "plan_ts": str(start or int(time.time()) + 600), "format": "3",
+    return {"mc_info": {"id": mid, "plan_ts": str(start or int(time.time()) + 600), "format": "3", "star": "3",
             "t1_info": {"id": ids[0], "disp_name": names[0]}, "t2_info": {"id": ids[1], "disp_name": names[1]}},
             "tt_info": {"id": f"csgo_tt_{eid}", "disp_name": "普通杯"},
             "state": {"status": str(status), "t1_score": "0", "t2_score": "2", "bout_states": []}}
@@ -126,6 +126,15 @@ class ScheduleAcceptance(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.deliveries(), [])
         await self.ingest(match(mid="unknown", status=2, ids=("", "")))
         self.assertEqual(await self.deliveries(), [])
+
+    async def test_stars_are_preserved_without_triggering_result_corrections(self):
+        await self.store.follow('111', self.a, '100')
+        raw = match(status=1)
+        await self.ingest(raw)
+        self.assertEqual((await self.store.schedule([1], '111'))['matches'][0]['stars'], 3)
+        raw['state']['status']='2'; await self.ingest(raw)
+        raw['mc_info']['star']='5'; await self.ingest(raw)
+        self.assertEqual(len(await self.deliveries()), 1)
 
     async def test_unsubscribe_cancels_queued_mentions_and_whitelists_are_separate(self):
         await self.store.follow("111", self.a, "200")
