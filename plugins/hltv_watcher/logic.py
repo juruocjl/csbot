@@ -44,6 +44,21 @@ def compact(value: str) -> str:
     return "".join(ch for ch in str(value).casefold() if ch.isalnum())
 
 
+def team_ref(raw: Any) -> dict | None:
+    if not isinstance(raw, Mapping):
+        return None
+    external_id = str(raw.get("id") or "").strip()
+    name = str(raw.get("disp_name") or raw.get("name") or "").strip()
+    if not name or not external_id or external_id in {"0", "csgo_tm_0", "hltv_team_0"}:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,100}", external_id):
+        return None
+    logo = str(raw.get("logo") or "")
+    return {"external_id": external_id, "name": name[:150],
+            "logo": logo if logo.startswith("https://") else ""}
+
+
+
 def _event_window(now: datetime, days_before: int, days_after: int) -> tuple[str, str]:
     start = (now - timedelta(days=days_before)).strftime("%Y-%m-%d 00:00:00")
     end = (now + timedelta(days=days_after)).strftime("%Y-%m-%d 23:59:59")
@@ -105,6 +120,7 @@ class EventInfo:
     start_ts: int = 0
     end_ts: int = 0
     teams: tuple[str, ...] = ()
+    team_refs: tuple[dict, ...] = ()
 
     @property
     def tier_label(self) -> str:
@@ -128,6 +144,7 @@ class EventInfo:
             "start_ts": self.start_ts,
             "end_ts": self.end_ts,
             "teams": list(self.teams),
+            "team_refs": list(self.team_refs),
         }
 
     @classmethod
@@ -146,6 +163,7 @@ class EventInfo:
             start_ts=int(raw.get("start_ts") or 0),
             end_ts=int(raw.get("end_ts") or 0),
             teams=tuple(str(team).strip() for team in teams if str(team).strip()),
+            team_refs=tuple(raw.get("team_refs") or []),
         )
 
 
@@ -164,6 +182,7 @@ def event_from_api(raw: Mapping[str, Any]) -> EventInfo | None:
         name = str(item.get("name") or "").strip()
         if name and name not in teams:
             teams.append(name)
+    refs = tuple(ref for item in raw.get("teams") or [] if (ref := team_ref(item)))
     return EventInfo(
         event_id=event_id,
         name=str(basic.get("disp_name") or "").strip(),
@@ -174,6 +193,7 @@ def event_from_api(raw: Mapping[str, Any]) -> EventInfo | None:
         start_ts=parse_event_time(basic.get("start_time")),
         end_ts=parse_event_time(basic.get("end_time")),
         teams=tuple(teams),
+        team_refs=refs,
     )
 
 

@@ -18,9 +18,9 @@ from urllib.parse import parse_qsl, urlsplit
 MARKER = '_csbot_image_archive'
 MAX_METADATA_BYTES = 128 * 1024
 LIBRARIES = {'pic', 'mgz'}
-PAGE_PARAMS = {'id', 'steamId', 'rankName', 'timeType', 'seasonId', 'stage', 'eventId'}
+PAGE_PARAMS = {'id', 'steamId', 'rankName', 'timeType', 'seasonId', 'stage', 'eventId', 'page'}
 PAGE_ROUTES = {'/steam-status', '/match', '/match-gp', '/match-faceit', '/rank', '/watch-stage',
-               '/major-homework', '/major-homework/me', '/data', '/history', '/history-gp', '/history-faceit', '/history-all'}
+               '/major-homework', '/major-homework/me', '/data', '/history', '/history-gp', '/history-faceit', '/history-all', '/schedule'}
 
 
 class ArchiveImage(bytes):
@@ -112,7 +112,7 @@ def image_segment(content, **kwargs):
 def page_source(path):
     url = urlsplit(path)
     route = url.path
-    if url.scheme or url.netloc or not (route in PAGE_ROUTES or re.fullmatch(r'/major-homework/user/[0-9]+', route)):
+    if url.scheme or url.netloc or not (route in PAGE_ROUTES or re.fullmatch(r'/(major-homework|schedule)/user/[0-9]+', route)):
         return None
     query = parse_qsl(url.query, keep_blank_values=True)
     if any(k not in PAGE_PARAMS | {'hideSidebar'} for k, _ in query):

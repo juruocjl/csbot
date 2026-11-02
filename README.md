@@ -17,30 +17,22 @@ the appropriate values in the admin page. The old season environment variables a
 no longer read. The model, time-location, and live-monitor environment values seed
 their database rows on first startup; later changes are made through the admin page.
 
-`hltv_event_id_list` is maintained automatically. Every 30 minutes the watcher asks
-5EPlay for two bounded windows (1 day back to 30 days ahead, and 30 days back to
-now) and unions them, keeps active events whose `teams` include a followed team or
-whose grade is Major/S/S+, drops finished events, and writes the resulting IDs back
-to this key. Two windows are needed because 5E caps a single query at about 21
-events: the first preserves far-future Major/S coverage while the second catches
-events that started days ago and are still running. A manual edit is overwritten by
-the next refresh. `hltv_followed_teams` defaults to
-`["TYLOO", "LVG", "FaZe", "BC.Game"]`; matching ignores case and punctuation, so
-`bcg` also matches `BC.Game`.
+The tournament schedule and follow commands are documented in the deployment
+repository's [schedule guide](https://github.com/juruocjl/csbot-depoly/blob/main/DEPLOY.md#赛程与个人队伍关注).
+`hltv_event_id_list` is derived from Major/S/S+ events, default teams in
+`hltv_followed_teams`, every user's followed teams, and explicit IDs in
+`hltv_manual_event_ids`. Personal subscriptions use fixed internal team IDs mapped
+to complete 5E provider IDs; names and aliases are search inputs only.
 
-Only live events are polled for results (every 5 minutes); upcoming events are kept
-in the list but are not requested until they start. For Major/S/S+ events every new
-result is pushed. For other watched events, only matches involving a followed team
-are pushed, while all results are still stored for `/更新比赛`, `major_hw`, and the
-admin pages.
+The Vue routes `/schedule` and `/schedule/user/:uid` also serve QQ command screenshots.
+Live events refresh about every five minutes; upcoming event schedules about every
+thirty minutes. Unique followed teams are discovered through the provider's team-ID
+filter, at most one team per scheduler tick. All provider requests are separated by
+at least two seconds; existing 403/429 cooldowns apply. The legacy winner-first
+`hltvresult{event}` feed remains available to Major homework consumers.
 
-Request budget: discovery is two list requests per 30 minutes (two windows, two pages each at most).
-The scheduler wakes once a minute, but each live event is polled only about once
-per 5 minutes; new/restarted schedules are spread across 30–290 seconds and at most
-two events are polled per minute, so results are not requested in one batch.
-Requests are spaced by two seconds. A 403/429 response pauses polling for 30
-minutes, and discovery failures back off from 5 to 60 minutes. The watcher never
-requests a full event history page or an upcoming event.
+This feature requires the reviewed `20261102_add_schedule` schema migration before
+starting the new backend. It does not create tables or generate migrations on startup.
 
 Startup inserts missing configuration rows without overwriting saved values; adding
 registered keys does not require a schema migration. Subsequent queries and refresh

@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import os
 import time
 
 from nonebot import get_bot, get_plugin_config, logger, on_command, require
-from nonebot.adapters.onebot.v11 import Bot
+from nonebot.adapters.onebot.v11 import Bot, Message, MessageSegment
+from nonebot.exception import ActionFailed
 from nonebot.plugin import PluginMetadata
 
 require("nonebot_plugin_apscheduler")
@@ -21,17 +23,15 @@ from ..runtime_config import runtime_config
 event_update = require("major_hw").event_update
 
 
-from .get5e import FiveEApiError, fetch_events, get_matches
+from .get5e import FiveEApiError, fetch_events, get_event_schedule
+from .store import schedule_store
+from .schedule_logic import legacy_results
 from .logic import (
     DEFAULT_FOLLOWED_TEAMS,
     EventInfo,
-    build_message,
     events_from_json,
     events_to_json,
-    notify_matches,
-    select_watch_events,
     should_poll_event,
-    split_message,
 )
 
 from .config import Config
@@ -47,8 +47,8 @@ config = get_plugin_config(Config)
 
 updategame = on_command("更新比赛", priority=10, block=True)
 
-# Discovery is cheap (one list request) and runs every 30 minutes.  Result
-# polling only touches events that are actually live.
+# General discovery runs every 30 minutes; team discovery is spread over ticks.
+# Live results and upcoming schedules share the bounded polling queue.
 DISCOVERY_INTERVAL_SECONDS = 30 * 60
 DISCOVERY_FAILURE_BASE_SECONDS = 5 * 60
 DISCOVERY_FAILURE_MAX_SECONDS = 60 * 60
@@ -63,7 +63,7 @@ DISCOVERY_FAILURES_KEY = "hltv_discovery_failures"
 POLL_COOLDOWN_KEY = "hltv_poll_cooldown"
 
 update_lock = asyncio.Lock()
-# event_id -> next poll timestamp.  Rebuilt after a restart; live events are
+# event_id -> next poll timestamp.  Rebuilt after a restart; watched events are
 # spread across the 5-minute interval instead of being polled in one batch.
 poll_schedule: dict[int, float] = {}
 
@@ -118,8 +118,8 @@ async def refresh_watch_list(force: bool = False) -> None:
 
     try:
         events = await fetch_events()
-        followed = await _followed_teams()
-        selected = select_watch_events(events, followed, now_ts)
+        await schedule_store.save_events(events)
+        selected, _ = await schedule_store.watched(await _followed_teams(), await runtime_config.get("hltv_manual_event_ids"))
     except Exception as exc:
         failures = await _load_int(DISCOVERY_FAILURES_KEY) + 1
         delay = min(
@@ -156,89 +156,91 @@ async def refresh_watch_list(force: bool = False) -> None:
     )
 
 
-async def _send_notification(bot: Bot, text: str) -> None:
-    group_ids = list(config.cs_group_list)
-    if not group_ids:
-        logger.warning("CS_GROUP_LIST 为空，赛事结果未发送")
+async def _rebuild_watch_list() -> None:
+    if not await schedule_store.has_catalog() and not await runtime_config.get("hltv_manual_event_ids"):
+        return  # Initial discovery failed: retain the previous deployment's cache.
+    selected, _ = await schedule_store.watched(await _followed_teams(), await runtime_config.get("hltv_manual_event_ids"))
+    ids = [event.event_id for event in selected]
+    if sorted(await runtime_config.get("hltv_event_id_list")) != sorted(ids):
+        await runtime_config.set("hltv_event_id_list", ids, "auto")
+    await local_storage.set(META_KEY, events_to_json(selected))
+
+
+async def _discover_followed_team() -> None:
+    if await _load_int(POLL_COOLDOWN_KEY) > int(time.time()):
         return
-    for chunk in split_message(text):
-        for group_id in group_ids:
-            try:
-                await bot.send_msg(
-                    message_type="group",
-                    group_id=group_id,
-                    message=chunk,
-                )
-            except Exception:
-                logger.exception(f"发送赛事结果到群 {group_id} 失败")
+    due = await schedule_store.due_team(await _followed_teams())
+    if due is None:
+        return
+    team_id, external_id = due
+    try:
+        events = await fetch_events(team_id=external_id)
+        await schedule_store.save_events(events)
+        await schedule_store.delay_team(team_id, DISCOVERY_INTERVAL_SECONDS)
+    except FiveEApiError as exc:
+        await schedule_store.delay_team(team_id, DISCOVERY_FAILURE_MAX_SECONDS)
+        if exc.status in (403, 429):
+            await _save_int(POLL_COOLDOWN_KEY, int(time.time()) + RATE_LIMIT_COOLDOWN_SECONDS)
+        logger.warning(f"发现关注队伍 {external_id} 的赛事失败: {exc}")
+    await asyncio.sleep(EVENT_REQUEST_DELAY_SECONDS)
+
+
+async def _send_pending_notifications(bot: Bot) -> None:
+    for _ in range(10):
+        delivery = await schedule_store.claim_delivery(
+            {str(g) for g in config.cs_group_list}, {str(g) for g in config.cs_event_group_list})
+        if delivery is None:
+            return
+        message = Message(delivery["text"])
+        if delivery["users"]:
+            message += MessageSegment.text("\n")
+            for uid in delivery["users"]:
+                message += MessageSegment.at(uid)
+        try:
+            response = await bot.send_group_msg(group_id=int(delivery["group_id"]), message=message)
+            status = "sent" if response and response.get("message_id") is not None else "unknown"
+        except ActionFailed:
+            status = "pending"  # OneBot explicitly rejected this attempt.
+            logger.exception("赛果发送被拒绝，将退避重试")
+        except Exception:
+            status = "unknown"  # A timeout may have delivered: do not duplicate it.
+            logger.exception("赛果发送结果未知，已保留记录")
+        await schedule_store.delivery_result(delivery["key"], status)
+        await asyncio.sleep(1)
 
 
 async def _poll_event(event: EventInfo, followed: list[str], bot: Bot) -> bool:
     try:
-        title, results = await get_matches(
-            event.event_id, fallback_title=event.name
-        )
+        source_event, matches = await get_event_schedule(event.event_id)
     except FiveEApiError as exc:
-        logger.warning(f"抓取赛事 {event.event_id} 结果失败: {exc}")
+        logger.warning(f"抓取赛事 {event.event_id} 失败: {exc}")
         if exc.status in (403, 429):
-            await _save_int(
-                POLL_COOLDOWN_KEY,
-                int(time.time()) + RATE_LIMIT_COOLDOWN_SECONDS,
-            )
+            await _save_int(POLL_COOLDOWN_KEY, int(time.time()) + RATE_LIMIT_COOLDOWN_SECONDS)
         return False
-
-    stored_raw = await local_storage.get(
-        f"hltvresult{event.event_id}", default="[]"
-    )
+    if source_event is not None:
+        await schedule_store.save_events([source_event])
+        event = source_event
     try:
-        stored = json.loads(stored_raw)
+        stored = json.loads(await local_storage.get(f"hltvresult{event.event_id}", default="[]"))
+        if not isinstance(stored, list):
+            stored = []
     except (TypeError, ValueError):
-        logger.warning(f"赛事 {event.event_id} 的历史结果无效，重新建立")
         stored = []
-    if not isinstance(stored, list):
-        stored = []
-
-    chronological = list(reversed(stored))
-    known_ids = {
-        str(match[3])
-        for match in chronological
-        if isinstance(match, (list, tuple)) and len(match) >= 4
-    }
-    new_matches: list[tuple[str, str, str, str]] = []
-    for match in results:
-        if match[3] in known_ids:
+    known = {str(row[3]) for row in stored if isinstance(row, (list, tuple)) and len(row) >= 4}
+    default_ids = await schedule_store.default_ids(followed)
+    await schedule_store.ingest(event, matches, default_ids, config.cs_group_list, known)
+    # Keep the winner-first legacy feed and its per-result Major update semantics.
+    indexed = {str(row[3]): row for row in reversed(stored) if isinstance(row, (list, tuple)) and len(row) >= 4}
+    for match in legacy_results(matches):
+        if indexed.get(match[3]) == list(match) or indexed.get(match[3]) == match:
             continue
-        new_matches.append(match)
-        known_ids.add(match[3])
-
-    if not new_matches:
-        return True
-
-    for match in new_matches:
-        chronological.append(match)
-        snapshot = list(reversed(chronological))
-        await local_storage.set(
-            f"hltvresult{event.event_id}",
-            json.dumps(snapshot, ensure_ascii=False),
-        )
+        indexed[match[3]] = match
+        snapshot = list(reversed(list(indexed.values())))
+        await local_storage.set(f"hltvresult{event.event_id}", json.dumps(snapshot, ensure_ascii=False))
         try:
             await event_update(event.event_id, snapshot)
         except Exception:
             logger.exception(f"更新赛事 {event.event_id} 的 Major 作业失败")
-
-    notify = notify_matches(event, new_matches, followed)
-    if notify:
-        text = build_message(event, list(reversed(notify)))
-        logger.info(
-            f"赛事 {event.name or title}({event.event_id}) 新增 "
-            f"{len(new_matches)} 场结果，推送 {len(notify)} 场"
-        )
-        await _send_notification(bot, text)
-    else:
-        logger.info(
-            f"赛事 {event.name or title}({event.event_id}) 新增 "
-            f"{len(new_matches)} 场结果，均不涉及关注队伍，不推送"
-        )
     return True
 
 
@@ -272,7 +274,7 @@ async def _poll_due_events(bot: Bot, now_ts: int | None = None) -> None:
                 grade_label="" if metadata else "Major",
                 status="live",
             )
-        if should_poll_event(event, now_ts):
+        if should_poll_event(event, now_ts) or event.status == "upcoming":
             pollable.append(event)
 
     # Drop schedule entries for events that are no longer live.
@@ -320,7 +322,7 @@ async def _poll_due_events(bot: Bot, now_ts: int | None = None) -> None:
         if ok:
             poll_schedule[event.event_id] = (
                 now_ts
-                + EVENT_POLL_INTERVAL_SECONDS
+                + (30 * 60 if event.status == "upcoming" else EVENT_POLL_INTERVAL_SECONDS)
                 + random.randint(-10, 10)
             )
         else:
@@ -342,6 +344,8 @@ async def _poll_due_events(bot: Bot, now_ts: int | None = None) -> None:
     misfire_grace_time=120,
 )
 async def scheduled_update_events() -> None:
+    if os.getenv("CS_DISABLE_BACKGROUND_JOBS", "").lower() in {"1", "true", "yes"}:
+        return
     await _run_update(force_discovery=False)
 
 
@@ -354,8 +358,16 @@ async def manual_update_events() -> None:
 async def _run_update(force_discovery: bool) -> None:
     async with update_lock:
         await refresh_watch_list(force=force_discovery)
+        await _discover_followed_team()
+        await _rebuild_watch_list()
         bot = _get_bot_or_none()
         if bot is None:
             logger.warning("没有已连接的 Bot，跳过本轮赛事结果抓取")
             return
-        await _poll_due_events(bot)
+        try:
+            await _poll_due_events(bot)
+        finally:
+            await _send_pending_notifications(bot)
+
+
+from . import commands

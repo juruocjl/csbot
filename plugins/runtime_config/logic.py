@@ -64,19 +64,24 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
         key="hltv_event_id_list",
         name="监视的赛事",
         description=(
-            "由自动发现任务维护的 5E 赛事 ID 列表：关注队伍参加或 Major/S 级赛事会加入，"
-            "赛事结束后移除。手动修改会在下一轮刷新时被覆盖。"
+            "自动维护的 5E 赛事 ID：默认队伍、所有用户关注队伍参赛或 Major/S 级赛事均会加入。"
+            "手动订阅请设置 hltv_manual_event_ids；不要直接改本列表。"
         ),
         annotation=list[PositiveInt],
         default=[],
         value_type="integer_list",
     ),
+    "hltv_manual_event_ids": RuntimeConfigDefinition(
+        key="hltv_manual_event_ids", name="手动订阅的赛事",
+        description="手动保留的 5E 赛事 ID；与自动发现结果合并，刷新不会覆盖。结束后停止抓取。",
+        annotation=list[PositiveInt], default=[], value_type="integer_list",
+    ),
     "hltv_followed_teams": RuntimeConfigDefinition(
         key="hltv_followed_teams",
         name="关注的战队",
         description=(
-            "关注队伍名称，不区分大小写并忽略标点（例如 BC.Game 也可写成 bcg）。"
-            "这些队伍参加的非 Major/S 级赛事会加入监视列表，且只推送涉及这些队伍的结果。"
+            "默认关注队伍名称或完整 5E 队伍 ID；忽略大小写、标点，使用明确别名解析，不使用包含匹配。"
+            "这些队伍的结果推送到默认推送群；个人关注另行保存并驱动赛事发现。"
         ),
         annotation=FollowedTeamList,
         default=["TYLOO", "LVG", "FaZe", "BC.Game"],

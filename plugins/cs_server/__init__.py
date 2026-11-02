@@ -312,6 +312,10 @@ async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | Non
             final_path = f"{final_path}&hideSidebar=True" if "?" in final_path else f"{final_path}?hideSidebar=True"
         await page.goto(f"{LOCAL_URL}{final_path}", waitUntil='networkidle0')
 
+        if path.split('?')[0].startswith('/schedule'):
+            await page.waitForSelector('[data-schedule-ready="true"]', timeout=15000)
+            await page.evaluate('document.fonts.ready')
+
         await asyncio.sleep(0.2)
         
         await page.setViewport({'width': width, 'height': 100})
@@ -1290,6 +1294,10 @@ async def get_current_admin(info: AuthSession = Depends(get_current_user)) -> Au
     if not is_admin_user(info):
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return info
+
+
+from ..hltv_watcher.api import register_schedule_api
+register_schedule_api(app, get_current_user, get_current_admin, runtime_config)
 
 
 class WatchStageRequest(BaseModel):

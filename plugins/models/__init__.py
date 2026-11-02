@@ -610,3 +610,7 @@ class UserPlayStatus(Base):
 
     gameId: Mapped[int] = mapped_column(Integer)
     gameName: Mapped[str] = mapped_column(String(100))
+
+from .schedule import (ScheduleTeam, ScheduleTeamSource, ScheduleTeamAlias,
+                       ScheduleEvent, ScheduleMatch, ScheduleFollow,
+                       ScheduleNotifyTarget, ScheduleDelivery)

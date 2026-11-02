@@ -15,6 +15,7 @@ from .logic import (
     discovery_time_windows,
     parse_event_list,
     parse_finished_matches,
+    event_from_api,
 )
 
 get_session = require("utils").get_session
@@ -25,6 +26,8 @@ EVENT_SESSION_URL = "https://app.5eplay.com/api/tournament/event_session_list"
 
 REQUEST_TIMEOUT_SECONDS = 20
 MAX_DISCOVERY_PAGES = 2
+_request_lock = asyncio.Lock()
+_last_request = 0.0
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -45,6 +48,18 @@ class FiveEApiError(RuntimeError):
 
 
 async def _request_json(
+    method: str, url: str, **kwargs,
+) -> Mapping[str, Any]:
+    # Discovery and match polling share one request budget, including page turns.
+    global _last_request
+    async with _request_lock:
+        loop = asyncio.get_running_loop()
+        await asyncio.sleep(max(0.0, 2.0 - (loop.time() - _last_request)))
+        _last_request = loop.time()
+        return await _request_json_unthrottled(method, url, **kwargs)
+
+
+async def _request_json_unthrottled(
     method: str,
     url: str,
     *,
@@ -83,7 +98,7 @@ async def _request_json(
 
 
 def _discovery_payload(
-    page_token: str, window: tuple[str, str]
+    page_token: str, window: tuple[str, str], team_id: str = ""
 ) -> dict[str, Any]:
     start, end = window
     return {
@@ -91,7 +106,7 @@ def _discovery_payload(
             "cursor": "",
             "player_id": "",
             "time_value": f"{start}_{end}",
-            "team_id": "",
+            "team_id": team_id,
             "time_type": "self",
             "tt_series": [],
             "grade": [],
@@ -101,7 +116,7 @@ def _discovery_payload(
     }
 
 
-async def fetch_events(now: datetime | None = None) -> list[EventInfo]:
+async def fetch_events(now: datetime | None = None, *, team_id: str = "") -> list[EventInfo]:
     """Discover events in a bounded window around now.
 
     The API is only asked for the current/upcoming window (one day back and 30
@@ -115,7 +130,7 @@ async def fetch_events(now: datetime | None = None) -> list[EventInfo]:
             payload = await _request_json(
                 "POST",
                 EVENT_LIST_URL,
-                data=_discovery_payload(page_token, window),
+                data=_discovery_payload(page_token, window, team_id),
             )
             for event in parse_event_list(payload):
                 events[event.event_id] = event
@@ -131,9 +146,25 @@ async def fetch_events(now: datetime | None = None) -> list[EventInfo]:
                 break
             page_token = str(next_token)
 
-    if not events:
+    if not events and not team_id:
         raise FiveEApiError("5E 赛事列表为空，保留上一轮监视列表")
     return list(events.values())
+
+
+async def get_event_schedule(event_id: int) -> tuple[EventInfo | None, list[dict]]:
+    from .schedule_logic import parse_schedule_matches
+    payload = await _request_json("GET", EVENT_SESSION_URL,
+        params={"tt_id": f"csgo_tt_{event_id}", "game_type": 1})
+    data = payload.get("data")
+    if not isinstance(data, Mapping) or not isinstance(data.get("matches"), list):
+        raise FiveEApiError("5E 比赛列表结构异常，保留缓存")
+    matching = [m for m in data["matches"] if isinstance(m, Mapping)
+                and isinstance(m.get("tt_info"), Mapping) and m["tt_info"].get("id") == f"csgo_tt_{event_id}"]
+    teams = [team for m in matching if isinstance(m.get("mc_info"), Mapping)
+             for team in (m["mc_info"].get("t1_info"),
+                                                (m.get("mc_info") or {}).get("t2_info")) if isinstance(team, Mapping)]
+    event = event_from_api({"basic_info": matching[0]["tt_info"], "teams": teams}) if matching else None
+    return event, parse_schedule_matches(event_id, data["matches"])
 
 
 async def get_matches(
