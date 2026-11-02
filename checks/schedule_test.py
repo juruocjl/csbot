@@ -129,12 +129,53 @@ class ScheduleAcceptance(unittest.IsolatedAsyncioTestCase):
 
     async def test_stars_are_preserved_without_triggering_result_corrections(self):
         await self.store.follow('111', self.a, '100')
-        raw = match(status=1)
+        raw = match(status=0)
         await self.ingest(raw)
         self.assertEqual((await self.store.schedule([1], '111'))['matches'][0]['stars'], 3)
         raw['state']['status']='2'; await self.ingest(raw)
         raw['mc_info']['star']='5'; await self.ingest(raw)
         self.assertEqual(len(await self.deliveries()), 1)
+
+    async def test_start_and_result_each_send_once_with_merged_mentions(self):
+        await self.store.follow('111', self.a, '100')
+        await self.store.follow('222', self.b, '100')
+        await self.ingest(match(), defaults=[self.a])
+        await self.ingest(match(status=1), defaults=[self.a])
+        await self.ingest(match(status=1), defaults=[self.a])
+        start = await self.store.claim_delivery({'100'}, {'100'})
+        self.assertEqual(start['key'][2], 0)
+        self.assertEqual(start['users'], ['111','222'])
+        self.assertIn('比赛开始', start['text'])
+        await self.store.delivery_result(start['key'], 'sent')
+        self.assertIsNone(await self.store.claim_delivery({'100'}, {'100'}))
+        await self.ingest(match(status=2), defaults=[self.a])
+        result = await self.store.claim_delivery({'100'}, {'100'})
+        self.assertEqual(result['key'][2], 1)
+        self.assertIn('比赛结束', result['text'])
+        self.assertEqual(len(await self.deliveries()), 2)
+
+    async def test_following_already_live_match_does_not_backfill_start(self):
+        raw = match(status=1, start=int(time.time()) - 3600)
+        await self.ingest(raw)
+        await self.store.follow('111', self.a, '100')
+        await self.ingest(raw)
+        self.assertEqual(await self.deliveries(), [])
+
+    async def test_pending_start_is_cancelled_when_match_finishes(self):
+        await self.store.follow('111', self.a, '100')
+        await self.ingest(match())
+        await self.ingest(match(status=1))
+        await self.ingest(match(status=2))
+        notification = await self.store.claim_delivery(set(), {'100'})
+        self.assertEqual(notification['key'][2], 1)
+        self.assertIn('比赛结束', notification['text'])
+
+    async def test_major_without_followed_teams_has_no_start_broadcast(self):
+        major = event(eid=2, grade='1')
+        await self.store.save_events([major])
+        await self.ingest(match(eid=2), event_info=major)
+        await self.ingest(match(eid=2, status=1), event_info=major)
+        self.assertEqual(await self.deliveries(), [])
 
     async def test_unsubscribe_cancels_queued_mentions_and_whitelists_are_separate(self):
         await self.store.follow("111", self.a, "200")

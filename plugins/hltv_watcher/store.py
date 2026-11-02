@@ -156,6 +156,14 @@ class ScheduleStore:
         return [{"id": t.id, "name": t.name, "logo": t.logo,
                  "groups": sorted({n.group_id for n in targets if n.team_id == t.id})} for t in teams]
 
+    async def _queue_delivery(self, session, item, revision, text, groups, now):
+        for gid, route in groups.items():
+            key = (item["id"], gid, revision)
+            if await session.get(ScheduleDelivery, key) is None:
+                session.add(ScheduleDelivery(match_id=item["id"], group_id=gid, revision=revision,
+                    text=text, recipients=encode(sorted(route["users"])), default_push=route["default"],
+                    status="pending", attempts=0, next_attempt=now, updated_at=now))
+
     async def ingest(self, event, matches, default_team_ids, default_groups, legacy_known=()):
         now = int(time.time())
         async with self.lock, self.sessions() as session, session.begin():
@@ -171,6 +179,7 @@ class ScheduleStore:
                 ids = {item["team1"]["team_id"], item["team2"]["team_id"]} - {None}
                 old = await session.get(ScheduleMatch, item["id"])
                 previous = json.loads(old.payload) if old else None
+                started = item["status"] == "live" and (old is None or old.status != "live")
                 finished = item["status"] == "finished"
                 changed = finished and (old is None or old.status != "finished" or result_key(previous) != result_key(item))
                 # A stale replica must not roll a completed match back to live/upcoming.
@@ -181,6 +190,20 @@ class ScheduleStore:
                 await session.merge(ScheduleMatch(id=item["id"], event_id=event.event_id,
                     team1_id=item["team1"]["team_id"], team2_id=item["team2"]["team_id"],
                     start_ts=item["start_ts"], status=item["status"], payload=encode(item), revision=revision, updated_at=now))
+                if started:
+                    groups = {}
+                    # Revision zero is reserved for the start reminder; results start at one.
+                    # Major tier alone does not subscribe every match to start notifications.
+                    if old and ids & default_team_ids:
+                        groups.update({str(g): {"default": True, "users": set()} for g in default_groups})
+                    for target in targets:
+                        eligible = bool(old) or item["start_ts"] >= target.created_at
+                        if target.team_id in ids and eligible and target.created_at <= now:
+                            groups.setdefault(target.group_id, {"default": False, "users": set()})["users"].add(target.user_id)
+                    text = f"【比赛开始】{event.name}\n{item['team1']['name']} vs {item['team2']['name']}"
+                    if item["format"]:
+                        text += f" · BO{item['format']}"
+                    await self._queue_delivery(session, item, 0, text, groups, now)
                 if not changed:
                     continue
                 groups = {}
@@ -197,12 +220,7 @@ class ScheduleStore:
                 if item["maps"]:
                     text += "\n" + " · ".join(f"{m['name']} {m['score1']}:{m['score2']}" for m in item["maps"]
                         if m["status"] == "finished" and m["score1"] is not None and m["score2"] is not None)
-                for gid, route in groups.items():
-                    key = (item["id"], gid, revision)
-                    if await session.get(ScheduleDelivery, key) is None:
-                        session.add(ScheduleDelivery(match_id=item["id"], group_id=gid, revision=revision,
-                            text=text, recipients=encode(sorted(route["users"])), default_push=route["default"],
-                            status="pending", attempts=0, next_attempt=now, updated_at=now))
+                await self._queue_delivery(session, item, revision, text, groups, now)
 
     async def claim_delivery(self, default_groups, personal_groups):
         now = int(time.time())
@@ -216,7 +234,7 @@ class ScheduleStore:
                 ScheduleDelivery.next_attempt <= now).order_by(ScheduleDelivery.next_attempt).limit(30))).all()
             for row in rows:
                 match = await session.get(ScheduleMatch, row.match_id)
-                if match is None or row.revision != match.revision:
+                if match is None or row.revision != match.revision or (row.revision == 0 and match.status != "live"):
                     row.status = "cancelled"
                     continue
                 ids = {match.team1_id, match.team2_id} - {None}

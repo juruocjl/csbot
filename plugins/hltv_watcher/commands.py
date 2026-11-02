@@ -12,7 +12,7 @@ from .store import schedule_store
 
 follow_team = on_command("关注队伍", priority=10, block=True)
 unfollow_team = on_command("取消关注队伍", priority=10, block=True)
-mute_team = on_command("关闭赛果提醒", priority=10, block=True)
+mute_team = on_command("关闭赛果提醒", aliases={"关闭比赛提醒"}, priority=10, block=True)
 my_follows = on_command("我的关注", priority=10, block=True)
 search_team = on_command("搜索队伍", priority=10, block=True)
 schedule = on_command("赛程", priority=10, block=True)
@@ -63,7 +63,7 @@ async def follow_handler(event: GroupMessageEvent, args: Message = CommandArg())
     await schedule_store.follow(str(event.user_id), team["id"], str(event.group_id))
     from . import _rebuild_watch_list
     await _rebuild_watch_list()
-    await follow_team.finish(f"已关注 {team['name']}，赛果将在本群发送并 @你。已安排发现该队赛事，可用 /我的赛程 查看。")
+    await follow_team.finish(f"已关注 {team['name']}，开赛和赛果都会在本群通知并 @你。已安排发现该队赛事，可用 /我的赛程 查看。")
 
 
 @unfollow_team.handle()

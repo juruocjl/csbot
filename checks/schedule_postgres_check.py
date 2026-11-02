@@ -53,13 +53,17 @@ async def main():
                 await store.ingest(info, parse_schedule_matches(1,[match()]), set(), [])
                 assert (await store.schedule([1], '111'))['total'] == 1
                 assert (await store.schedule([1], '333'))['total'] == 0
+                for _ in range(2): await store.ingest(info, parse_schedule_matches(1,[match(status=1)]), set(), [])
+                started = await store.claim_delivery(set(), {'100'})
+                assert started['key'][2] == 0 and started['users'] == ['111','222']
+                await store.delivery_result(started['key'], 'sent')
                 for _ in range(2): await store.ingest(info, parse_schedule_matches(1,[match(status=2)]), set(), [])
                 delivery = await store.claim_delivery(set(), {'100'})
                 assert delivery['users'] == ['111','222']
                 await store.delivery_result(delivery['key'], 'sent')
                 assert await store.claim_delivery(set(), {'100'}) is None
-                assert await connection.scalar(text('SELECT count(*) FROM schedule_delivery')) == 1
-                print('PASS PostgreSQL: migration, opaque identities, all-user discovery, personal filtering, merged @ targets, result deduplication')
+                assert await connection.scalar(text('SELECT count(*) FROM schedule_delivery')) == 2
+                print('PASS PostgreSQL: migration, opaque identities, all-user discovery, personal filtering, merged @ targets, start/result deduplication')
             finally:
                 await transaction.rollback()
             assert await connection.scalar(text('SELECT to_regnamespace(:schema)'), {'schema':schema}) is None
