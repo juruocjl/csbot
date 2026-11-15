@@ -1,5 +1,5 @@
 [Unit]
-Description=Check CSBot host health and alert the configured QQ administrator
+Description=Check CSBot host health and send Matrix alerts
 After=network-online.target
 
 [Service]
