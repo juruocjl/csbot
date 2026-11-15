@@ -192,7 +192,8 @@ class AlertTests(unittest.TestCase):
             return HTTPError("http://127.0.0.1:5555/api/health", 503, "Service Unavailable", {}, BytesIO(raw))
 
         with patch.object(health, "command", side_effect=fake_command), \
-             patch.object(health, "napcat_online", return_value=True):
+             patch.object(health, "napcat_online", return_value=True), \
+             patch.object(health, "matrix_egress_ok", return_value=True):
             # Case 1: recoveryAttempt=1 -> WARNING (not duplicated by container:steam_monitor), csbot-nginx still flagged
             opener = Mock()
             opener.open.side_effect = [
@@ -295,6 +296,71 @@ class AlertTests(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertFalse(path.with_suffix(".tmp").exists())
+
+    def test_matrix_egress_probe_and_critical_alert(self):
+        captured_proxy = []
+        captured_req = []
+        orig_proxy_handler = health.ProxyHandler
+
+        def fake_proxy_handler(proxies):
+            captured_proxy.append(proxies)
+            return orig_proxy_handler(proxies)
+
+        opener = Mock()
+
+        def fake_open(req, timeout=8):
+            captured_req.append((req, timeout))
+            return _FakeHttpResponse(json.dumps({"versions": ["r0.0.1", "v1.11"]}).encode("utf-8"))
+
+        opener.open.side_effect = fake_open
+        with patch.object(health, "ProxyHandler", side_effect=fake_proxy_handler), \
+             patch.object(health, "build_opener", return_value=opener):
+            self.assertTrue(health.matrix_egress_ok())
+
+        self.assertEqual(captured_proxy[-1], {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"})
+        self.assertEqual(captured_req[-1][0].full_url, "https://matrix.org/_matrix/client/versions")
+        self.assertEqual(captured_req[-1][1], 8)
+
+        opener.open.side_effect = lambda req, timeout=8: _FakeHttpResponse(b'{"versions":[]}')
+        with patch.object(health, "build_opener", return_value=opener):
+            self.assertFalse(health.matrix_egress_ok())
+
+        docker_output = "\n".join(f'"/{c}" true false healthy' for c in health.CONTAINERS)
+
+        def fake_command(args, timeout=5):
+            if args[0] == "systemctl":
+                return "\n\n".join(
+                    f"Id={svc}\nActiveState=active\nMemoryCurrent=104857600\nNRestarts=0"
+                    for svc in health.SERVICES
+                )
+            if args[0] == "docker" and args[1] == "inspect":
+                return docker_output
+            return ""
+
+        base_opener = Mock()
+        base_opener.open.side_effect = [
+            _FakeHttpResponse(b"", status=404),
+            _FakeHttpResponse(json.dumps({"ok": True, "loggedOn": True, "friendStatusReady": True}).encode("utf-8")),
+        ]
+        with patch.object(health, "command", side_effect=fake_command), \
+             patch.object(health, "napcat_online", return_value=True), \
+             patch.object(health, "build_opener", return_value=base_opener), \
+             patch.object(health, "matrix_egress_ok", side_effect=TimeoutError("secret proxy detail")):
+            issues, _ = health.collect(Path("/unused"), {}, 10000.0)
+
+        self.assertIn("matrix_egress", issues)
+        issue = issues["matrix_egress"]
+        self.assertEqual((issue.level, issue.samples), (health.CRITICAL, 2))
+        self.assertIn("TimeoutError", issue.message)
+        self.assertNotIn("secret proxy detail", issue.message)
+
+        # Two consecutive failures wake @csbot
+        self.cycle({"matrix_egress": issue}, 10000)
+        self.sender.assert_not_called()
+        self.cycle({"matrix_egress": issue}, 10060)
+        self.assertEqual(self.sender.call_count, 1)
+        self.assertTrue(self.sender.call_args.kwargs["wake_supervisor"])
+        self.assertIn("@csbot", self.sender.call_args.args[0])
 
 
 if __name__ == "__main__":

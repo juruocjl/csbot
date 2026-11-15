@@ -37,6 +37,8 @@ RETRY_BACKOFF = 300
 DEFAULT_HOMESERVER = "http://127.0.0.1:6167"
 DEFAULT_MENTION_USER_ID = "@csbot:ave-mujica.top"
 DEFAULT_MENTION_LABEL = "@csbot"
+DEFAULT_EGRESS_PROXY = "http://127.0.0.1:7890"
+MATRIX_VERSIONS_URL = "https://matrix.org/_matrix/client/versions"
 SERVICES = ("csbot.service", "mihomo.service", "docker.service", "csbot-memory-guard.timer")
 CONTAINERS = ("csbot-database", "csbot-napcat", "steam_monitor", "csbot-homepage", "csbot-nginx")
 
@@ -142,6 +144,22 @@ def napcat_online(root: Path) -> bool:
     credential = str(login_data["Credential"])
     status = post("QQLogin/CheckLoginStatus", {})
     return status.get("isLogin") is True and status.get("coreReady") is True
+
+
+def matrix_egress_ok(
+    proxy_url: str = DEFAULT_EGRESS_PROXY,
+    target_url: str = MATRIX_VERSIONS_URL,
+    timeout: int = 8,
+) -> bool:
+    """Read-only probe of Mihomo HTTP proxy (:7890) -> matrix.org for Tuwunel push health."""
+    opener = build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+    result = request_json(
+        opener,
+        target_url,
+        headers={"Accept": "application/json", "User-Agent": "csbot-health-alert/1.0"},
+        timeout=timeout,
+    )
+    return isinstance(result, dict) and isinstance(result.get("versions"), list) and len(result["versions"]) > 0
 
 
 class MatrixNotifier:
@@ -303,6 +321,22 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
         if not napcat_online(root):
             issues["qq_online"] = Issue(CRITICAL, "NapCat QQ 客户端离线")
     probe("napcat_qq", napcat_qq)
+
+    def matrix_egress():
+        try:
+            ok = matrix_egress_ok()
+        except Exception as exc:
+            issues["matrix_egress"] = Issue(
+                CRITICAL,
+                f"Mihomo :7890 -> matrix.org 出口不通（{type(exc).__name__}，影响 Tuwunel 推送）",
+            )
+            return
+        if not ok:
+            issues["matrix_egress"] = Issue(
+                CRITICAL,
+                "Mihomo :7890 -> matrix.org 响应格式异常（影响 Tuwunel 推送）",
+            )
+    probe("matrix_egress", matrix_egress)
 
     def logs():
         current = {}
