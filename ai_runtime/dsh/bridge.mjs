@@ -133,6 +133,10 @@ export function apply(ctx) {
     });
     const root = realpathSync(process.env.CSBOT_WORKSPACE);
     const allowedFiles = new Set((req.readPaths ?? []).map(path => realpathSync(path)));
+    // Reference images for generate_image are a stricter subset: only paths the
+    // host authorized this turn (chat images, avatars, generated results).
+    const safeRealpath = p => { try { return realpathSync(p); } catch { return null; } };
+    const allowedImages = new Set((req.imageReadPaths ?? []).map(safeRealpath).filter(Boolean));
     const allow = new Set(['read', 'read_image', 'execute_python', 'memory_search', 'memory_save', 'memory_forget']);
     if(process.env.CSBOT_WEB_ENABLED==='1'){allow.add('web_search');allow.add('web_fetch');}
     if(process.env.CSBOT_WEB_ENABLED==='1' && process.env.CSBOT_FETCH_PROXY_URL)allow.add('web_fetch_proxy');
@@ -140,8 +144,26 @@ export function apply(ctx) {
     let toolCount = 0, searchCount=0, webCount=0, imageGenCount=0;
     ctx.tools.guard(exec => {
       if (!allow.has(exec.name)) return 'This tool is not enabled in CSBot.';
-      if (exec.name === 'generate_image' && ++imageGenCount > 4)
-        return 'Image generation budget exhausted (at most 4 images per turn).';
+      if (exec.name === 'generate_image') {
+        // Validate the arguments before spending budget, so a URL mistake does
+        // not silently consume one of the four images for this turn.
+        if (exec.arguments.image_paths !== undefined) {
+          const rawPaths=exec.arguments.image_paths;
+          if(!Array.isArray(rawPaths))return 'image_paths must be an array of local file paths.';
+          if(rawPaths.length>8)return 'generate_image supports at most 8 reference images per call.';
+          for(const rawPath of rawPaths) {
+            if(typeof rawPath!=='string'||!rawPath.trim())return 'Each item in image_paths must be a non-empty local file path.';
+            if(/^https?:\/\//i.test(rawPath.trim()))return "image_paths accepts authorized local file paths, not URLs. For this group's QQ avatar, call csdata.call('member_avatar', uid='QQ号') via execute_python first; for a chat image, call csdata.image(id) first, then pass its full_path.";
+            let resolved;
+            try {resolved=realpathSync(resolve(root,rawPath.trim()));}
+            catch {return 'Reference image file is unavailable; an original image may have been evicted.';}
+            if(!allowedImages.has(resolved))return 'Reference image path is outside the authorized readable images for this turn.';
+            try {if(statSync(resolved).size>32*1024**2)return 'Reference image exceeds read limit.';}
+            catch {return 'Reference image file is unavailable; an original image may have been evicted.';}
+          }
+        }
+        if (++imageGenCount > 4) return 'Image generation budget exhausted (at most 4 images per turn).';
+      }
       if (++toolCount > 40) return 'Tool budget exhausted. Answer with available evidence.';
       if(exec.name==='web_search' && ++searchCount>3)return 'Search budget exhausted. Use the sources already returned or acknowledge uncertainty.';
       if(['web_search','web_fetch','web_fetch_proxy'].includes(exec.name) && ++webCount>8)return 'Web budget exhausted.';
@@ -166,24 +188,33 @@ export function apply(ctx) {
         for (const path of reply.readPaths ?? []) {
           try {allowedFiles.add(realpathSync(path));} catch {}
         }
+        for (const path of reply.imageReadPaths ?? []) {
+          const resolved=safeRealpath(path);
+          if(resolved)allowedImages.add(resolved);
+        }
         return reply.result;
       },
     });
     if(process.env.CSBOT_IMAGE_GEN_ENABLED==='1') ctx.tools.register({
       name:'generate_image',
-      description:'Generate an illustration, meme, sticker, avatar, or creative image using OpenAI gpt-image-2.6-sunburst and automatically deliver it with your reply (both in QQ group chat and on the web AI page). Use this for visual/artistic image requests; continue using execute_python + matplotlib for data charts. Max 4 images per turn.',
+      description:'Generate an illustration, meme, sticker, avatar, or creative image using OpenAI gpt-image-2.6-sunburst and automatically deliver it with your reply (both in QQ group chat and on the web AI page). Pass no image_paths for pure text-to-image; pass image_paths to edit one image, redraw an avatar, or combine up to 8 reference images from this turn (use local paths from csdata.image(id), csdata.call("member_avatar", uid="..."), or a previous generate_image file_path; never URLs). Use execute_python + matplotlib for data charts. Max 4 images per turn.',
       parameters:{type:'object',properties:{
         prompt:{type:'string',description:'Detailed visual prompt (1-4000 chars).'},
         size:{type:'string',enum:['1024x1024','1536x1024','1024x1536','auto']},
         quality:{type:'string',enum:['low','medium','high','auto']},
         background:{type:'string',enum:['auto','opaque','transparent']},
         caption:{type:'string',description:'Optional short caption (<=120 chars).'},
+        image_paths:{type:'array',items:{type:'string'},maxItems:8,description:'Optional authorized local file paths of reference images to edit or combine (full_path from csdata.image(id), csdata.call("member_avatar", uid="..."), or file_path from a recent generate_image result; never URLs).'},
       },required:['prompt'],additionalProperties:false},
       output:{schema:{type:'object'},render:(_,value)=>[{type:'text',text:JSON.stringify(value)}]},
       async execute(args) {
         const reply = await rpc('generate_image',{...args});
         for (const path of reply.readPaths ?? []) {
           try {allowedFiles.add(realpathSync(path));} catch {}
+        }
+        for (const path of reply.imageReadPaths ?? []) {
+          const resolved=safeRealpath(path);
+          if(resolved)allowedImages.add(resolved);
         }
         return reply.result;
       },

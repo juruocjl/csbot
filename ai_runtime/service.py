@@ -27,6 +27,39 @@ from .events import publish
 LOCKS=weakref.WeakValueDictionary()
 
 
+def recent_scope_image_paths(store, scope, leases, *, cache=None, limit=8):
+    """Authorize only this scope's own recent images, so "改一下刚画的图" works.
+
+    Runs strictly per `scope`, so a group or personal conversation can never
+    inherit another chat's generated images.
+    """
+    cache=cache or media_cache()
+    paths=[]
+    seen=set()
+    for row_img in store.rows(
+        "SELECT ri.digest FROM run_images ri JOIN runs r ON r.id=ri.run_id "
+        "WHERE r.scope=? ORDER BY ri.rowid DESC LIMIT 16",
+        (scope,),
+    ):
+        digest=row_img["digest"]
+        if digest in seen:
+            continue
+        seen.add(digest)
+        try:
+            info=cache.info(digest)
+        except ValueError:
+            continue
+        if info.get("full_status")=="available" and info.get("full_path"):
+            try:
+                leases.enter_context(cache.lease(digest))
+            except FileNotFoundError:
+                continue
+            paths.append(info["full_path"])
+            if len(paths)>=limit:
+                break
+    return paths
+
+
 def register(chat_id,gid,uid,prompt,channel="qq",conversation="default"):
     store=state_store()
     scope=scope_key(channel,gid,uid,conversation)
@@ -128,14 +161,23 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                 async def images(values):
                     if len(store.rows('SELECT id FROM run_images WHERE run_id=?',(chat_id,)))+len(values)>4:
                         raise ValueError('每轮最多提交 4 张图片')
+                    persisted_paths=[]
                     for value in values:
                         digest=media_cache().put(Path(value['path']).read_bytes(),private=True)
+                        # Hold the lease for the whole turn: the model may edit
+                        # this image again before the reply is composed.
+                        leases.enter_context(media_cache().lease(digest))
+                        info=media_cache().info(digest)
+                        if info.get('full_path'): persisted_paths.append(info['full_path'])
                         image_id=uuid.uuid4().hex
                         store.execute('INSERT INTO run_images(id,run_id,digest,caption) VALUES(?,?,?,?)',
                                       (image_id,chat_id,digest,value['caption']))
                         publish(chat_id,{'type':'image','id':image_id,'caption':value['caption']})
+                    return persisted_paths
+                recent_image_paths=recent_scope_image_paths(store,scope,leases)
                 result=await run_dsh(scope=scope,text=f"QQ用户 {uid}：{prompt}" if uid else prompt,
                     context=context,model=model,endpoint=endpoint,api_key=api_key,dispatch=dispatch,
+                    read_paths=recent_image_paths,
                     remember=channel in {"qq","web"},vision=vision,thinking=thinking,guard=guard if channel!='web' else None,
                     run_id=chat_id,on_event=lambda event:publish(chat_id,event),on_images=images,on_started=started,
                     openai_proxy_url=openai_proxy_url,image_model=image_model,

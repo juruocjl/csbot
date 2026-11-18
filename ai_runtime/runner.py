@@ -78,7 +78,7 @@ DATA.md 说明数据源、SQL模板和安全边界。优先用 csdata.call 常�
 群友称呼、外号、人物指代或以前约定的问题，先看已提供的基础知识；缺失或冲突时用 memory_search 检索称呼和关联昵称；不能把聊天搜索当成记忆搜索。记忆与直接证据冲突时查证，不能盲信旧记忆。
 多人群聊中，发言者不是问题里提到的人。“你”对应本轮发言者，“他/波特等称呼”须单独关联；不能把提问者的 QQ、SteamID、时长或偏好安到被讨论的人身上。
 记忆分为foundation基础知识、topic专题、episode资料。只有明确确认的人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)进入基础层。memory_save的subject填写被讨论对象、keys填写检索词、evidence引用本轮证据目录的id和逐字quote。称呼映射subject为QQ号；明确纠正时先检索旧条目，再用supersedes列出旧ID，由系统保存成功后停用旧条目。不要先忘记再保存。低层统计/资料可留存，标明时间及不确定性；基础知识优先使用，未提供的称呼用memory_search。没有充分证据就询问，不能把“应该是/就是某某吧”写成确定事实；有依据的查询结论也不等于本人偏好。
-当用户要求画插画、表情包、场景图或创意图片且工具列表中有 generate_image 时，直接调用 generate_image 生成（返回 delivered: true 即已随本轮回复自动发往群聊与网页，无需在正文贴本地路径，只需简短自然回应一句；统计图表仍用 execute_python + matplotlib）。
+当用户要求画插画、表情包、场景图、头像二创或改图合成且工具列表中有 generate_image 时，直接调用 generate_image：纯文生图不传 image_paths；改群聊图片先用 csdata.image(id) 取本轮授权的 full_path（原图已淘汰时可用 thumbnail_path）传入 image_paths；改本群成员QQ头像或做多头像融合先用 csdata.call('member_avatar', uid='该成员QQ号') 取 full_path（切勿传 avatar_url 网址）传入 image_paths；用户要求继续修改刚生成的图时直接传入上一轮或上一步 generate_image 返回的 file_path（若已淘汰不可读则如实说明）。返回 delivered: true 即已随本轮回复自动发往群聊与网页，无需在正文贴本地路径，只需简短自然回应一句；统计图表仍用 execute_python + matplotlib。
 
 """
 
@@ -271,12 +271,30 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
         if not memory_only: env.update(web_environment(endpoint,api_key,search_url=search_url,search_api_key=search_api_key))
         paths=set(map(str,read_paths))
         if code_snapshot: paths.update(code_snapshot.files)
+        # Reference images an edit may re-upload are tracked apart from plain
+        # readable paths: only real image bytes the user could legitimately
+        # supply this turn (chat images, avatars, generated results) qualify.
+        authorized_image_paths: set[str]=set()
+        def _register_image_path(raw):
+            if raw is None: return
+            try:
+                text=str(raw).strip()
+                if not text: return
+                cand=Path(text)
+                if cand.is_symlink() or not cand.is_file(): return
+                if image_suffix(cand) is None: return
+                authorized_image_paths.add(str(cand.resolve()))
+            except (OSError, ValueError):
+                return
+        for item in read_paths: _register_image_path(item)
         async def gateway(request):
             result=await dispatch(request)
             if request.get("method")=="image" or (request.get('method')=='call' and request.get('name')=='member_avatar'):
                 result=readable_image_view(result,artifacts,image_views)
                 for field in ("full_path","thumbnail_path"):
-                    if result.get(field): paths.add(result[field])
+                    if result.get(field):
+                        paths.add(result[field])
+                        _register_image_path(result[field])
             return result
         sandbox=ScriptSandbox(gateway,workspace/"artifacts",source_root=code_snapshot.root if code_snapshot else None)
         profile=root/("memory-import-profile.json" if memory_only else "profile.json")
@@ -326,6 +344,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                         elif event['method']=='execute_python':
                             value=await sandbox.run(event['code'])
                             paths.update(value.get('artifacts',[]))
+                            for artifact in value.get('artifacts',[]): _register_image_path(artifact)
                             if on_images and value.get('deliver_images') and value['exit_code']==0:
                                 await on_images(value['deliver_images'])
                                 submitted_images+=len(value['deliver_images'])
@@ -341,13 +360,25 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                                 size=str(event.get('size') or '1024x1024'),
                                 quality=str(event.get('quality') or 'medium'),
                                 background=str(event.get('background') or 'auto'),
-                                caption=str(event.get('caption') or ''))
-                            paths.add(value['file_path'])
+                                caption=str(event.get('caption') or ''),
+                                image_paths=event.get('image_paths'),
+                                allowed_image_paths=authorized_image_paths,
+                                workspace=workspace)
+                            artifact_file=value['file_path']
+                            paths.add(artifact_file)
+                            _register_image_path(artifact_file)
                             if on_images:
-                                await on_images([{'path':value['file_path'],'caption':value['caption']}])
+                                persisted=await on_images([{'path':artifact_file,'caption':value['caption']}])
+                                if persisted and persisted[0]:
+                                    # Keep the persisted path authorized too, so the
+                                    # file_path stored in history stays editable next turn.
+                                    value['file_path']=str(persisted[0])
+                                    paths.add(value['file_path'])
+                                    _register_image_path(value['file_path'])
                             submitted_images+=1
                         else:raise ValueError('unknown bridge method')
-                        reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths)}
+                        reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths),
+                               'imageReadPaths':list(authorized_image_paths)}
                     except Exception as exc:
                         reply={'type':'rpc_result','id':event['id'],'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
                     await send(reply)
@@ -358,7 +389,8 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                         event=json.loads(line[6:])
                         if event["type"]=="ready":
                             request={"type":"start","sessionId":"csbot-"+scope,"text":text,
-                                     "context":context,"remember":remember,"readPaths":list(paths),"guard":guard is not None,
+                                     "context":context,"remember":remember,"readPaths":list(paths),
+                                     "imageReadPaths":list(authorized_image_paths),"guard":guard is not None,
                                      "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles),"memoryActions":list(memory_actions)}
                             await send(request)
                             if run_id:ACTIVE[run_id]=steer

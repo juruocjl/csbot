@@ -36,6 +36,14 @@ _IMAGE_MAX_BYTES = 16 * 1024 * 1024
 _IMAGE_MAX_PIXELS = 16_000_000
 _PROXY_ERROR = "Proxy URL must be a loopback HTTP endpoint without credentials or a path"
 
+MAX_REFERENCE_IMAGES = 8
+_REF_IMAGE_MAX_RAW_BYTES = 32 * 1024 * 1024
+_REF_IMAGE_MAX_PIXELS = 64_000_000
+_REF_UPLOAD_PASSTHROUGH_BYTES = 8 * 1024 * 1024
+_REF_UPLOAD_MAX_EDGE = 2048
+_REFERENCE_FORMATS = {"PNG", "JPEG", "WEBP", "GIF"}
+_REFERENCE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
+
 
 def validate_loopback_http_proxy(proxy_url: str) -> str:
     raw = str(proxy_url or "").strip()
@@ -144,6 +152,150 @@ def _decode_image(b64_json: str) -> tuple[bytes, str, int, int]:
     return raw, image_format, width, height
 
 
+def _reject_symlink_chain(base: Path, candidate: Path) -> None:
+    """Reject a symlink at any component between the workspace and the file."""
+    try:
+        relative = candidate.relative_to(base)
+    except ValueError:
+        return
+    current = base
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("reference image symlink is not allowed")
+
+
+def resolve_authorized_image_paths(
+    image_paths: list[str] | tuple[str, ...],
+    *,
+    workspace: Path | None = None,
+    allowed_image_paths: set[str | Path] | frozenset[str | Path] | None = None,
+) -> list[Path]:
+    """Resolve reference images strictly inside this turn's authorized set.
+
+    Fail-closed: an empty/absent whitelist authorizes nothing, so a caller that
+    forgets to pass the turn's paths can never read an arbitrary local file.
+    """
+    if not isinstance(image_paths, (list, tuple)):
+        raise ValueError("image_paths must be a list of authorized local image paths")
+    if len(image_paths) > MAX_REFERENCE_IMAGES:
+        raise ValueError(
+            f"at most {MAX_REFERENCE_IMAGES} reference images are supported per call"
+        )
+    if not image_paths:
+        return []
+
+    allowed_resolved: set[Path] = set()
+    for allowed in allowed_image_paths or ():
+        if not allowed:
+            continue
+        entry = Path(str(allowed))
+        try:
+            if entry.is_symlink() or not entry.exists():
+                continue
+            resolved_allowed = entry.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if resolved_allowed.is_file():
+            allowed_resolved.add(resolved_allowed)
+
+    resolved_paths: list[Path] = []
+    for raw_item in image_paths:
+        if not isinstance(raw_item, str) or not raw_item or "\x00" in raw_item:
+            raise ValueError("image_paths must be a list of authorized local image paths")
+        text = raw_item.strip()
+        if not text:
+            raise ValueError("image_paths must be a list of authorized local image paths")
+        if re.match(r"^https?://", text, re.IGNORECASE):
+            raise ValueError(
+                "image_paths accepts authorized local file paths, not URLs; "
+                "call csdata.call('member_avatar', uid='QQ号') or csdata.image(id) "
+                "first and pass full_path"
+            )
+        candidate = Path(text)
+        if not candidate.is_absolute():
+            if workspace is None:
+                raise ValueError(
+                    "image_paths must be a list of authorized local image paths"
+                )
+            candidate = Path(workspace) / candidate
+        if candidate.is_symlink():
+            raise ValueError("reference image symlink is not allowed")
+        if workspace is not None:
+            _reject_symlink_chain(Path(workspace).resolve(), candidate)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise ValueError(
+                "reference image file is unavailable; original image may have been evicted"
+            ) from None
+        if resolved.is_symlink() or not resolved.is_file():
+            raise ValueError("reference image file is unavailable; original image may have been evicted")
+        if resolved not in allowed_resolved:
+            raise ValueError(
+                "reference image path is outside the authorized readable images for this turn"
+            )
+        try:
+            size_bytes = resolved.stat().st_size
+        except OSError:
+            raise ValueError(
+                "reference image file is unavailable; original image may have been evicted"
+            ) from None
+        if not 1 <= size_bytes <= _REF_IMAGE_MAX_RAW_BYTES:
+            raise ValueError("reference image is empty or exceeds size limit")
+        resolved_paths.append(resolved)
+    return resolved_paths
+
+
+def _prepare_reference_image(path: Path, index: int) -> tuple[str, bytes, str]:
+    """Return (filename, bytes, mime) normalized for the /images/edits multipart."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        raise ValueError(
+            "reference image file is unavailable; original image may have been evicted"
+        ) from None
+    if not 1 <= len(raw) <= _REF_IMAGE_MAX_RAW_BYTES:
+        raise ValueError("reference image is empty or exceeds size limit")
+    try:
+        with Image.open(BytesIO(raw)) as probe:
+            width, height = probe.size
+            fmt = str(probe.format or "").upper()
+            probe.verify()
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError,
+            Image.DecompressionBombError):
+        raise ValueError("unsupported reference image format") from None
+    if not 1 <= width * height <= _REF_IMAGE_MAX_PIXELS:
+        raise ValueError("reference image is too large to decode")
+    if fmt not in _REFERENCE_FORMATS:
+        raise ValueError("unsupported reference image format")
+    if (
+        fmt in {"PNG", "JPEG", "WEBP"}
+        and len(raw) <= _REF_UPLOAD_PASSTHROUGH_BYTES
+        and max(width, height) <= _REF_UPLOAD_MAX_EDGE
+    ):
+        extension = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}[fmt]
+        return f"ref_{index}{extension}", raw, _REFERENCE_MIME[extension]
+    # Animated GIF (first frame), oversized pixels, or oversized bytes: re-encode
+    # a bounded PNG so the upload stays stable and predictable.
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            image.seek(0)
+            normalized = image.convert("RGBA")
+            if max(normalized.size) > _REF_UPLOAD_MAX_EDGE:
+                normalized.thumbnail(
+                    (_REF_UPLOAD_MAX_EDGE, _REF_UPLOAD_MAX_EDGE), Image.Resampling.LANCZOS
+                )
+            buffer = BytesIO()
+            normalized.save(buffer, format="PNG")
+            png_bytes = buffer.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise ValueError("unsupported reference image format") from None
+    if not 1 <= len(png_bytes) <= _IMAGE_MAX_BYTES:
+        raise ValueError("reference image is empty or exceeds size limit")
+    return f"ref_{index}.png", png_bytes, "image/png"
+
+
 async def generate_openai_image(
     *,
     prompt: str,
@@ -157,6 +309,9 @@ async def generate_openai_image(
     background: str = "auto",
     caption: str = "",
     timeout: float = 120.0,
+    image_paths: list[str] | tuple[str, ...] | None = None,
+    allowed_image_paths: set[str | Path] | frozenset[str | Path] | None = None,
+    workspace: Path | None = None,
 ) -> dict:
     prompt = str(prompt or "").strip()
     if not 1 <= len(prompt) <= 4000:
@@ -169,18 +324,47 @@ async def generate_openai_image(
         raise ValueError("unsupported image background")
     safe_caption = str(caption or "").strip()[:120]
 
-    url = f"{normalize_openai_base_url(endpoint)}/images/generations"
-    payload = {
-        "model": str(model or "").strip() or DEFAULT_IMAGE_MODEL,
-        "prompt": prompt,
-        "n": 1,
-        "size": size,
-        "quality": quality,
-        "background": background,
-        "output_format": "png",
-    }
+    prepared_refs: list[tuple[str, bytes, str]] = []
+    if image_paths is not None:
+        resolved_refs = resolve_authorized_image_paths(
+            image_paths, workspace=workspace, allowed_image_paths=allowed_image_paths
+        )
+        prepared_refs = [
+            _prepare_reference_image(path, index) for index, path in enumerate(resolved_refs)
+        ]
+
+    effective_model = str(model or "").strip() or DEFAULT_IMAGE_MODEL
     effective_proxy = resolve_openai_proxy(endpoint, proxy_url)
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    base_url = normalize_openai_base_url(endpoint)
+    payload: dict = {}
+    files: list[tuple[str, tuple[str, bytes, str]]] = []
+    form_data: dict[str, str] = {}
+    if prepared_refs:
+        url = f"{base_url}/images/edits"
+        field_name = "image" if len(prepared_refs) == 1 else "image[]"
+        form_data = {
+            "model": effective_model,
+            "prompt": prompt,
+            "n": "1",
+            "size": size,
+            "quality": quality,
+            "background": background,
+            "output_format": "png",
+        }
+        files = [(field_name, item) for item in prepared_refs]
+        headers = {"Authorization": f"Bearer {api_key}"}
+    else:
+        url = f"{base_url}/images/generations"
+        payload = {
+            "model": effective_model,
+            "prompt": prompt,
+            "n": 1,
+            "size": size,
+            "quality": quality,
+            "background": background,
+            "output_format": "png",
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     response: httpx.Response | None = None
     for attempt in range(3):
@@ -190,7 +374,12 @@ async def generate_openai_image(
                 timeout=httpx.Timeout(timeout, connect=15.0),
                 trust_env=False,
             ) as client:
-                response = await client.post(url, json=payload, headers=headers)
+                if prepared_refs:
+                    response = await client.post(
+                        url, data=form_data, files=files, headers=headers
+                    )
+                else:
+                    response = await client.post(url, json=payload, headers=headers)
         except _RETRYABLE_ERRORS as exc:
             if attempt < 2:
                 await asyncio.sleep(0.8 * (2**attempt))
@@ -235,7 +424,9 @@ async def generate_openai_image(
     result = {
         "ok": True,
         "delivered": True,
-        "model": payload["model"],
+        "model": effective_model,
+        "mode": "edit" if prepared_refs else "generate",
+        "reference_count": len(prepared_refs),
         "size": f"{width}x{height}",
         "quality": quality,
         "background": background,

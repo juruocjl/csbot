@@ -116,6 +116,8 @@ print(csdata.image("消息里[image:...]的ID"))
 
 需要生成创意插画、表情包、场景图或头像时，直接调用原生 `generate_image` 工具（`gpt-image-2.6-sunburst`，自动随本轮回复发送并归档，网页可见；每轮与脚本图表合计最多 4 张）。它返回 `delivered: true` 即表示已提交，不要在正文贴本地路径或再声称未发送。数据可视化图表仍使用 `execute_python` + `matplotlib` + `csdata.artifact(..., send=True)`。
 
+改图或合成时传 `image_paths`（本轮已授权的本地图片路径，最多 8 张，禁传 URL）：改群聊图片先 `csdata.image(id)` 取 `full_path`（原图已淘汰时用 `thumbnail_path`）；改群成员头像或做多头像融合先 `csdata.call('member_avatar', uid='QQ号')` 取 `full_path`，`avatar_url` 只是地址不能当路径传；连续改图直接复用上一轮或上一步 `generate_image` 返回的 `file_path`（同群或同一网页会话内仍被授权，已淘汰不可读时如实说明）。单张走 `/images/edits` 的 `image` 字段、多张走 `image[]`；越权路径、符号链接、非图像字节和超过 8 张都会被直接拒绝。
+
 生成图的原图与群聊原图共享 1 GiB LRU 预算，缩略图保留；网页个人图存于私有目录，不能通过公开静态图片地址访问。原图被淘汰时页面明确提示并展示缩略图，不能假装高清图仍存在。
 
 ## 群友、头像、复读点数与管理员
