@@ -70,7 +70,9 @@ async def authorized_image(factory,gid,image_id):
 
 
 async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoint,api_key,
-              factory,chat_history,archive,guard=None,vision=False,thinking=False):
+              factory,chat_history,archive,guard=None,vision=False,thinking=False,
+              openai_proxy_url: str | None = None, image_model: str | None = None,
+              search_url: str = "", search_api_key: str = ""):
     store=state_store()
     row=register(chat_id,gid,uid,prompt,channel,conversation)
     if row["status"]=="completed": return row["response"]
@@ -135,8 +137,14 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                 result=await run_dsh(scope=scope,text=f"QQ用户 {uid}：{prompt}" if uid else prompt,
                     context=context,model=model,endpoint=endpoint,api_key=api_key,dispatch=dispatch,
                     remember=channel in {"qq","web"},vision=vision,thinking=thinking,guard=guard if channel!='web' else None,
-                    run_id=chat_id,on_event=lambda event:publish(chat_id,event),on_images=images,on_started=started)
+                    run_id=chat_id,on_event=lambda event:publish(chat_id,event),on_images=images,on_started=started,
+                    openai_proxy_url=openai_proxy_url,image_model=image_model,
+                    search_url=search_url,search_api_key=search_api_key)
                 output="\n\n".join(item["content"] for item in result["messages"])
+                if not output.strip():
+                    generated=store.rows('SELECT id FROM run_images WHERE run_id=?',(chat_id,))
+                    if generated:
+                        output="图片已生成。"
                 if not output.strip(): raise RuntimeError("model returned no public answer")
                 # Legacy record compatibility; detailed native events use scoped SSE access.
                 for event in result["tools"]:

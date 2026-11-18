@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import stat
+from ssl import SSLError
 import sys
 import tempfile
 import unittest
@@ -193,7 +194,8 @@ class AlertTests(unittest.TestCase):
 
         with patch.object(health, "command", side_effect=fake_command), \
              patch.object(health, "napcat_online", return_value=True), \
-             patch.object(health, "matrix_egress_ok", return_value=True):
+             patch.object(health, "matrix_egress_ok", return_value=True), \
+             patch.object(health, "openai_egress_ok", return_value=True):
             # Case 1: recoveryAttempt=1 -> WARNING (not duplicated by container:steam_monitor), csbot-nginx still flagged
             opener = Mock()
             opener.open.side_effect = [
@@ -345,7 +347,8 @@ class AlertTests(unittest.TestCase):
         with patch.object(health, "command", side_effect=fake_command), \
              patch.object(health, "napcat_online", return_value=True), \
              patch.object(health, "build_opener", return_value=base_opener), \
-             patch.object(health, "matrix_egress_ok", side_effect=TimeoutError("secret proxy detail")):
+             patch.object(health, "matrix_egress_ok", side_effect=TimeoutError("secret proxy detail")), \
+             patch.object(health, "openai_egress_ok", return_value=True):
             issues, _ = health.collect(Path("/unused"), {}, 10000.0)
 
         self.assertIn("matrix_egress", issues)
@@ -361,6 +364,111 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(self.sender.call_count, 1)
         self.assertTrue(self.sender.call_args.kwargs["wake_supervisor"])
         self.assertIn("@csbot", self.sender.call_args.args[0])
+
+
+    def test_openai_egress_probe_401_and_critical_alert(self):
+        captured_proxy = []
+        captured_req = []
+        orig_proxy_handler = health.ProxyHandler
+
+        def fake_proxy_handler(proxies):
+            captured_proxy.append(proxies)
+            return orig_proxy_handler(proxies)
+
+        opener = Mock()
+
+        def unauthorized(req, timeout=10):
+            captured_req.append((req, timeout))
+            raise HTTPError(
+                req.full_url,
+                401,
+                "Unauthorized",
+                {},
+                BytesIO(b'{"error":{"message":"missing key","type":"invalid_request_error"}}'),
+            )
+
+        opener.open.side_effect = unauthorized
+        with patch.object(health, "ProxyHandler", side_effect=fake_proxy_handler), \
+             patch.object(health, "build_opener", return_value=opener):
+            self.assertTrue(health.openai_egress_ok())
+
+        self.assertEqual(captured_proxy[-1], {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"})
+        self.assertEqual(captured_req[-1][0].full_url, "https://api.openai.com/v1/models")
+        self.assertEqual(captured_req[-1][1], 10)
+        self.assertIsNone(captured_req[-1][0].get_header("Authorization"))
+
+        def raises(exc):
+            def fake_open(req, timeout=10):
+                raise exc
+            return fake_open
+
+        for status, body in (
+            (403, b'{"error":{"message":"blocked"}}'),
+            (503, b'{"error":{"message":"unavailable"}}'),
+            (401, b"not-json"),
+            (401, b'["unexpected"]'),
+        ):
+            opener.open.side_effect = raises(
+                HTTPError("https://api.openai.com/v1/models", status, "error", {}, BytesIO(body))
+            )
+            with patch.object(health, "build_opener", return_value=opener):
+                self.assertFalse(health.openai_egress_ok(), (status, body))
+
+        opener.open.side_effect = lambda req, timeout=10: _FakeHttpResponse(b'{"data":[]}', status=200)
+        with patch.object(health, "build_opener", return_value=opener):
+            self.assertFalse(health.openai_egress_ok())
+
+        docker_output = "\n".join(f'"/{c}" true false healthy' for c in health.CONTAINERS)
+
+        def fake_command(args, timeout=5):
+            if args[0] == "systemctl":
+                return "\n\n".join(
+                    f"Id={svc}\nActiveState=active\nMemoryCurrent=104857600\nNRestarts=0"
+                    for svc in health.SERVICES
+                )
+            if args[0] == "docker" and args[1] == "inspect":
+                return docker_output
+            return ""
+
+        base_opener = Mock()
+        base_opener.open.side_effect = [
+            _FakeHttpResponse(b"", status=404),
+            _FakeHttpResponse(json.dumps({"ok": True, "loggedOn": True, "friendStatusReady": True}).encode("utf-8")),
+        ]
+        with patch.object(health, "command", side_effect=fake_command), \
+             patch.object(health, "napcat_online", return_value=True), \
+             patch.object(health, "build_opener", return_value=base_opener), \
+             patch.object(health, "matrix_egress_ok", return_value=True), \
+             patch.object(health, "openai_egress_ok", side_effect=TimeoutError("sensitive detail")):
+            issues, _ = health.collect(Path("/unused"), {}, 10000.0)
+
+        self.assertIn("openai_egress", issues)
+        issue = issues["openai_egress"]
+        self.assertEqual((issue.level, issue.samples), (health.CRITICAL, 2))
+        self.assertIn("TimeoutError", issue.message)
+        self.assertNotIn("sensitive detail", issue.message)
+
+        # Two consecutive failures wake @csbot; a single transient sample does not.
+        self.cycle({"openai_egress": issue}, 10000)
+        self.sender.assert_not_called()
+        self.cycle({"openai_egress": issue}, 10060)
+        self.assertEqual(self.sender.call_count, 1)
+        self.assertTrue(self.sender.call_args.kwargs["wake_supervisor"])
+        self.assertIn("@csbot", self.sender.call_args.args[0])
+
+        # TLS failures surface only the exception class name.
+        base_opener.open.side_effect = [
+            _FakeHttpResponse(b"", status=404),
+            _FakeHttpResponse(json.dumps({"ok": True, "loggedOn": True, "friendStatusReady": True}).encode("utf-8")),
+        ]
+        with patch.object(health, "command", side_effect=fake_command), \
+             patch.object(health, "napcat_online", return_value=True), \
+             patch.object(health, "build_opener", return_value=base_opener), \
+             patch.object(health, "matrix_egress_ok", return_value=True), \
+             patch.object(health, "openai_egress_ok", side_effect=SSLError("sensitive detail")):
+            issues, _ = health.collect(Path("/unused"), {}, 10120.0)
+        self.assertIn("SSLError", issues["openai_egress"].message)
+        self.assertNotIn("sensitive detail", issues["openai_egress"].message)
 
 
 if __name__ == "__main__":

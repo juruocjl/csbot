@@ -29,7 +29,7 @@ for target in (Path("/source/plugins/fudu/__init__.py"), Path("/source/new-file.
     else: raise AssertionError("source snapshot was writable")
 assert csdata.call("members")["rows"][0]["uid"]=="fixture"
 assert not Path("/var/run/docker.sock").exists()
-assert not any(key in os.environ for key in ("CS_DATABASE","DEEPSEEK_API_KEY","CS_TEST_TOKEN"))
+assert not any(key in os.environ for key in ("CS_DATABASE","DEEPSEEK_API_KEY","OPENAI_API_KEY","CS_TEST_TOKEN"))
 try:
     Path("/etc/escape-test").write_text("bad")
 except OSError:

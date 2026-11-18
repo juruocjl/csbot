@@ -108,7 +108,7 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
         name="AI 模型",
         description="AI 对话、记忆整理和自动摘要使用的主模型。保存后下一次 AI 请求生效。",
         annotation=AIModelName,
-        default="deepseek-v4-flash-vision-exp",
+        default="gpt-6.2-sol",
         value_type="string",
     ),
     "live_watch_list": RuntimeConfigDefinition(

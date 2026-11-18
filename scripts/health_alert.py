@@ -39,6 +39,7 @@ DEFAULT_MENTION_USER_ID = "@csbot:ave-mujica.top"
 DEFAULT_MENTION_LABEL = "@csbot"
 DEFAULT_EGRESS_PROXY = "http://127.0.0.1:7890"
 MATRIX_VERSIONS_URL = "https://matrix.org/_matrix/client/versions"
+OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
 SERVICES = ("csbot.service", "mihomo.service", "docker.service", "csbot-memory-guard.timer")
 CONTAINERS = ("csbot-database", "csbot-napcat", "steam_monitor", "csbot-homepage", "csbot-nginx")
 
@@ -160,6 +161,41 @@ def matrix_egress_ok(
         timeout=timeout,
     )
     return isinstance(result, dict) and isinstance(result.get("versions"), list) and len(result["versions"]) > 0
+
+
+def openai_egress_ok(
+    proxy_url: str = DEFAULT_EGRESS_PROXY,
+    target_url: str = OPENAI_MODELS_URL,
+    timeout: int = 10,
+) -> bool:
+    """Zero-key, zero-cost probe: unauthenticated /v1/models must answer 401 JSON.
+
+    A TLS reset, timeout, 5xx or a 2xx means the exit node is not usable for the
+    CSBot OpenAI calls. Never reads a key file and never sends Authorization.
+    """
+    opener = build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+    request = Request(
+        target_url,
+        headers={"Accept": "application/json", "User-Agent": "csbot-health-alert/1.0"},
+        method="GET",
+    )
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            response.read(64 * 1024)
+        return False
+    except HTTPError as exc:
+        try:
+            status = exc.code
+            raw = exc.read(64 * 1024)
+        finally:
+            exc.close()
+    if status != 401:
+        return False
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(payload, dict) and isinstance(payload.get("error"), dict)
 
 
 class MatrixNotifier:
@@ -337,6 +373,22 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
                 "Mihomo :7890 -> matrix.org 响应格式异常（影响 Tuwunel 推送）",
             )
     probe("matrix_egress", matrix_egress)
+
+    def openai_egress():
+        try:
+            ok = openai_egress_ok()
+        except Exception as exc:
+            issues["openai_egress"] = Issue(
+                CRITICAL,
+                f"Mihomo :7890 -> api.openai.com 出口不通（{type(exc).__name__}，影响 CSBot OpenAI 调用）",
+            )
+            return
+        if not ok:
+            issues["openai_egress"] = Issue(
+                CRITICAL,
+                "Mihomo :7890 -> api.openai.com 响应异常（非预期 401 JSON，影响 CSBot OpenAI 调用）",
+            )
+    probe("openai_egress", openai_egress)
 
     def logs():
         current = {}

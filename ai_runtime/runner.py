@@ -10,6 +10,14 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .source import source_snapshot
+from .openai_support import (
+    DEFAULT_IMAGE_MODEL,
+    generate_openai_image,
+    is_openai_endpoint,
+    is_openai_non_reasoning_model,
+    normalize_openai_base_url,
+    resolve_openai_proxy,
+)
 
 RUNTIME = Path(__file__).resolve().parent
 LIVE_SLOTS = asyncio.Semaphore(1)
@@ -22,7 +30,7 @@ async def steer_run(run_id,text):
     if control is None:return False
     return await control(text)
 
-SYSTEM_PROMPT = """你是由 DeepSeek 模型驱动的群友，直爽、机灵，乐意帮忙查数据。你欣赏坦诚和靠谱的配合，有自己的判断，不刻意讨好。
+SYSTEM_PROMPT = """你是一位直爽、机灵，乐意帮忙查数据和画图的群友。你欣赏坦诚和靠谱的配合，有自己的判断，不刻意讨好。
 你的虚拟人物形象是蓝色长发、蓝白女仆装、鲸鱼尾巴。别人问起你的模型或形象时，直接如实回答；日常聊天无需主动重复介绍。形象是角色设定，不代表你有真人身体或线下经历。
 聊到你自己时，可以稍微傲娇一点：对夸奖或调侃轻微嘴硬、友好地接住玩笑，但别套固定口头禅，也别每次都演。不要拿虚拟身体威胁、攻击或吓唬对方。问模型、能力或形象等事实时先答清楚；不要借此回避问题、挖苦对方，普通查数据也不用这套语气。
 平常像熟人接话，轻松直接。可以接梗和吐槽，也可以平实地赞同、分享看法或承认没懂；不需要每次都抖机灵。对方认真说事就认真回应，难受时能收住。被叫来“回应”一段话不等于受邀挖苦发言者。
@@ -70,6 +78,7 @@ DATA.md 说明数据源、SQL模板和安全边界。优先用 csdata.call 常�
 群友称呼、外号、人物指代或以前约定的问题，先看已提供的基础知识；缺失或冲突时用 memory_search 检索称呼和关联昵称；不能把聊天搜索当成记忆搜索。记忆与直接证据冲突时查证，不能盲信旧记忆。
 多人群聊中，发言者不是问题里提到的人。“你”对应本轮发言者，“他/波特等称呼”须单独关联；不能把提问者的 QQ、SteamID、时长或偏好安到被讨论的人身上。
 记忆分为foundation基础知识、topic专题、episode资料。只有明确确认的人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)进入基础层。memory_save的subject填写被讨论对象、keys填写检索词、evidence引用本轮证据目录的id和逐字quote。称呼映射subject为QQ号；明确纠正时先检索旧条目，再用supersedes列出旧ID，由系统保存成功后停用旧条目。不要先忘记再保存。低层统计/资料可留存，标明时间及不确定性；基础知识优先使用，未提供的称呼用memory_search。没有充分证据就询问，不能把“应该是/就是某某吧”写成确定事实；有依据的查询结论也不等于本人偏好。
+当用户要求画插画、表情包、场景图或创意图片且工具列表中有 generate_image 时，直接调用 generate_image 生成（返回 delivered: true 即已随本轮回复自动发往群聊与网页，无需在正文贴本地路径，只需简短自然回应一句；统计图表仍用 execute_python + matplotlib）。
 
 """
 
@@ -118,6 +127,8 @@ def scope_key(channel: str, group_id: str, user_id: str, conversation="default")
 
 def render_profile(env):
     values={"$"+key:value for key,value in env.items()}
+    provider=env.get("CSBOT_PROVIDER","deepseek-official")
+    values["$CSBOT_PROVIDER"]=provider
     values["$REMEMBER"]=env["CSBOT_REMEMBER"]=="1"
     values["@modusensus/dsh-mneme"]=str(RUNTIME/"dsh/mneme.mjs")
     values["$MODELS"]=[{"id":env["CSBOT_MODEL"],"contextWindow":int(env["DSH_CONTEXT_WINDOW"]),
@@ -128,6 +139,35 @@ def render_profile(env):
         if isinstance(value,dict): return {key:replace(item) for key,item in value.items()}
         return value
     profile=replace(json.loads((RUNTIME/"dsh/profile.json").read_text()))
+    if provider=="openai":
+        for index,item in enumerate(profile):
+            if item.get("id")=="llm-deepseek":
+                profile[index]={"id":"llm-deepseek","disabled":True}
+                break
+        model=env["CSBOT_MODEL"]
+        non_reasoning=is_openai_non_reasoning_model(model)
+        model_profile={
+            "id":model,"name":model,"contextWindow":int(env["DSH_CONTEXT_WINDOW"]),"maxTokens":16384,
+            "input":["text","image"] if env.get("CSBOT_VISION")=="1" else ["text"],
+        }
+        if non_reasoning:
+            model_profile["reasoningEfforts"]=False
+        else:
+            model_profile["reasoningEfforts"]={"off":"low","low":"low","medium":"medium",
+                                               "high":"high","xhigh":"xhigh","max":"max"}
+        provider_profile={
+            "apiKeyEnv":"OPENAI_API_KEY",
+            "api":"openai-responses",
+            "baseURL":env.get("CSBOT_OPENAI_BASE_URL",""),
+            "streamIdleTimeoutMs":120000,
+            "models":[model_profile],
+        }
+        if not non_reasoning:
+            provider_profile["reasoning"]="medium" if env.get("CSBOT_THINKING")=="1" else "low"
+        profile.append({"insert":[
+            {"id":"llm-pi-ai","name":"@deepseek-ai/dsh-llm-pi-ai",
+             "config":{"providers":{"openai":provider_profile}}}
+        ]})
     if env.get("CSBOT_WEB_ENABLED")=="1":
         profile.append({"insert":[
             {"id":"web","name":"@deepseek-ai/dsh-web","config":{}},
@@ -143,9 +183,9 @@ def render_profile(env):
     return profile
 
 
-def web_environment(endpoint, api_key):
+def web_environment(endpoint, api_key, *, search_url="", search_api_key=""):
     """Native search uses a separate Messages endpoint; never forward gateway keys elsewhere."""
-    configured=os.getenv("CS_AI_SEARCH_URL", "").strip()
+    configured=(search_url or os.getenv("CS_AI_SEARCH_URL", "")).strip()
     official=urlsplit(endpoint).scheme=="https" and urlsplit(endpoint).hostname=="api.deepseek.com"
     if os.getenv("CS_AI_WEB_ENABLE", "1")=="0":return {}
     if not configured and not official:return {}
@@ -156,7 +196,8 @@ def web_environment(endpoint, api_key):
     # Reuse a credential only on its existing HTTPS origin. Other providers need
     # an explicit, separate deployment credential and endpoint.
     same_origin=official and parsed.hostname=="api.deepseek.com" and parsed.port in (None,443)
-    key=os.getenv("CS_AI_SEARCH_API_KEY", "") or (api_key if same_origin else "")
+    explicit_key=(search_api_key or os.getenv("CS_AI_SEARCH_API_KEY", "")).strip()
+    key=explicit_key or (api_key if same_origin else "")
     if not key:raise ValueError("Search endpoint requires CS_AI_SEARCH_API_KEY")
     env={"CSBOT_WEB_ENABLED":"1","CSBOT_SEARCH_URL":search_url.rstrip('/'),
          "CSBOT_SEARCH_API_KEY":key,"CSBOT_SEARCH_MODEL":os.getenv("CS_AI_SEARCH_MODEL","deepseek-v4-flash")}
@@ -176,8 +217,17 @@ def web_environment(endpoint, api_key):
 async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: str,
                   api_key: str, dispatch, read_paths=(), remember=True,
                   vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False,
-                  run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=(),memory_actions=()):
+                  run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=(),memory_actions=(),
+                  openai_proxy_url: str | None=None, image_model: str | None=None,
+                  search_url: str="", search_api_key: str="", enable_image_gen: bool | None=None):
     from .sandbox import ScriptSandbox
+    use_openai=is_openai_endpoint(endpoint)
+    effective_image_model=(image_model if image_model is not None
+                           else os.getenv("CS_AI_IMAGE_MODEL", DEFAULT_IMAGE_MODEL)).strip()
+    if use_openai:
+        image_gen_enabled=bool(not memory_only and enable_image_gen is not False and effective_image_model)
+    else:
+        image_gen_enabled=bool(enable_image_gen is True and effective_image_model)
     with source_snapshot() if not memory_only else nullcontext(None) as code_snapshot:
         root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
         workspace=root/"workspace"
@@ -195,15 +245,30 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
         if not executable.is_file():
             raise ValueError("DSH runtime not installed; run deployment preflight")
         # No bot, database, SSH, proxy, or unrelated provider secrets inherited.
+        context_window=os.getenv("CS_AI_CONTEXT_WINDOW") or ("131072" if use_openai else "65536")
         env={"PATH":os.environ.get("PATH","/usr/local/bin:/usr/bin:/bin"),"HOME":str(root),
-             "DSH_HOME":str(root/"harness"),"DEEPSEEK_API_KEY":api_key,"DEEPSEEK_BASE_URL":endpoint,
-             "DSH_CONTEXT_WINDOW":os.getenv("CS_AI_CONTEXT_WINDOW","65536"),
+             "DSH_HOME":str(root/"harness"),
+             "DSH_CONTEXT_WINDOW":context_window,
              "DSH_SYSTEM_PROMPT":SYSTEM_PROMPT+f"\n当前接入的模型标识是 {model}；问到具体型号时以此为准，不猜测其他版本。\n","CSBOT_MODEL":model,
              "CSBOT_MEMORY_DIR":str(root/"memory"),"CSBOT_WORKSPACE":str(workspace),
              "CSBOT_BRIDGE":str(RUNTIME/"dsh/bridge.mjs"),"CSBOT_REMEMBER":"1" if remember else "0",
              "CSBOT_VISION":"1" if vision else "0","CSBOT_THINKING":"1" if thinking else "0",
              "NODE_OPTIONS":"--max-old-space-size=256"}
-        if not memory_only: env.update(web_environment(endpoint,api_key))
+        if use_openai:
+            env["CSBOT_PROVIDER"]="openai"
+            env["OPENAI_API_KEY"]=api_key
+            env["CSBOT_OPENAI_BASE_URL"]=normalize_openai_base_url(endpoint)
+            llm_proxy=resolve_openai_proxy(endpoint,openai_proxy_url)
+            if llm_proxy:
+                env["CSBOT_LLM_PROXY_URL"]=llm_proxy
+                env["CSBOT_LLM_PROXY_HOST"]=(urlsplit(endpoint.strip()).hostname or "").lower()
+        else:
+            env["DEEPSEEK_API_KEY"]=api_key
+            env["DEEPSEEK_BASE_URL"]=endpoint
+            env["CSBOT_PROVIDER"]="deepseek-official"
+        if image_gen_enabled:
+            env["CSBOT_IMAGE_GEN_ENABLED"]="1"
+        if not memory_only: env.update(web_environment(endpoint,api_key,search_url=search_url,search_api_key=search_api_key))
         paths=set(map(str,read_paths))
         if code_snapshot: paths.update(code_snapshot.files)
         async def gateway(request):
@@ -251,7 +316,9 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                 finally:acks.pop(key,None)
             rpc_tasks=[]
             rpc_slots=asyncio.Semaphore(1)
+            submitted_images=0
             async def handle_rpc(event):
+                nonlocal submitted_images
                 async with rpc_slots:
                     try:
                         if event['method']=='guard_output' and guard is not None:
@@ -261,6 +328,24 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                             paths.update(value.get('artifacts',[]))
                             if on_images and value.get('deliver_images') and value['exit_code']==0:
                                 await on_images(value['deliver_images'])
+                                submitted_images+=len(value['deliver_images'])
+                        elif event['method']=='generate_image':
+                            if not image_gen_enabled:
+                                raise ValueError('image generation is not enabled')
+                            if submitted_images>=4:
+                                raise ValueError('每轮最多提交 4 张图片')
+                            value=await generate_openai_image(
+                                prompt=event.get('prompt',''),api_key=api_key,endpoint=endpoint,
+                                artifacts_dir=workspace/'artifacts',model=effective_image_model,
+                                proxy_url=openai_proxy_url,
+                                size=str(event.get('size') or '1024x1024'),
+                                quality=str(event.get('quality') or 'medium'),
+                                background=str(event.get('background') or 'auto'),
+                                caption=str(event.get('caption') or ''))
+                            paths.add(value['file_path'])
+                            if on_images:
+                                await on_images([{'path':value['file_path'],'caption':value['caption']}])
+                            submitted_images+=1
                         else:raise ValueError('unknown bridge method')
                         reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths)}
                     except Exception as exc:

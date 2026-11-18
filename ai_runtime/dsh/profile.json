@@ -49,7 +49,7 @@
       {
         "config": {
           "model": "$CSBOT_MODEL",
-          "provider": "deepseek-official"
+          "provider": "$CSBOT_PROVIDER"
         },
         "id": "agent-default-model",
         "name": "@deepseek-ai/dsh-agent-default-model"

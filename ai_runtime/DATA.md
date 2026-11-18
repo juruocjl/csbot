@@ -114,6 +114,8 @@ print(csdata.image("消息里[image:...]的ID"))
 
 需要把图实际交给用户时，使用 `csdata.artifact("chart.png", send=True, caption="每月胜率")`。只有成功执行脚本、验证通过的 PNG/JPEG 才会提交，每轮最多 4 张。QQ 会随本轮回复实际发送并归档，网页显示有权限的图片；不要只回复本地文件路径或声称尚未提交的图已发出。普通 `artifact()` 只导出供检查，不会自动发送。
 
+需要生成创意插画、表情包、场景图或头像时，直接调用原生 `generate_image` 工具（`gpt-image-2.6-sunburst`，自动随本轮回复发送并归档，网页可见；每轮与脚本图表合计最多 4 张）。它返回 `delivered: true` 即表示已提交，不要在正文贴本地路径或再声称未发送。数据可视化图表仍使用 `execute_python` + `matplotlib` + `csdata.artifact(..., send=True)`。
+
 生成图的原图与群聊原图共享 1 GiB LRU 预算，缩略图保留；网页个人图存于私有目录，不能通过公开静态图片地址访问。原图被淘汰时页面明确提示并展示缩略图，不能假装高清图仍存在。
 
 ## 群友、头像、复读点数与管理员

@@ -34,7 +34,9 @@ from openai.types.chat import ChatCompletionMessageParam
 from typing import Any, cast
 import json
 import base64
+from contextlib import asynccontextmanager
 from io import BytesIO
+import httpx
 from thefuzz import process, fuzz
 import os
 from datetime import datetime
@@ -42,6 +44,11 @@ from pathlib import Path
 import re
 from PIL import Image
 from ai_runtime.media import media_cache
+from ai_runtime.openai_support import (
+    is_openai_endpoint,
+    normalize_openai_base_url,
+    resolve_openai_proxy,
+)
 from sqlalchemy import select, func, case
 import time
 import uuid
@@ -141,19 +148,75 @@ def _split_forward_text(text: str, max_chars: int = AI_FORWARD_NODE_MAX_CHARS) -
     return chunks or [text]
 
 
-async def _guard_qq_output(client: AsyncOpenAI, draft: str) -> QQOutputGuardResult:
+@asynccontextmanager
+async def _open_ai_client():
+    """Build an AsyncOpenAI client; only OpenAI traffic gets the loopback proxy."""
+    if not is_openai_endpoint(config.cs_ai_url):
+        async with AsyncOpenAI(api_key=config.cs_ai_api_key, base_url=config.cs_ai_url) as client:
+            yield client
+        return
+    proxy = resolve_openai_proxy(config.cs_ai_url, config.cs_ai_openai_proxy_url)
+    http_client = None
+    extra: dict[str, Any] = {}
+    if proxy:
+        http_client = httpx.AsyncClient(proxy=proxy, timeout=45.0, trust_env=False)
+        extra["http_client"] = http_client
+    client = AsyncOpenAI(
+        api_key=config.cs_ai_api_key,
+        base_url=normalize_openai_base_url(config.cs_ai_url),
+        **extra,
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+        if http_client is not None:
+            await http_client.aclose()
+
+
+async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api: bool = False) -> QQOutputGuardResult:
     guard_model = config.cs_ai_guard_model.strip() or await runtime_config.get("cs_ai_model")
     last_error: Exception | None = None
     for attempt in range(2):
         try:
             guard_messages = build_qq_guard_messages(draft)
-            if attempt:
+            if attempt and isinstance(last_error, ValueError):
                 guard_messages.append(
                     {
                         "role": "system",
                         "content": "上一次返回格式无效。必须调用 submit_qq_guard_decision，不要输出普通文本。",
                     }
                 )
+            if use_responses_api:
+                response = await client.responses.create(
+                    model=guard_model,
+                    reasoning={"effort": "low"},
+                    store=False,
+                    input=guard_messages,
+                    tools=cast(Any, [
+                        {
+                            "type": "function",
+                            "name": "submit_qq_guard_decision",
+                            "description": QQ_OUTPUT_GUARD_TOOL["function"]["description"],
+                            "parameters": {
+                                **QQ_OUTPUT_GUARD_TOOL["function"]["parameters"],
+                                "additionalProperties": False,
+                            },
+                        }
+                    ]),
+                    tool_choice={"type": "function", "name": "submit_qq_guard_decision"},
+                )
+                raw_result = ""
+                for item in getattr(response, "output", None) or []:
+                    if (
+                        getattr(item, "type", "") == "function_call"
+                        and getattr(item, "name", "") == "submit_qq_guard_decision"
+                    ):
+                        raw_result = getattr(item, "arguments", "") or ""
+                        break
+                if not raw_result:
+                    raw_result = getattr(response, "output_text", "") or ""
+                return parse_qq_guard_response(raw_result, draft)
             response = await client.chat.completions.create(
                 model=guard_model,
                 messages=cast(list[ChatCompletionMessageParam], guard_messages),
@@ -1006,8 +1069,10 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         if channel == "web": return output
         if config.cs_ai_output_guard_enabled:
             try:
-                async with AsyncOpenAI(api_key=config.cs_ai_api_key,base_url=config.cs_ai_url) as client:
-                    verdict = await _guard_qq_output(client, output)
+                async with _open_ai_client() as client:
+                    verdict = await _guard_qq_output(
+                        client, output, use_responses_api=is_openai_endpoint(config.cs_ai_url)
+                    )
                 return normalize_qq_plain_text(verdict.text)
             except Exception:
                 logger.warning("QQ output guard failed closed")
@@ -1017,7 +1082,9 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         channel=channel,conversation=chat_id if channel=="report" else conversation,
         model=model_name,endpoint=config.cs_ai_url,api_key=config.cs_ai_api_key,
         factory=async_session_factory,chat_history=chat_history_db,archive=db.insert_chat_record,
-        guard=guard,vision=config.cs_ai_vision,thinking=config.cs_ai_enable_thinking)
+        guard=guard,vision=config.cs_ai_vision,thinking=config.cs_ai_enable_thinking,
+        openai_proxy_url=config.cs_ai_openai_proxy_url,image_model=config.cs_ai_image_model,
+        search_url=config.cs_ai_search_url,search_api_key=config.cs_ai_search_api_key)
 
 
 def _ai_chat_link(chat_id: str) -> str:
