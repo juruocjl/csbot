@@ -14,6 +14,8 @@ from nonebot import logger
 from pathlib import Path
 import tqdm
 
+from .gen_win_matrix import resolve_team_name
+
 MAX_SIMULATION_CORES = int(os.getenv("MAJOR_SIMULATION_CORES", "1"))
 MAX_EXACT_OUTCOMES = int(os.getenv("MAJOR_EXACT_OUTCOMES", "200000"))
 DEFAULT_SIMULATION_ITERATIONS = int(os.getenv("MAJOR_SIMULATION_ITERATIONS", "200000"))
@@ -452,7 +454,7 @@ class Simulation:
         """
         从JSON文件加载数据并初始化模拟器
         """
-        with open(filepath) as file:
+        with open(filepath, encoding="utf-8-sig") as file:
             data = json.load(file)
 
         def id_generator() -> Generator[int]:
@@ -498,7 +500,7 @@ class Simulation:
         exit(0)"""
 
     def _team_from_name(self, name: str) -> Team:
-        full_name = self.alias2full.get(name, name)
+        full_name = resolve_team_name(name, self.alias2full)
         return self.team_by_name[full_name]
 
     def _initial_state(self, finished_matches: list[tuple[str, str, str, str]] | None = None, newest_first: bool = False) -> SwissSystem:

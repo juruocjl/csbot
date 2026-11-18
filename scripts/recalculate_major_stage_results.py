@@ -18,22 +18,22 @@ os.chdir(REPO_ROOT)
 
 
 def init_nonebot(args: argparse.Namespace) -> None:
-    nonebot.init(
-        driver=os.getenv("DRIVER", "~fastapi+~httpx"),
-        superusers=set(json.loads(os.getenv("SUPERUSERS", "[]"))),
-        cs_database=args.database,
-        major_name=args.major_name,
-        major_stage=args.major_stage,
-        major_event_id=args.event_id,
-        cs_group_list=json.loads(os.getenv("CS_GROUP_LIST", "[]")),
-        cs_mysteam_id=int(os.getenv("CS_MYSTEAM_ID", "0")),
-        cs_wmtoken=os.getenv("CS_WMTOKEN", "debug"),
-        cs_ai_url=os.getenv("CS_AI_URL", "http://127.0.0.1"),
-        cs_ai_api_key=os.getenv("CS_AI_API_KEY", "debug"),
-        cs_ai_model=os.getenv("CS_AI_MODEL", "debug"),
-        cs_botid=int(os.getenv("CS_BOTID", "0")),
-        onebot_access_token=os.getenv("ONEBOT_ACCESS_TOKEN", "debug"),
-    )
+    overrides = {
+        key: value
+        for key, value in (
+            ("cs_database", args.database),
+            ("major_name", args.major_name),
+            ("major_stage", args.major_stage),
+            ("major_event_id", args.event_id),
+        )
+        if value is not None
+    }
+    if overrides:
+        nonebot.init(**overrides)
+    else:
+        # No explicit overrides: load everything from the process environment
+        # (ENVIRONMENT=prod + .env.prod) instead of passing CS_DATABASE on the CLI.
+        nonebot.init()
     nonebot.load_plugin(Path("plugins") / "models")
     nonebot.load_plugin(Path("plugins") / "utils")
     nonebot.load_plugin(Path("plugins") / "major_hw")
@@ -76,13 +76,9 @@ def load_win_matrix_for_cpp(matrix_path: Path, team_names: list[str]) -> list[li
 
 
 def resolve_team_name(raw_name: str, alias_to_name: dict[str, str]) -> str:
-    if raw_name in alias_to_name:
-        return alias_to_name[raw_name]
-    lowered = raw_name.lower()
-    for alias, team_name in alias_to_name.items():
-        if alias.lower() == lowered:
-            return team_name
-    raise ValueError(f"unknown team name in finished matches: {raw_name}")
+    from plugins.major_hw.gen_win_matrix import resolve_team_name as resolve
+
+    return resolve(raw_name, alias_to_name)
 
 
 def write_cpp_input(
@@ -226,10 +222,10 @@ async def recalculate(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Recalculate every saved Major stage result prefix.")
-    parser.add_argument("--database", required=True)
-    parser.add_argument("--major-name", required=True)
-    parser.add_argument("--major-stage", required=True)
-    parser.add_argument("--event-id", required=True, type=int)
+    parser.add_argument("--database", default=None, help="Override cs_database; omit to use .env.prod")
+    parser.add_argument("--major-name", default=None, help="Override major_name; omit to use env config")
+    parser.add_argument("--major-stage", default=None, help="Override major_stage; omit to use env config")
+    parser.add_argument("--event-id", default=None, type=int, help="Override major_event_id; omit to use env config")
     parser.add_argument("--max-match-count", type=int)
     parser.add_argument("--iterations", type=int, default=int(os.getenv("MAJOR_SIMULATION_ITERATIONS", "200000")))
     parser.add_argument("--threads", type=int, default=int(os.getenv("MAJOR_SIMULATION_CORES", "8")))

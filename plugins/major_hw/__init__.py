@@ -18,7 +18,6 @@ from ..utils import async_session_factory
 from ..utils import local_storage
 from ..utils import getcard
 
-from thefuzz import process
 from unicodedata import normalize
 import json
 import asyncio
@@ -27,7 +26,7 @@ import time
 from pathlib import Path
 from sqlalchemy import update, select
 
-from .gen_win_matrix import gen_win_matrix
+from .gen_win_matrix import gen_win_matrix, resolve_team_name
 from .simulate import simulate
 from .verify import parse_simulation_results, evaluate_combination
 from .playoff_homework import validate_playoff_bracket
@@ -145,9 +144,21 @@ except:
 
 
 def get_name(wuzzyname):
-    # 模糊匹配得到准确名称
-    match, _ = process.extractOne(wuzzyname, alias2full.keys())
-    return alias2full[match]
+    # 统一名称解析：精确/大小写/去标点优先，最后模糊匹配兜底
+    return resolve_team_name(wuzzyname, alias2full)
+
+
+def _validate_loaded_results(parsed_results, parsed_total: float):
+    """忽略切换阶段后遗留的旧 result.txt，避免队伍集合不一致时抛 KeyError。"""
+    if config.major_stage != "playoffs" and major_teams:
+        team_to_bit = getattr(parsed_results, "team_to_bit", {})
+        if team_to_bit and set(team_to_bit.keys()) != set(major_teams):
+            logger.warning(
+                f"result.txt 队伍列表与当前阶段 {major_stage_name} 不匹配，已忽略陈旧模拟结果"
+            )
+            return {}, 0.0
+    return parsed_results, parsed_total
+
 
 file_path = "result.txt"
 _simulation_update_task: asyncio.Task | None = None
@@ -158,7 +169,7 @@ logger.info(f"{major_stage_name}, {major_teams}")
 results = {}
 total_simulations = 0.0
 try:
-    results, total_simulations = parse_simulation_results(file_path)
+    results, total_simulations = _validate_loaded_results(*parse_simulation_results(file_path))
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 except:
     logger.error("未能加载模拟结果")
@@ -402,7 +413,7 @@ async def hwupd_function():
     global results
     await hwupd.send("开始读取模拟结果")
 
-    results, total_simulations = parse_simulation_results(file_path)
+    results, total_simulations = _validate_loaded_results(*parse_simulation_results(file_path))
     logger.info(f"已加载 {total_simulations} 个模拟结果")
 
     res = await db.get_all_hw(major_stage_name)

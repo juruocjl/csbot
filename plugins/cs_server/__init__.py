@@ -2628,7 +2628,7 @@ class MajorHomeworkPersonalResponse(BaseModel):
     categories: list[str] = Field(..., description="Pick categories")
     rows: list[MajorHomeworkPersonalRow] = Field(..., description="Personal homework history")
 
-MAJOR_TEAM_LOGOS: dict[str, str] = {
+MAJOR_COLOGNE_TEAM_LOGOS: dict[str, str] = {
     "Vitality": "vita.png",
     "The MongolZ": "mong.png",
     "Falcons": "falc.png",
@@ -2655,6 +2655,78 @@ MAJOR_TEAM_LOGOS: dict[str, str] = {
     "FlyQuest": "fly.png",
 }
 
+MAJOR_SINGAPORE_TEAM_LOGOS: dict[str, str] = {
+    # Stage 1
+    "Ninjas in Pyjamas": "nip.png",
+    "NIP": "nip.png",
+    "PARIVISION": "pv.png",
+    "PVISION": "pv.png",
+    "HEROIC": "hero.png",
+    "Heroic": "hero.png",
+    "FaZe": "faze.png",
+    "FaZe Clan": "faze.png",
+    "Liquid": "liqu.png",
+    "Team Liquid": "liqu.png",
+    "Eternal Fire": "ef.png",
+    "EF": "ef.png",
+    "100 Thieves": "100t.png",
+    "9z": "9z.png",
+    "9z Team": "9z.png",
+    "M80": "m80.png",
+    "DENDELE": "dend.png",
+    "Imperial": "impe.png",
+    "Imperial Esports": "impe.png",
+    "Wildcard": "wild.png",
+    "BC.Game": "bcg.png",
+    "GOSH": "bcg.png",
+    "FlyQuest": "fly.png",
+    "Chinggis Warriors": "cw.png",
+    "CW": "cw.png",
+    "Lynn Vision": "lvg.png",
+    "LVG": "lvg.png",
+    "Lynn Vision Gaming": "lvg.png",
+    # Stage 2 invites
+    "FUT": "fut.png",
+    "FUT Esports": "fut.png",
+    "Nemiga": "nemi.png",
+    "Nemiga Gaming": "nemi.png",
+    "G2": "g2.png",
+    "G2 Esports": "g2.png",
+    "1win": "1win.png",
+    "The One": "1win.png",
+    "THE ONE": "1win.png",
+    "Natus Vincere": "navi.png",
+    "NAVI": "navi.png",
+    "Astralis": "astr.png",
+    "The MongolZ": "mong.png",
+    "Mongolz": "mong.png",
+    "MongolZ": "mong.png",
+    "MIBR": "mibr.png",
+    # Stage 3 invites
+    "MOUZ": "mouz.png",
+    "Vitality": "vita.png",
+    "Team Vitality": "vita.png",
+    "FURIA": "furi.png",
+    "Aurora": "auro.png",
+    "Aurora Gaming": "auro.png",
+    "Spirit": "spir.png",
+    "Team Spirit": "spir.png",
+    "BetBoom": "betb.png",
+    "BetBoom Team": "betb.png",
+    "BB Team": "betb.png",
+    "BB": "betb.png",
+    "Falcons": "falc.png",
+    "Team Falcons": "falc.png",
+    "Legacy": "lega.png",
+}
+
+MAJOR_TEAM_LOGOS_BY_EVENT: dict[str, dict[str, str]] = {
+    "2026-singapore": MAJOR_SINGAPORE_TEAM_LOGOS,
+    "2026-cologne": MAJOR_COLOGNE_TEAM_LOGOS,
+}
+
+MAJOR_TEAM_LOGOS: dict[str, str] = MAJOR_SINGAPORE_TEAM_LOGOS
+
 MAJOR_HOMEWORK_CATEGORIES = ["3-0", "3-1/3-2", "0-3"]
 MAJOR_HOMEWORK_CATEGORY_SLOTS = {
     "3-0": 2,
@@ -2665,9 +2737,15 @@ MAJOR_PLAYOFF_CATEGORIES = PLAYOFF_CATEGORIES
 MAJOR_PLAYOFF_CATEGORY_SLOTS = PLAYOFF_CATEGORY_SLOTS
 
 def _major_team_logo(team: str) -> str | None:
-    if logo := MAJOR_TEAM_LOGOS.get(team):
-        return f"/team-icons/2026-cologne/{logo}"
-    return None
+    major_name = major_hw_config.major_name
+    logos = MAJOR_TEAM_LOGOS_BY_EVENT.get(major_name, MAJOR_SINGAPORE_TEAM_LOGOS)
+    logo = logos.get(team)
+    if logo is None and major_teams:
+        logo = logos.get(get_major_team_name(team))
+    if logo is None:
+        return None
+    icon_dir = major_name if major_name in MAJOR_TEAM_LOGOS_BY_EVENT else "2026-singapore"
+    return f"/team-icons/{icon_dir}/{logo}"
 
 def _major_safe_float(value: float) -> float | None:
     if value is None or not math.isfinite(value):

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import lru_cache
 import json
@@ -146,7 +147,7 @@ def print_win_matrix(win_matrix: dict[str, dict[str, float]], teams: list[Team])
 
 def load_teams(file_path: str | Path) -> list[Team]:
     """从JSON文件加载队伍数据"""
-    with open(file_path) as file:
+    with open(file_path, encoding="utf-8-sig") as file:
         data = json.load(file)
 
     teams = []
@@ -170,9 +171,44 @@ def load_teams(file_path: str | Path) -> list[Team]:
 
 def load_system_names(file_path: str | Path) -> list[str]:
     """Return rating system names in the same order as Team.rating."""
-    with open(file_path) as file:
+    with open(file_path, encoding="utf-8-sig") as file:
         data = json.load(file)
     return list(data["systems"].keys())
+
+
+def _compact_team_key(value: str) -> str:
+    """Drop case, spaces and punctuation so short codes match exactly."""
+    return "".join(ch for ch in value.casefold() if ch.isalnum())
+
+
+def resolve_team_name(raw_name: str, alias2full: Mapping[str, str]) -> str:
+    """Resolve a 5E/HLTV team name to the canonical name used by the stage asset.
+
+    Exact, case-insensitive and punctuation-free matches run before the fuzzy
+    fallback so short codes such as ``ef``/``cw``/``pv`` cannot be swallowed by
+    a substring ratio hit on another team.
+    """
+    cleaned = str(raw_name).strip()
+    if not alias2full:
+        raise ValueError("alias2full is empty")
+    if cleaned in alias2full:
+        return alias2full[cleaned]
+
+    lowered = cleaned.casefold()
+    for alias, full_name in alias2full.items():
+        if alias.casefold() == lowered:
+            return full_name
+
+    compacted = _compact_team_key(cleaned)
+    if compacted:
+        for alias, full_name in alias2full.items():
+            if _compact_team_key(alias) == compacted:
+                return full_name
+
+    match, _ = process.extractOne(cleaned, list(alias2full.keys()))
+    if match is None:
+        raise ValueError(f"unknown team name: {raw_name}")
+    return alias2full[match]
 
 
 def parse_score_weight(score: str) -> float:
@@ -210,14 +246,10 @@ def apply_finished_matches_to_ratings(
     team_by_name = {team.name: team for team in teams}
     matches = list(reversed(finish_match)) if newest_first else list(finish_match)
 
-    def get_name(wuzzyname):
-        match, _ = process.extractOne(wuzzyname, alias2full.keys())
-        return alias2full[match]
-
     match_count = len(matches)
     for match_index, (winner_raw, loser_raw, score, _) in enumerate(matches):
-        winner_name = get_name(winner_raw)
-        loser_name = get_name(loser_raw)
+        winner_name = resolve_team_name(winner_raw, alias2full)
+        loser_name = resolve_team_name(loser_raw, alias2full)
         winner = team_by_name[winner_name]
         loser = team_by_name[loser_name]
         winner_ratings = list(winner.rating)
@@ -289,10 +321,6 @@ def gen_win_matrix(
         alias2full[team.name] = team.name
         for alias in team.alias:
             alias2full[alias] = team.name
-    def get_name(wuzzyname):
-        # 模糊匹配得到准确名称
-        match, _ = process.extractOne(wuzzyname, alias2full.keys())
-        return alias2full[match]
     teams = apply_finished_matches_to_ratings(
         teams,
         system_names,
@@ -306,8 +334,8 @@ def gen_win_matrix(
     win_matrix = calculate_win_matrix(teams, hltv_exp=HLTV_EXP)
 
     for teama, teamb, _, _ in finish_match:
-        teama = get_name(teama)
-        teamb = get_name(teamb)
+        teama = resolve_team_name(teama, alias2full)
+        teamb = resolve_team_name(teamb, alias2full)
         win_matrix[teama][teamb] = 1
         win_matrix[teamb][teama] = 0
         
