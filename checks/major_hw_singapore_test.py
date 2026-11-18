@@ -18,7 +18,11 @@ import nonebot
 
 ROOT = Path(__file__).parents[1]
 ASSETS = ROOT / "assets"
-FRONT_ICONS = ROOT.parent / "csbot-front" / "public" / "team-icons" / "2026-singapore"
+FRONT_ICONS_CANDIDATES = (
+    ROOT.parent / "csbot-front" / "public" / "team-icons" / "2026-singapore",
+    ROOT / "dist" / "team-icons" / "2026-singapore",
+)
+FRONT_ICONS = next((p for p in FRONT_ICONS_CANDIDATES if p.is_dir()), FRONT_ICONS_CANDIDATES[0])
 STAGE1 = ASSETS / "2026-singapore-stage1.json"
 STAGE2_INVITES = ASSETS / "2026-singapore-stage2.invites.json"
 STAGE3_INVITES = ASSETS / "2026-singapore-stage3.invites.json"
