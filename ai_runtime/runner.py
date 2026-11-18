@@ -18,6 +18,7 @@ from .openai_support import (
     is_openai_endpoint,
     is_openai_non_reasoning_model,
     normalize_openai_base_url,
+    resolve_deepseek_aux,
     resolve_openai_proxy,
 )
 
@@ -141,11 +142,34 @@ def render_profile(env):
         if isinstance(value,dict): return {key:replace(item) for key,item in value.items()}
         return value
     profile=replace(json.loads((RUNTIME/"dsh/profile.json").read_text()))
+    # Dual-provider side channel: main chat/compaction/images stay on OpenAI,
+    # while memory distill + verification run on domestic direct deepseek-flash.
+    aux_enabled=bool(provider=="openai" and env.get("CSBOT_AUX_PROVIDER")=="deepseek-official"
+                     and env.get("CSBOT_AUX_MODEL") and env.get("DEEPSEEK_API_KEY"))
     if provider=="openai":
         for index,item in enumerate(profile):
             if item.get("id")=="llm-deepseek":
-                profile[index]={"id":"llm-deepseek","disabled":True}
+                if aux_enabled:
+                    deepseek_config=dict(item.get("config") or {})
+                    deepseek_config["models"]=[{
+                        "id":env["CSBOT_AUX_MODEL"],
+                        "contextWindow":int(env.get("CSBOT_AUX_CONTEXT_WINDOW","65536")),
+                        "maxTokens":8192,"inputModalities":["text"]}]
+                    profile[index]={"id":"llm-deepseek","config":deepseek_config}
+                else:
+                    profile[index]={"id":"llm-deepseek","disabled":True}
                 break
+        if aux_enabled:
+            for entry in profile:
+                if not isinstance(entry,dict): continue
+                for item in entry.get("insert") or []:
+                    if isinstance(item,dict) and item.get("id")=="mneme":
+                        mneme_config=dict(item.get("config") or {})
+                        mneme_config["summarizeProvider"]=env["CSBOT_AUX_PROVIDER"]
+                        mneme_config["summarizeModel"]=env["CSBOT_AUX_MODEL"]
+                        mneme_config["summarizeReasoningEffort"]="off"
+                        item["config"]=mneme_config
+                        break
         model=env["CSBOT_MODEL"]
         non_reasoning=is_openai_non_reasoning_model(model)
         model_profile={
@@ -222,6 +246,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                   run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=(),memory_actions=(),
                   openai_proxy_url: str | None=None, image_model: str | None=None,
                   search_url: str="", search_api_key: str="", enable_image_gen: bool | None=None,
+                  aux_url: str="", aux_api_key: str="", aux_model: str="",
                   on_usage=None):
     from .sandbox import ScriptSandbox
     use_openai=is_openai_endpoint(endpoint)
@@ -265,6 +290,18 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
             if llm_proxy:
                 env["CSBOT_LLM_PROXY_URL"]=llm_proxy
                 env["CSBOT_LLM_PROXY_HOST"]=(urlsplit(endpoint.strip()).hostname or "").lower()
+            # Side channel is resolved before the profile is rendered; without a
+            # DeepSeek credential everything degrades to the primary channel.
+            if not memory_only:
+                aux=resolve_deepseek_aux(endpoint,aux_url=aux_url,aux_api_key=aux_api_key,
+                                         aux_model=aux_model,search_url=search_url,
+                                         search_api_key=search_api_key)
+                if aux is not None:
+                    env["DEEPSEEK_API_KEY"]=aux["api_key"]
+                    env["DEEPSEEK_BASE_URL"]=aux["base_url"]
+                    env["CSBOT_AUX_PROVIDER"]=aux["provider"]
+                    env["CSBOT_AUX_MODEL"]=aux["model"]
+                    env["CSBOT_AUX_CONTEXT_WINDOW"]=os.getenv("CS_AI_AUX_CONTEXT_WINDOW","65536")
         else:
             env["DEEPSEEK_API_KEY"]=api_key
             env["DEEPSEEK_BASE_URL"]=endpoint
@@ -272,6 +309,17 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
         if image_gen_enabled:
             env["CSBOT_IMAGE_GEN_ENABLED"]="1"
         if not memory_only: env.update(web_environment(endpoint,api_key,search_url=search_url,search_api_key=search_api_key))
+        def _redact(value):
+            # Diagnostics are crash forensics only: neither side-channel keys nor
+            # the DeepSeek endpoint may ever appear in an operational log.
+            text=str(value)
+            for secret in (api_key,env.get("DEEPSEEK_API_KEY",""),env.get("CSBOT_SEARCH_API_KEY","")):
+                secret=str(secret or "").strip()
+                if secret: text=text.replace(secret,"[REDACTED]")
+            for target in (endpoint,env.get("DEEPSEEK_BASE_URL","")):
+                target=str(target or "").strip()
+                if target: text=text.replace(target,"[MODEL_ENDPOINT]")
+            return text
         paths=set(map(str,read_paths))
         if code_snapshot: paths.update(code_snapshot.files)
         # Reference images an edit may re-upload are tracked apart from plain
@@ -430,7 +478,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                     if process.returncode or not result:
                         raise RuntimeError("DSH process exited without a durable result")
                     if result.get("reason",{}).get("kind")!="completed":
-                        if diagnostics: diagnostics(str(result.get("reason", {})).replace(api_key,"[REDACTED]").replace(endpoint,"[MODEL_ENDPOINT]"))
+                        if diagnostics: diagnostics(_redact(result.get("reason", {})))
                         raise RuntimeError("DSH turn did not complete")
                     result["usage"]=usage_events
                     return result
@@ -446,6 +494,6 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                     await process.wait()
                 await errors
                 if diagnostics and error_tail:
-                    diagnostics(error_tail.decode(errors="replace").replace(api_key,"[REDACTED]").replace(endpoint,"[MODEL_ENDPOINT]"))
+                    diagnostics(_redact(error_tail.decode(errors="replace")))
                 for view in image_views:
                     view.unlink(missing_ok=True)

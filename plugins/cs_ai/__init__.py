@@ -47,6 +47,7 @@ from ai_runtime.media import media_cache
 from ai_runtime.openai_support import (
     is_openai_endpoint,
     normalize_openai_base_url,
+    resolve_guard_route,
     resolve_openai_proxy,
 )
 from sqlalchemy import select, func, case
@@ -174,8 +175,45 @@ async def _open_ai_client():
             await http_client.aclose()
 
 
-async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api: bool = False, on_usage: Any = None) -> QQOutputGuardResult:
-    guard_model = config.cs_ai_guard_model.strip() or await runtime_config.get("cs_ai_model")
+@asynccontextmanager
+async def _open_guard_client(default_model: str):
+    """Build the QQ-guard client: domestic direct DeepSeek, or the OpenAI proxy."""
+    route = resolve_guard_route(
+        primary_url=config.cs_ai_url,
+        primary_api_key=config.cs_ai_api_key,
+        primary_model=default_model,
+        openai_proxy_url=config.cs_ai_openai_proxy_url,
+        guard_url=config.cs_ai_guard_url,
+        guard_api_key=config.cs_ai_guard_api_key,
+        guard_model=config.cs_ai_guard_model,
+        aux_url=config.cs_ai_aux_url,
+        aux_api_key=config.cs_ai_aux_api_key,
+        aux_model=config.cs_ai_aux_model,
+        search_url=config.cs_ai_search_url,
+        search_api_key=config.cs_ai_search_api_key,
+    )
+    # trust_env=False is mandatory: a domestic direct call must never inherit the
+    # host HTTP(S)_PROXY, while the OpenAI fallback uses its explicit :7890 proxy.
+    http_client = httpx.AsyncClient(
+        proxy=route["proxy_url"] or None,
+        timeout=45.0 if route["proxy_url"] else 30.0,
+        trust_env=False,
+    )
+    client = AsyncOpenAI(
+        api_key=route["api_key"],
+        base_url=route["base_url"],
+        http_client=http_client,
+    )
+    try:
+        yield client, route
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+
+async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api: bool = False, guard_model: str = "", provider_name: str = "", on_usage: Any = None) -> QQOutputGuardResult:
+    effective_model = (guard_model or getattr(config, "cs_ai_guard_model", "")).strip() or await runtime_config.get("cs_ai_model")
+    effective_provider = provider_name.strip() or ("openai" if use_responses_api else "deepseek")
     last_error: Exception | None = None
     for attempt in range(2):
         try:
@@ -189,7 +227,7 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api
                 )
             if use_responses_api:
                 response = await client.responses.create(
-                    model=guard_model,
+                    model=effective_model,
                     reasoning={"effort": "low"},
                     store=False,
                     input=guard_messages,
@@ -208,7 +246,7 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api
                 )
                 if on_usage is not None and getattr(response, "usage", None) is not None:
                     from ai_runtime.usage import normalize_guard_usage
-                    on_usage(normalize_guard_usage(response.usage, provider="openai" if use_responses_api else "deepseek", model=str(getattr(response, "model", "") or guard_model)))
+                    on_usage(normalize_guard_usage(response.usage, provider=effective_provider, model=str(getattr(response, "model", "") or effective_model)))
                 raw_result = ""
                 for item in getattr(response, "output", None) or []:
                     if (
@@ -221,7 +259,7 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api
                     raw_result = getattr(response, "output_text", "") or ""
                 return parse_qq_guard_response(raw_result, draft)
             response = await client.chat.completions.create(
-                model=guard_model,
+                model=effective_model,
                 messages=cast(list[ChatCompletionMessageParam], guard_messages),
                 tools=cast(Any, [QQ_OUTPUT_GUARD_TOOL]),
                 tool_choice={
@@ -232,7 +270,7 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api
             )
             if on_usage is not None and getattr(response, "usage", None) is not None:
                 from ai_runtime.usage import normalize_guard_usage
-                on_usage(normalize_guard_usage(response.usage, provider="openai" if use_responses_api else "deepseek", model=str(getattr(response, "model", "") or guard_model)))
+                on_usage(normalize_guard_usage(response.usage, provider=effective_provider, model=str(getattr(response, "model", "") or effective_model)))
             message = response.choices[0].message
             raw_result = message.content or ""
             if message.tool_calls:
@@ -249,7 +287,8 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api
             return parse_qq_guard_response(raw_result, draft)
         except Exception as e:
             last_error = e
-            logger.warning(f"QQ output guard attempt {attempt + 1} failed: {e}")
+            # Only the exception type: provider errors may echo request context.
+            logger.warning(f"QQ output guard attempt {attempt + 1} failed ({type(e).__name__})")
     assert last_error is not None
     raise last_error
 
@@ -1079,9 +1118,10 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         if channel == "web": return output
         if config.cs_ai_output_guard_enabled:
             try:
-                async with _open_ai_client() as client:
+                async with _open_guard_client(model_name) as (client, route):
                     verdict = await _guard_qq_output(
-                        client, output, use_responses_api=is_openai_endpoint(config.cs_ai_url),
+                        client, output, use_responses_api=route["use_responses_api"],
+                        guard_model=route["model"], provider_name=route["provider"],
                         on_usage=lambda item: record_usage_for_run(
                             state_store(), run_id=chat_id, channel=channel,
                             group_id=gid, item=item, publish_fn=publish),
@@ -1097,7 +1137,9 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         factory=async_session_factory,chat_history=chat_history_db,archive=db.insert_chat_record,
         guard=guard,vision=config.cs_ai_vision,thinking=config.cs_ai_enable_thinking,
         openai_proxy_url=config.cs_ai_openai_proxy_url,image_model=config.cs_ai_image_model,
-        search_url=config.cs_ai_search_url,search_api_key=config.cs_ai_search_api_key)
+        search_url=config.cs_ai_search_url,search_api_key=config.cs_ai_search_api_key,
+        aux_url=config.cs_ai_aux_url,aux_api_key=config.cs_ai_aux_api_key,
+        aux_model=config.cs_ai_aux_model)
 
 
 def _ai_chat_link(chat_id: str) -> str:

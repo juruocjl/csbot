@@ -389,6 +389,117 @@ class GuardUsageTest(unittest.TestCase):
         self.assertEqual(verdict.text, '草稿')
 
 
+class DeepSeekSideChannelTest(unittest.TestCase):
+    """Side-channel calls must bill as `deepseek`, never `deepseek-official`."""
+
+    def test_dsh_memory_scenes_canonicalize_and_price(self):
+        for scene in ('memory_extract', 'memory_verify'):
+            with self.subTest(scene=scene):
+                event = _usage_event(
+                    provider='deepseek-official', model='deepseek-flash', scene=scene,
+                    uncached_input_tokens=600, cached_tokens=400,
+                    cache_write_tokens=0, output_tokens=250,
+                )
+                with patch('ai_runtime.usage._beijing_peak', return_value=False):
+                    idle = normalize_dsh_usage(event)
+                with patch('ai_runtime.usage._beijing_peak', return_value=True):
+                    peak = normalize_dsh_usage(event)
+                self.assertEqual(idle['provider'], 'deepseek')
+                self.assertEqual(idle['scene'], scene)
+                self.assertEqual(idle['input_tokens'], 1000)
+                self.assertEqual(
+                    idle['input_tokens'],
+                    idle['uncached_input_tokens']
+                    + idle['cached_tokens']
+                    + idle['cache_write_tokens'],
+                )
+                self.assertAlmostEqual(
+                    idle['cost_usd'],
+                    round((600 * IDLE_DEEPSEEK[0] + 400 * IDLE_DEEPSEEK[1]
+                           + 250 * IDLE_DEEPSEEK[2]) / 1e6, 8),
+                )
+                self.assertAlmostEqual(
+                    idle['nocache_cost_usd'],
+                    round((1000 * IDLE_DEEPSEEK[0] + 250 * IDLE_DEEPSEEK[2]) / 1e6, 8),
+                )
+                self.assertAlmostEqual(
+                    peak['cost_usd'],
+                    round((600 * PEAK_DEEPSEEK[0] + 400 * PEAK_DEEPSEEK[1]
+                           + 250 * PEAK_DEEPSEEK[2]) / 1e6, 8),
+                )
+
+    def test_guard_usage_canonicalizes_official_alias(self):
+        item = normalize_guard_usage(
+            types.SimpleNamespace(
+                prompt_tokens=120,
+                prompt_cache_hit_tokens=40,
+                prompt_cache_miss_tokens=80,
+                completion_tokens=20,
+            ),
+            provider='deepseek-official', model='deepseek-flash',
+        )
+        self.assertEqual(item['provider'], 'deepseek')
+        self.assertEqual(item['input_tokens'], 120)
+        self.assertEqual(item['uncached_input_tokens'], 80)
+        self.assertEqual(item['cached_tokens'], 40)
+
+    def test_single_run_mixed_providers_stay_separate_in_the_ledger(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = StateStore(Path(tmp.name) / 'state.sqlite3')
+        self.addCleanup(store.close)
+        with patch('ai_runtime.usage._beijing_peak', return_value=False):
+            items = [
+                normalize_dsh_usage(_usage_event(
+                    provider='openai', model='gpt-6.2-sol', scene='chat',
+                    uncached_input_tokens=1000, output_tokens=100,
+                )),
+                normalize_guard_usage(
+                    types.SimpleNamespace(
+                        prompt_tokens=200, prompt_cache_hit_tokens=50, completion_tokens=10,
+                    ),
+                    provider='deepseek-official', model='deepseek-flash',
+                ),
+                normalize_dsh_usage(_usage_event(
+                    provider='deepseek-official', model='deepseek-flash',
+                    scene='memory_extract', uncached_input_tokens=300,
+                    cached_tokens=100, output_tokens=30,
+                )),
+                normalize_dsh_usage(_usage_event(
+                    provider='deepseek-official', model='deepseek-flash',
+                    scene='memory_verify', uncached_input_tokens=120,
+                    cached_tokens=80, output_tokens=12,
+                )),
+            ]
+        for item in items:
+            record_usage_for_run(
+                store, run_id='mix-1', channel='qq', group_id='g1', item=item
+            )
+        rows = store.list_usage_after()['items']
+        self.assertEqual(
+            [(row['provider'], row['model'], row['scene']) for row in rows],
+            [
+                ('openai', 'gpt-6.2-sol', 'chat'),
+                ('deepseek', 'deepseek-flash', 'output_guard'),
+                ('deepseek', 'deepseek-flash', 'memory_extract'),
+                ('deepseek', 'deepseek-flash', 'memory_verify'),
+            ],
+        )
+        summary = store.run_usage_summary('mix-1')
+        self.assertEqual(summary['calls'], 4)
+        self.assertEqual(summary['input_tokens'], sum(row['input_tokens'] for row in rows))
+        self.assertEqual(summary['output_tokens'], sum(row['output_tokens'] for row in rows))
+        self.assertEqual(summary['cached_tokens'], sum(row['cached_tokens'] for row in rows))
+        self.assertAlmostEqual(
+            summary['cost_usd'], round(sum(row['cost_usd'] for row in rows), 8)
+        )
+        self.assertEqual(
+            summary['cache_hit_pct'],
+            round(sum(row['cached_tokens'] for row in rows)
+                  / summary['input_tokens'] * 100.0, 1),
+        )
+
+
 class StoreLedgerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -678,6 +789,15 @@ class BridgeHookTest(unittest.TestCase):
         for field in ('uncached_input_tokens', 'cached_tokens', 'cache_write_tokens',
                       'output_tokens', 'reasoning_tokens'):
             self.assertIn(f'{field}: Number(chunk.usage.', source)
+        # Dual-provider side channel: memory verify/distill may target the
+        # domestic direct provider, and billing must read `deepseek`.
+        for marker in (
+            'CSBOT_AUX_PROVIDER', 'CSBOT_AUX_MODEL', 'provider:auxProvider',
+            'model:auxModel', 'canonicalProvider',
+            "value.toLowerCase() === 'deepseek-official' ? 'deepseek'",
+            'provider: canonicalProvider(options.provider || provider)',
+        ):
+            self.assertIn(marker, source)
 
 
 if __name__ == '__main__':

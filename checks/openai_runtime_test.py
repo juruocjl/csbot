@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # pragma: no cover - Windows local checks only
         flock=lambda *args, **kwargs: None, LOCK_EX=2, LOCK_NB=4
     )
 
+import httpx
 from PIL import Image
 from openai import AsyncOpenAI
 
@@ -38,11 +39,16 @@ from ai_runtime.media import MediaCache
 from ai_runtime.openai_support import (
     MAX_REFERENCE_IMAGES,
     generate_openai_image,
+    is_official_deepseek_search_url,
     is_openai_endpoint,
     is_openai_non_reasoning_model,
+    normalize_deepseek_base_url,
     normalize_openai_base_url,
     resolve_authorized_image_paths,
+    resolve_deepseek_aux,
+    resolve_guard_route,
     resolve_openai_proxy,
+    validate_llm_base_url,
     validate_loopback_http_proxy,
 )
 from ai_runtime.runner import render_profile
@@ -76,6 +82,9 @@ def _load_guard_function():
     )
     namespace = {
         "AsyncOpenAI": AsyncOpenAI,
+        "ChatCompletionMessageParam": __import__(
+            "openai.types.chat", fromlist=["ChatCompletionMessageParam"]
+        ).ChatCompletionMessageParam,
         "QQOutputGuardResult": QQOutputGuardResult,
         "QQ_OUTPUT_GUARD_TOOL": QQ_OUTPUT_GUARD_TOOL,
         "build_qq_guard_messages": build_qq_guard_messages,
@@ -156,6 +165,195 @@ class OpenAIHelpersTest(unittest.TestCase):
         self.assertTrue(is_openai_non_reasoning_model("GPT-3.5-turbo"))
 
 
+class DeepSeekAuxRouteTest(unittest.TestCase):
+    """Domestic direct `deepseek-flash` side channel resolution (no egress)."""
+
+    BASE_ENV = {
+        "CS_AI_PROVIDER": "",
+        "CS_AI_AUX_ENABLE": "1",
+        "CS_AI_AUX_URL": "",
+        "CS_AI_AUX_API_KEY": "",
+        "CS_AI_AUX_MODEL": "",
+        "CS_AI_SEARCH_URL": "",
+        "CS_AI_SEARCH_API_KEY": "",
+        "CS_AI_GUARD_URL": "",
+        "CS_AI_GUARD_API_KEY": "",
+        "CS_AI_GUARD_MODEL": "",
+        "CS_AI_GUARD_PROVIDER": "",
+    }
+
+    def env(self, **overrides):
+        values = dict(self.BASE_ENV)
+        values.update(overrides)
+        return patch.dict(os.environ, values, clear=False)
+
+    def test_url_validation_and_normalization(self):
+        self.assertEqual(
+            validate_llm_base_url("https://api.deepseek.com/v1/"),
+            "https://api.deepseek.com/v1",
+        )
+        self.assertEqual(
+            validate_llm_base_url("http://127.0.0.1:18080"), "http://127.0.0.1:18080"
+        )
+        for bad in (
+            "http://api.deepseek.com",
+            "https://user:pass@api.deepseek.com",
+            "https://api.deepseek.com/v1?x=1",
+            "https://api.deepseek.com/v1#frag",
+            "ftp://api.deepseek.com",
+            "",
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_llm_base_url(bad)
+        self.assertEqual(
+            normalize_deepseek_base_url("https://api.deepseek.com/v1"),
+            "https://api.deepseek.com",
+        )
+        self.assertEqual(
+            normalize_deepseek_base_url("https://api.deepseek.com/"),
+            "https://api.deepseek.com",
+        )
+        self.assertEqual(is_official_deepseek_search_url(""), True)
+        self.assertEqual(
+            is_official_deepseek_search_url("https://api.deepseek.com/anthropic/v1"), True
+        )
+        for bad in (
+            "https://other.example/anthropic/v1",
+            "http://api.deepseek.com/anthropic/v1",
+            "https://api.deepseek.com:8443/anthropic/v1",
+            "https://user:pass@api.deepseek.com/anthropic/v1",
+        ):
+            with self.subTest(bad=bad):
+                self.assertFalse(is_official_deepseek_search_url(bad))
+
+    def test_official_search_key_enables_direct_aux(self):
+        for search_url in ("", "https://api.deepseek.com/anthropic/v1"):
+            with self.subTest(search_url=search_url), self.env(
+                CS_AI_SEARCH_API_KEY="ds-search-key", CS_AI_SEARCH_URL=search_url
+            ):
+                aux = resolve_deepseek_aux("https://api.openai.com/v1")
+                self.assertIsNotNone(aux)
+                self.assertEqual(aux["provider"], "deepseek-official")
+                self.assertEqual(aux["ledger_provider"], "deepseek")
+                self.assertEqual(aux["base_url"], "https://api.deepseek.com")
+                self.assertEqual(aux["api_key"], "ds-search-key")
+                self.assertEqual(aux["model"], "deepseek-flash")
+
+    def test_third_party_search_url_never_reuses_the_key(self):
+        with self.env(
+            CS_AI_SEARCH_API_KEY="ds-search-key",
+            CS_AI_SEARCH_URL="https://other.example/anthropic/v1",
+        ):
+            self.assertIsNone(resolve_deepseek_aux("https://api.openai.com/v1"))
+        with self.env(
+            CS_AI_SEARCH_API_KEY="ds-search-key",
+            CS_AI_AUX_URL="http://127.0.0.1:18080",
+        ):
+            with self.assertRaises(ValueError):
+                resolve_deepseek_aux("https://api.openai.com/v1")
+
+    def test_explicit_key_and_url_variants(self):
+        with self.env(CS_AI_AUX_API_KEY="ds-aux-key"):
+            aux = resolve_deepseek_aux("https://api.openai.com/v1")
+            self.assertEqual(aux["base_url"], "https://api.deepseek.com")
+            self.assertEqual(aux["api_key"], "ds-aux-key")
+        with self.env(CS_AI_AUX_API_KEY="ds-local-key", CS_AI_AUX_URL="http://127.0.0.1:18080"):
+            local = resolve_deepseek_aux("https://api.openai.com/v1")
+            self.assertEqual(local["base_url"], "http://127.0.0.1:18080")
+        with self.env(CS_AI_AUX_API_KEY="ds-local-key", CS_AI_AUX_URL="https://api.deepseek.com/v1"):
+            official = resolve_deepseek_aux("https://api.openai.com/v1")
+            self.assertEqual(official["base_url"], "https://api.deepseek.com")
+        with self.env(CS_AI_AUX_API_KEY="ds-local-key", CS_AI_AUX_MODEL="deepseek-flash"):
+            self.assertEqual(
+                resolve_deepseek_aux("https://api.openai.com/v1")["model"], "deepseek-flash"
+            )
+        for bad_url in ("http://api.deepseek.com", "https://user:pass@api.deepseek.com"):
+            with self.subTest(bad_url=bad_url), self.env(
+                CS_AI_AUX_API_KEY="ds-local-key", CS_AI_AUX_URL=bad_url
+            ):
+                with self.assertRaises(ValueError):
+                    resolve_deepseek_aux("https://api.openai.com/v1")
+
+    def test_aux_disabled_without_key_or_on_native_deepseek(self):
+        with self.env():
+            self.assertIsNone(resolve_deepseek_aux("https://api.openai.com/v1"))
+        with self.env(CS_AI_SEARCH_API_KEY="ds-search-key", CS_AI_AUX_ENABLE="0"):
+            self.assertIsNone(resolve_deepseek_aux("https://api.openai.com/v1"))
+        with self.env(CS_AI_AUX_API_KEY="ds-aux-key"):
+            self.assertIsNone(resolve_deepseek_aux("https://api.deepseek.com"))
+
+    def test_guard_route_prefers_direct_deepseek_then_falls_back(self):
+        with self.env(CS_AI_SEARCH_API_KEY="ds-search-key"):
+            route = resolve_guard_route(
+                primary_url="https://api.openai.com/v1",
+                primary_api_key="sk-primary",
+                primary_model="gpt-6.2-sol",
+                openai_proxy_url="http://127.0.0.1:7890",
+            )
+        self.assertEqual(
+            route,
+            {
+                "base_url": "https://api.deepseek.com",
+                "api_key": "ds-search-key",
+                "model": "deepseek-flash",
+                "provider": "deepseek",
+                "use_responses_api": False,
+                "proxy_url": "",
+            },
+        )
+        with self.env():
+            fallback = resolve_guard_route(
+                primary_url="https://api.openai.com/v1",
+                primary_api_key="sk-primary",
+                primary_model="gpt-6.2-sol",
+                openai_proxy_url="http://127.0.0.1:7890",
+            )
+        self.assertEqual(fallback["base_url"], "https://api.openai.com/v1")
+        self.assertEqual(fallback["api_key"], "sk-primary")
+        self.assertEqual(fallback["model"], "gpt-6.2-sol")
+        self.assertEqual(fallback["provider"], "openai")
+        self.assertTrue(fallback["use_responses_api"])
+        self.assertEqual(fallback["proxy_url"], "http://127.0.0.1:7890")
+        with self.env(CS_AI_GUARD_URL="https://guard.example.com/v1"):
+            with self.assertRaises(ValueError):
+                resolve_guard_route(
+                    primary_url="https://api.openai.com/v1",
+                    primary_api_key="sk-primary",
+                    primary_model="gpt-6.2-sol",
+                )
+
+    def test_guard_route_explicit_and_same_origin_reuse(self):
+        with self.env(
+            CS_AI_GUARD_URL="https://api.deepseek.com/v1",
+            CS_AI_GUARD_KEY="",  # no dedicated key: different origin from primary
+        ):
+            with self.assertRaises(ValueError):
+                resolve_guard_route(
+                    primary_url="https://api.openai.com/v1",
+                    primary_api_key="sk-primary",
+                    primary_model="gpt-6.2-sol",
+                )
+        with self.env(CS_AI_GUARD_URL="https://api.openai.com/v1"):
+            same_origin = resolve_guard_route(
+                primary_url="https://api.openai.com/v1",
+                primary_api_key="sk-primary",
+                primary_model="gpt-6.2-sol",
+                openai_proxy_url="http://127.0.0.1:7890",
+            )
+        self.assertEqual(same_origin["api_key"], "sk-primary")
+        self.assertTrue(same_origin["use_responses_api"])
+        with self.env(CS_AI_GUARD_URL="", CS_AI_GUARD_MODEL="deepseek-flash"):
+            # A dedicated model without a dedicated endpoint still resolves the
+            # direct side channel and honours the guard-model override.
+            with self.env(CS_AI_SEARCH_API_KEY="ds-search-key"):
+                route = resolve_guard_route(
+                    primary_url="https://api.openai.com/v1",
+                    primary_api_key="sk-primary",
+                    primary_model="gpt-6.2-sol",
+                )
+        self.assertEqual((route["provider"], route["model"]), ("deepseek", "deepseek-flash"))
+
+
 class RenderProfileTest(unittest.TestCase):
     def env(self, **overrides):
         env = {
@@ -217,6 +415,60 @@ class RenderProfileTest(unittest.TestCase):
         provider = self.pi_ai_config(profile)["providers"]["openai"]
         self.assertFalse(provider["models"][0]["reasoningEfforts"])
         self.assertNotIn("reasoning", provider)
+
+    @staticmethod
+    def plugin_config(profile, ident):
+        for entry in profile:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("id") == ident:
+                return entry.get("config")
+            for item in entry.get("insert") or []:
+                if item.get("id") == ident:
+                    return item.get("config")
+        return None
+
+    def test_openai_mode_with_deepseek_aux_keeps_dual_providers(self):
+        profile = render_profile(self.env(
+            CSBOT_PROVIDER="openai",
+            CSBOT_AUX_PROVIDER="deepseek-official",
+            CSBOT_AUX_MODEL="deepseek-flash",
+            DEEPSEEK_API_KEY="ds-test",
+        ))
+        default_model = next(
+            item
+            for entry in profile
+            for item in entry.get("insert", [])
+            if item.get("id") == "agent-default-model"
+        )
+        self.assertEqual(
+            default_model["config"], {"provider": "openai", "model": "gpt-6.2-sol"}
+        )
+        self.assertIsNotNone(self.pi_ai_config(profile))
+        llm = next(item for item in profile if item.get("id") == "llm-deepseek")
+        self.assertNotIn("disabled", llm)
+        self.assertEqual(
+            llm["config"]["models"],
+            [
+                {
+                    "id": "deepseek-flash",
+                    "contextWindow": 65536,
+                    "maxTokens": 8192,
+                    "inputModalities": ["text"],
+                }
+            ],
+        )
+        mneme = self.plugin_config(profile, "mneme")
+        self.assertEqual(mneme["summarizeProvider"], "deepseek-official")
+        self.assertEqual(mneme["summarizeModel"], "deepseek-flash")
+        self.assertEqual(mneme["summarizeReasoningEffort"], "off")
+        self.assertEqual(self.plugin_config(profile, "compaction"), {})
+
+    def test_openai_mode_without_aux_key_stays_single_provider(self):
+        profile = render_profile(self.env(CSBOT_PROVIDER="openai"))
+        llm = next(item for item in profile if item.get("id") == "llm-deepseek")
+        self.assertTrue(llm["disabled"])
+        self.assertNotIn("summarizeProvider", self.plugin_config(profile, "mneme") or {})
 
 
 def _png_bytes(color=(10, 20, 30), size=(8, 8)):
@@ -659,6 +911,127 @@ class GuardResponsesTest(unittest.TestCase):
         self.assertEqual((rewritten.decision, rewritten.text), ("rewrite", "改写后的文本"))
         blocked, _ = self.run_guard({"decision": "block", "text": "", "reason": "risk"})
         self.assertEqual(blocked.decision, "block")
+
+
+class _GuardChatHandler(BaseHTTPRequestHandler):
+    """Loopback stand-in for DeepSeek `/chat/completions` (no network egress)."""
+
+    paths = []
+    payloads = []
+    headers_seen = []
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        _GuardChatHandler.paths.append(self.path)
+        _GuardChatHandler.headers_seen.append({k.lower(): v for k, v in self.headers.items()})
+        try:
+            _GuardChatHandler.payloads.append(json.loads(raw.decode("utf-8") or "{}"))
+        except ValueError:
+            _GuardChatHandler.payloads.append({})
+        body = json.dumps({
+            "id": "chatcmpl-guard-fixture",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "deepseek-flash",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_guard_1",
+                        "type": "function",
+                        "function": {
+                            "name": "submit_qq_guard_decision",
+                            "arguments": json.dumps(
+                                {"decision": "allow", "text": "", "reason": "safe"}
+                            ),
+                        },
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 20,
+                "total_tokens": 140,
+                "prompt_cache_hit_tokens": 40,
+                "prompt_cache_miss_tokens": 80,
+                "prompt_tokens_details": {"cached_tokens": 40},
+            },
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+class GuardDeepSeekLoopbackTest(unittest.TestCase):
+    def test_direct_chat_completions_guard_records_deepseek_ledger(self):
+        _GuardChatHandler.paths = []
+        _GuardChatHandler.payloads = []
+        _GuardChatHandler.headers_seen = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _GuardChatHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        collected = []
+        guard = _load_guard_function()
+
+        async def run():
+            http_client = httpx.AsyncClient(trust_env=False)
+            client = AsyncOpenAI(
+                api_key="ds-guard-key", base_url=base_url, http_client=http_client
+            )
+            try:
+                return await guard(
+                    client,
+                    "草稿",
+                    use_responses_api=False,
+                    guard_model="deepseek-flash",
+                    provider_name="deepseek",
+                    on_usage=collected.append,
+                )
+            finally:
+                await client.close()
+                await http_client.aclose()
+
+        try:
+            verdict = asyncio.run(run())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
+        self.assertEqual(verdict.decision, "allow")
+        self.assertEqual(verdict.text, "草稿")
+        self.assertEqual(_GuardChatHandler.paths, ["/chat/completions"])
+        headers = _GuardChatHandler.headers_seen[0]
+        self.assertEqual(headers["authorization"], "Bearer ds-guard-key")
+        payload = _GuardChatHandler.payloads[0]
+        self.assertEqual(payload["model"], "deepseek-flash")
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(
+            payload["tool_choice"]["function"]["name"], "submit_qq_guard_decision"
+        )
+        self.assertEqual(len(collected), 1)
+        item = collected[0]
+        self.assertEqual(item["provider"], "deepseek")
+        self.assertEqual(item["model"], "deepseek-flash")
+        self.assertEqual(item["scene"], "output_guard")
+        self.assertEqual(item["input_tokens"], 120)
+        self.assertEqual(item["uncached_input_tokens"], 80)
+        self.assertEqual(item["cached_tokens"], 40)
+        self.assertEqual(item["output_tokens"], 20)
+        self.assertEqual(
+            item["input_tokens"],
+            item["uncached_input_tokens"] + item["cached_tokens"] + item["cache_write_tokens"],
+        )
 
 
 if __name__ == "__main__":

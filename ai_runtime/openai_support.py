@@ -12,6 +12,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import re
+from typing import Any
 import uuid
 from urllib.parse import urlsplit
 
@@ -23,6 +24,10 @@ from .usage import normalize_image_usage
 DEFAULT_OPENAI_PROXY = "http://127.0.0.1:7890"
 DEFAULT_OPENAI_MODEL = "gpt-6.2-sol"
 DEFAULT_IMAGE_MODEL = "gpt-image-2.6-sunburst"
+# Domestic direct-dial DeepSeek side channels (guard / memory distill / verify).
+# They never traverse the cross-border loopback proxy.
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_DEEPSEEK_AUX_MODEL = "deepseek-flash"
 
 IMAGE_SIZES = {"1024x1024", "1536x1024", "1024x1536", "auto"}
 IMAGE_QUALITIES = {"low", "medium", "high", "auto"}
@@ -112,6 +117,213 @@ def resolve_openai_proxy(endpoint: str, configured_proxy: str | None = None) -> 
 def is_openai_non_reasoning_model(model: str) -> bool:
     name = str(model or "").strip().lower()
     return name.startswith(("gpt-4", "gpt-3.5"))
+
+
+def validate_llm_base_url(url: str, *, name: str = "LLM URL") -> str:
+    """Accept only a credential-free HTTPS base, or loopback HTTP for local checks."""
+    raw = str(url or "").strip().rstrip("/")
+    parsed = urlsplit(raw)
+    try:
+        parsed.port
+    except ValueError:
+        raise ValueError(
+            f"{name} must be a trusted HTTPS endpoint (or loopback HTTP for tests) "
+            "without credentials or query"
+        ) from None
+    loopback_http = parsed.scheme == "http" and (parsed.hostname or "").lower() in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }
+    if (
+        not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or (parsed.scheme != "https" and not loopback_http)
+    ):
+        raise ValueError(
+            f"{name} must be a trusted HTTPS endpoint (or loopback HTTP for tests) "
+            "without credentials or query"
+        )
+    return raw
+
+
+def normalize_deepseek_base_url(url: str) -> str:
+    """Normalize the official DeepSeek origin so both SDK shapes agree."""
+    raw = validate_llm_base_url(url, name="DeepSeek URL")
+    parsed = urlsplit(raw)
+    if (parsed.hostname or "").lower() == "api.deepseek.com" and parsed.path in ("", "/", "/v1"):
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return raw
+
+
+def is_official_deepseek_search_url(search_url: str) -> bool:
+    """True only for the official DeepSeek Messages origin (or the empty default).
+
+    Same-origin credential rule: a third-party search gateway or a local
+    `search-fixture` key must never be replayed against `api.deepseek.com`.
+    """
+    raw = str(search_url or "").strip()
+    if not raw:
+        return True
+    parsed = urlsplit(raw)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and (parsed.hostname or "").lower() == "api.deepseek.com"
+        and port in (None, 443)
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlsplit(str(url or "").strip())
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return parsed.scheme, (parsed.hostname or "").lower(), port
+
+
+def resolve_deepseek_aux(
+    endpoint: str,
+    *,
+    aux_url: str = "",
+    aux_api_key: str = "",
+    aux_model: str = "",
+    search_url: str = "",
+    search_api_key: str = "",
+    provider_override: str = "",
+) -> dict[str, str] | None:
+    """Resolve the domestic direct `deepseek-flash` side channel, or None.
+
+    None is a graceful fallback to the primary model channel: a pure-OpenAI
+    deployment (or a native DeepSeek primary) is untouched. Secrets are only
+    ever returned to the caller, never logged or echoed.
+    """
+    if not is_openai_endpoint(endpoint, provider_override):
+        return None
+    if os.getenv("CS_AI_AUX_ENABLE", "1").strip() == "0":
+        return None
+    explicit_key = (aux_api_key or os.getenv("CS_AI_AUX_API_KEY", "")).strip()
+    explicit_url = (aux_url or os.getenv("CS_AI_AUX_URL", "")).strip()
+    model = (aux_model or os.getenv("CS_AI_AUX_MODEL", "")).strip() or DEFAULT_DEEPSEEK_AUX_MODEL
+    if explicit_key:
+        base_url = normalize_deepseek_base_url(explicit_url or DEFAULT_DEEPSEEK_BASE_URL)
+        return {
+            "provider": "deepseek-official",
+            "ledger_provider": "deepseek",
+            "base_url": base_url,
+            "api_key": explicit_key,
+            "model": model,
+        }
+    cand_search_key = (search_api_key or os.getenv("CS_AI_SEARCH_API_KEY", "")).strip()
+    cand_search_url = (search_url or os.getenv("CS_AI_SEARCH_URL", "")).strip()
+    if cand_search_key and is_official_deepseek_search_url(cand_search_url):
+        if explicit_url:
+            scheme, hostname, port = _origin(explicit_url)
+            if scheme != "https" or hostname != "api.deepseek.com" or port not in (None, 443):
+                raise ValueError(
+                    "CS_AI_AUX_URL outside api.deepseek.com requires CS_AI_AUX_API_KEY"
+                )
+        base_url = normalize_deepseek_base_url(explicit_url or DEFAULT_DEEPSEEK_BASE_URL)
+        return {
+            "provider": "deepseek-official",
+            "ledger_provider": "deepseek",
+            "base_url": base_url,
+            "api_key": cand_search_key,
+            "model": model,
+        }
+    return None
+
+
+def resolve_guard_route(
+    *,
+    primary_url: str,
+    primary_api_key: str,
+    primary_model: str,
+    openai_proxy_url: str | None = None,
+    guard_url: str = "",
+    guard_api_key: str = "",
+    guard_model: str = "",
+    aux_url: str = "",
+    aux_api_key: str = "",
+    aux_model: str = "",
+    search_url: str = "",
+    search_api_key: str = "",
+) -> dict[str, Any]:
+    """Pick the QQ output-guard route: explicit guard, then DeepSeek aux, then primary."""
+    g_url = (guard_url or os.getenv("CS_AI_GUARD_URL", "")).strip()
+    g_key = (guard_api_key or os.getenv("CS_AI_GUARD_API_KEY", "")).strip()
+    g_model = (guard_model or os.getenv("CS_AI_GUARD_MODEL", "")).strip()
+    g_provider_override = os.getenv("CS_AI_GUARD_PROVIDER", "").strip()
+    if g_key or g_url:
+        if g_url and not g_key and _origin(g_url) != _origin(primary_url):
+            # A credential is only ever replayed on its own HTTPS origin.
+            raise ValueError("CS_AI_GUARD_URL requires CS_AI_GUARD_API_KEY")
+        raw_target = g_url or DEFAULT_DEEPSEEK_BASE_URL
+        if is_openai_endpoint(raw_target, g_provider_override):
+            return {
+                "base_url": normalize_openai_base_url(
+                    validate_llm_base_url(raw_target, name="CS_AI_GUARD_URL")
+                ),
+                "api_key": g_key or primary_api_key,
+                "model": g_model or primary_model,
+                "provider": "openai",
+                "use_responses_api": True,
+                "proxy_url": resolve_openai_proxy(raw_target, openai_proxy_url),
+            }
+        return {
+            "base_url": normalize_deepseek_base_url(raw_target),
+            "api_key": g_key or primary_api_key,
+            "model": g_model or DEFAULT_DEEPSEEK_AUX_MODEL,
+            "provider": "deepseek",
+            "use_responses_api": False,
+            "proxy_url": "",
+        }
+    if g_provider_override.lower() != "openai":
+        aux = resolve_deepseek_aux(
+            primary_url,
+            aux_url=aux_url,
+            aux_api_key=aux_api_key,
+            aux_model=aux_model,
+            search_url=search_url,
+            search_api_key=search_api_key,
+        )
+        if aux is not None:
+            return {
+                "base_url": aux["base_url"],
+                "api_key": aux["api_key"],
+                "model": g_model or aux["model"],
+                "provider": "deepseek",
+                "use_responses_api": False,
+                "proxy_url": "",
+            }
+    if is_openai_endpoint(primary_url):
+        return {
+            "base_url": normalize_openai_base_url(primary_url),
+            "api_key": primary_api_key,
+            "model": g_model or primary_model,
+            "provider": "openai",
+            "use_responses_api": True,
+            "proxy_url": resolve_openai_proxy(primary_url, openai_proxy_url),
+        }
+    return {
+        "base_url": str(primary_url or "").strip().rstrip("/"),
+        "api_key": primary_api_key,
+        "model": g_model or primary_model,
+        "provider": "deepseek",
+        "use_responses_api": False,
+        "proxy_url": "",
+    }
 
 
 def _safe_error_text(response: httpx.Response, api_key: str) -> str:

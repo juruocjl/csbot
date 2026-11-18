@@ -106,7 +106,8 @@ async def authorized_image(factory,gid,image_id):
 async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoint,api_key,
               factory,chat_history,archive,guard=None,vision=False,thinking=False,
               openai_proxy_url: str | None = None, image_model: str | None = None,
-              search_url: str = "", search_api_key: str = ""):
+              search_url: str = "", search_api_key: str = "",
+              aux_url: str = "", aux_api_key: str = "", aux_model: str = ""):
     store=state_store()
     row=register(chat_id,gid,uid,prompt,channel,conversation)
     if row["status"]=="completed": return row["response"]
@@ -183,6 +184,7 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     run_id=chat_id,on_event=lambda event:publish(chat_id,event),on_images=images,on_started=started,
                     openai_proxy_url=openai_proxy_url,image_model=image_model,
                     search_url=search_url,search_api_key=search_api_key,
+                    aux_url=aux_url,aux_api_key=aux_api_key,aux_model=aux_model,
                     on_usage=lambda item: record_usage_for_run(store,run_id=chat_id,channel=channel,group_id=gid,item=item,publish_fn=publish))
                 output="\n\n".join(item["content"] for item in result["messages"])
                 if not output.strip():

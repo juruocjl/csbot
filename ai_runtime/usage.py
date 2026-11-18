@@ -89,6 +89,18 @@ def _is_deepseek(provider: str, model: str) -> bool:
     return "deepseek" in str(provider or "").lower() or "deepseek" in str(model or "").lower()
 
 
+def _canonical_provider(provider: str, model: str = "") -> str:
+    """Fold provider aliases so the ledger always shows `deepseek` or `openai`."""
+    name = str(provider or "").strip().lower()
+    if name in {"deepseek", "deepseek-official"}:
+        return "deepseek"
+    if name == "openai":
+        return "openai"
+    if not name and "deepseek" in str(model or "").lower():
+        return "deepseek"
+    return str(provider or "").strip()
+
+
 def _beijing_peak(now: datetime | None = None) -> bool:
     moment = now or datetime.now(_DEEPSEEK_OFFSET)
     if moment.tzinfo is None:
@@ -277,6 +289,7 @@ def normalize_dsh_usage(event: Mapping[str, Any]) -> dict:
     data = event if isinstance(event, Mapping) else {}
     provider = str(data.get("provider") or "")
     model = str(data.get("model") or "")
+    provider = _canonical_provider(provider, model)
     uncached = max(0, _as_int(data.get("uncached_input_tokens")))
     cached = max(0, _as_int(data.get("cached_tokens")))
     cache_write = max(0, _as_int(data.get("cache_write_tokens")))
@@ -420,6 +433,7 @@ def normalize_image_usage(
 
 def normalize_guard_usage(usage_obj: Any, *, provider: str, model: str) -> dict:
     """Normalize QQ output-guard usage from `/v1/responses` or chat completions."""
+    provider = _canonical_provider(provider, model)
     raw_input = max(
         0, _as_int(_get(usage_obj, "input_tokens", _get(usage_obj, "prompt_tokens", 0)))
     )
@@ -428,10 +442,13 @@ def normalize_guard_usage(usage_obj: Any, *, provider: str, model: str) -> dict:
         or _get(usage_obj, "prompt_tokens_details")
         or {}
     )
-    raw_cached = _get(details, "cached_tokens", None)
-    if raw_cached is None:
-        raw_cached = _get(usage_obj, "prompt_cache_hit_tokens", 0)
-    cached = max(0, _as_int(raw_cached))
+    raw_cached = _get(details, "cached_tokens", 0)
+    # DeepSeek /chat/completions reports cache hits on the top-level usage object.
+    cached = max(
+        0,
+        _as_int(raw_cached),
+        _as_int(_get(usage_obj, "prompt_cache_hit_tokens", 0)),
+    )
     cache_write = max(
         0,
         _as_int(
@@ -447,7 +464,11 @@ def normalize_guard_usage(usage_obj: Any, *, provider: str, model: str) -> dict:
     reasoning = max(0, _as_int(_get(output_details, "reasoning_tokens", 0)))
     image_input = max(0, _as_int(_get(details, "image_tokens", 0)))
     # The Responses API reports `input_tokens` including cached prompt tokens.
-    uncached = max(0, raw_input - cached - cache_write)
+    if raw_input > 0:
+        uncached = max(0, raw_input - cached - cache_write)
+    else:
+        # DeepSeek may report only the miss count when the prompt side is split.
+        uncached = max(0, _as_int(_get(usage_obj, "prompt_cache_miss_tokens", 0)))
     input_tokens = uncached + cached + cache_write
     cost, nocache = _text_costs(
         input_tokens=input_tokens,

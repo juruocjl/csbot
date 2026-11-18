@@ -17,3 +17,8 @@ class Config(BaseModel):
     cs_ai_image_model: str = "gpt-image-2.6-sunburst"
     cs_ai_search_url: str = ""
     cs_ai_search_api_key: str = ""
+    cs_ai_guard_url: str = ""
+    cs_ai_guard_api_key: str = ""
+    cs_ai_aux_url: str = ""
+    cs_ai_aux_api_key: str = ""
+    cs_ai_aux_model: str = ""
