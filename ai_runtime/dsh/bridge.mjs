@@ -94,9 +94,35 @@ export function apply(ctx) {
     // Guard the final provider response before DSH records it and before
     // Mneme's turn-end listener sees it. One-shot memory calls are excluded.
     ctx.on('llm/stream', async function* (options,next) {
+      // Decide the scene before prepareMemorySummary mutates the options.
+      const usageScene = options.purpose === 'summarization' ? 'memory_extract'
+        : options.purpose === 'csbot-memory-verification' ? 'memory_verify'
+        : options.purpose === 'compaction' ? 'compaction'
+        : isAgentLoopRequest(options) ? 'chat'
+        : String(options.purpose || 'chat');
+      // Tap the native usage chunk once per upstream call while leaving the
+      // stream itself untouched for the token meter and the existing plumbing.
+      const tapUsage = async function* (stream) {
+        for await (const chunk of stream) {
+          if (chunk?.type === 'usage' && chunk.usage) {
+            emit({
+              type: 'usage',
+              provider: String(options.provider || provider),
+              model: String(options.model || process.env.CSBOT_MODEL || ''),
+              scene: usageScene,
+              uncached_input_tokens: Number(chunk.usage.inputTokens || 0),
+              cached_tokens: Number(chunk.usage.cacheReadTokens || 0),
+              cache_write_tokens: Number(chunk.usage.cacheWriteTokens || 0),
+              output_tokens: Number(chunk.usage.outputTokens || 0),
+              reasoning_tokens: Number(chunk.usage.reasoningTokens || 0),
+            });
+          }
+          yield chunk;
+        }
+      };
       if(prepareMemorySummary(options,sources(),options.purpose==='summarization'?await foundationalContext(memoryExec,req.text+' '+runtimeSupplement):'')){
         try {
-        const chunks=[];for await(const c of next())chunks.push(c);
+        const chunks=[];for await(const c of tapUsage(next()))chunks.push(c);
         if(chunks.at(-1)?.reason?.kind!=='stop')throw Error('Memory extraction did not complete');
         const raw=streamText(chunks).trim().replace(/^```(?:json)?\s*|\s*```$/g,'');
         const entries=JSON.parse(raw);
@@ -110,10 +136,10 @@ export function apply(ctx) {
         yield {type:'finish',reason:{kind:'stop'}};return;
         }catch(error){record({type:'memory_status',status:'failed'});throw error;}
       }
-      if (!req.guard || !isAgentLoopRequest(options)) {yield* next(); return;}
+      if (!req.guard || !isAgentLoopRequest(options)) {yield* tapUsage(next()); return;}
       const chunks=[];
       const attempt=randomUUID();
-      for await (const chunk of next()) {
+      for await (const chunk of tapUsage(next())) {
         chunks.push(chunk);
         if(chunk.type==='reasoning-delta')record({type:'reasoning_delta',attempt,text:chunk.text});
       }

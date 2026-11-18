@@ -24,7 +24,7 @@ from pathlib import Path
 from fastapi import FastAPI, Body, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -3470,6 +3470,24 @@ async def get_ai_record(recordId: int=Body(..., embed=True), info: AuthSession =
     )
 
 
+@app.get('/api/internal/ai-usage', summary='仅回环与 Tailnet 直连的只读计费增量')
+async def internal_ai_usage(request: Request, after_id: int = 0, limit: int = 500):
+    from ai_runtime.usage import is_internal_usage_request_allowed
+    # Reject proxy traffic first: a public request through csbot-homepage arrives
+    # from the Docker bridge (172.18.0.x) and carries X-Real-IP/X-Forwarded-For.
+    if not is_internal_usage_request_allowed(
+        request.client.host if request.client else None, request.headers
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if after_id < 0 or not 1 <= limit <= 2000:
+        raise HTTPException(status_code=400, detail="Invalid after_id or limit")
+    from ai_runtime.store import state_store
+    return JSONResponse(
+        state_store().list_usage_after(after_id=after_id, limit=limit),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.post('/api/ai/events',summary='实时 AI 执行事件，可按游标重连')
 async def ai_events(request: Request,chatId: str=Body(...),after: int=Body(0),info: AuthSession=Depends(get_current_user)):
     from ai_runtime.store import state_store
@@ -3483,7 +3501,7 @@ async def ai_events(request: Request,chatId: str=Body(...),after: int=Body(0),in
         cursor=after
         wake=signal(chatId)
         metadata=store.get_run(chatId)
-        yield 'event: ready\ndata: '+json.dumps({'channel':metadata['channel'],'request':metadata['request'],'images':store.rows('SELECT id,caption FROM run_images WHERE run_id=?',(chatId,))},ensure_ascii=False)+'\n\n'
+        yield 'event: ready\ndata: '+json.dumps({'channel':metadata['channel'],'request':metadata['request'],'usage':store.run_usage_summary(chatId),'images':store.rows('SELECT id,caption FROM run_images WHERE run_id=?',(chatId,))},ensure_ascii=False)+'\n\n'
         while not await request.is_disconnected():
             wake.clear()
             batch=read(chatId,cursor)
@@ -3493,7 +3511,7 @@ async def ai_events(request: Request,chatId: str=Body(...),after: int=Body(0),in
             if batch:continue
             row=store.get_run(chatId)
             if row['status'] in {'completed','interrupted'}:
-                yield 'event: done\ndata: '+json.dumps({'status':row['status'],'response':row['response'],'hasEvents':maximum>0 or cursor>0})+'\n\n'
+                yield 'event: done\ndata: '+json.dumps({'status':row['status'],'response':row['response'],'usage':store.run_usage_summary(chatId),'hasEvents':maximum>0 or cursor>0})+'\n\n'
                 break
             try:await asyncio.wait_for(wake.wait(),10)
             except TimeoutError:yield ': heartbeat\n\n'

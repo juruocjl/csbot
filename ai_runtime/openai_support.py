@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 import httpx
 from PIL import Image, UnidentifiedImageError
 
+from .usage import normalize_image_usage
+
 DEFAULT_OPENAI_PROXY = "http://127.0.0.1:7890"
 DEFAULT_OPENAI_MODEL = "gpt-6.2-sol"
 DEFAULT_IMAGE_MODEL = "gpt-image-2.6-sunburst"
@@ -436,4 +438,13 @@ async def generate_openai_image(
     }
     if revised_prompt:
         result["revised_prompt"] = str(revised_prompt)[:500]
+    # Billing contract: expose the normalized usage next to the image so the
+    # runner can record it and local checks can assert it directly.
+    result["usage"] = normalize_image_usage(
+        body.get("usage") if isinstance(body, dict) else None,
+        model=effective_model,
+        mode=result["mode"],
+        size=result["size"],
+        quality=quality,
+    )
     return result

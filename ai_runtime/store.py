@@ -13,6 +13,17 @@ import uuid
 from pathlib import Path
 
 
+USAGE_COLUMNS = (
+    'created_at', 'created_at_ms', 'run_id', 'channel', 'group_id', 'provider',
+    'model', 'scene', 'input_tokens', 'uncached_input_tokens', 'cached_tokens',
+    'cache_write_tokens', 'output_tokens', 'reasoning_tokens',
+    'image_input_tokens', 'image_output_tokens', 'cost_usd', 'nocache_cost_usd',
+    'size', 'quality',
+)
+_USAGE_TEXT = {'run_id', 'channel', 'group_id', 'provider', 'model', 'scene', 'size', 'quality'}
+_USAGE_COST = {'cost_usd', 'nocache_cost_usd'}
+
+
 class StateStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +70,31 @@ class StateStore:
         CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id,seq);
         CREATE TABLE IF NOT EXISTS run_images (
           id TEXT PRIMARY KEY,run_id TEXT NOT NULL,digest TEXT NOT NULL,caption TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS ai_usage (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at INTEGER NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          run_id TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          group_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          scene TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+          cached_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+          image_input_tokens INTEGER NOT NULL DEFAULT 0,
+          image_output_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_usd REAL NOT NULL DEFAULT 0.0,
+          nocache_cost_usd REAL NOT NULL DEFAULT 0.0,
+          size TEXT NOT NULL DEFAULT '',
+          quality TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS ai_usage_run ON ai_usage(run_id, id);
+        CREATE INDEX IF NOT EXISTS ai_usage_created ON ai_usage(created_at);
         """)
         if 'recalled_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(outbound)')}:
             self.db.execute('ALTER TABLE outbound ADD COLUMN recalled_at INTEGER')
@@ -152,6 +188,97 @@ class StateStore:
         row = self.get_run(key)
         return bool(gid and uid and row and row["group_id"] == gid and
                     (row["channel"] in ('qq', 'report') or (row["channel"] == 'web' and row["user_id"] == uid)))
+
+    def record_usage(self, item: dict) -> int:
+        """Append one immutable billing row and return its autoincrement id."""
+        source = dict(item or {})
+        now = time.time()
+        source.setdefault('created_at', int(now))
+        source.setdefault('created_at_ms', int(now * 1000))
+        values = {}
+        for name in USAGE_COLUMNS:
+            if name in _USAGE_TEXT:
+                values[name] = str(source.get(name) or '')
+            elif name in _USAGE_COST:
+                try:
+                    values[name] = float(source.get(name) or 0.0)
+                except (TypeError, ValueError):
+                    values[name] = 0.0
+            else:
+                try:
+                    values[name] = int(source.get(name) or 0)
+                except (TypeError, ValueError):
+                    values[name] = 0
+        columns = ','.join(USAGE_COLUMNS)
+        placeholders = ','.join('?' for _ in USAGE_COLUMNS)
+        with self.lock:
+            cur = self.db.execute(
+                f'INSERT INTO ai_usage({columns}) VALUES({placeholders})',
+                tuple(values[name] for name in USAGE_COLUMNS),
+            )
+            self.db.commit()
+            return int(cur.lastrowid)
+
+    def list_usage_after(self, after_id: int = 0, limit: int = 500) -> dict:
+        """Cursor pagination for the read-only Tailnet ledger endpoint."""
+        if not isinstance(after_id, int) or isinstance(after_id, bool) or after_id < 0:
+            raise ValueError('after_id must be a non-negative integer')
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 2000:
+            raise ValueError('limit must be between 1 and 2000')
+        columns = 'id,' + ','.join(USAGE_COLUMNS)
+        with self.lock:
+            max_id = int(self.db.execute(
+                'SELECT coalesce(max(id),0) FROM ai_usage').fetchone()[0])
+            rows = [dict(row) for row in self.db.execute(
+                f'SELECT {columns} FROM ai_usage WHERE id > ? ORDER BY id ASC LIMIT ?',
+                (after_id, limit + 1),
+            ).fetchall()]
+        has_more = len(rows) > limit
+        items = rows[:limit]
+        return {
+            'schema_version': 1,
+            'after_id': after_id,
+            'limit': limit,
+            'count': len(items),
+            'has_more': has_more,
+            'next_after_id': items[-1]['id'] if items else after_id,
+            'max_id': max_id,
+            'items': items,
+        }
+
+    def run_usage_summary(self, run_id: str) -> dict:
+        with self.lock:
+            row = self.db.execute(
+                """SELECT count(*) AS calls,
+                       coalesce(sum(input_tokens),0) AS input_tokens,
+                       coalesce(sum(uncached_input_tokens),0) AS uncached_input_tokens,
+                       coalesce(sum(cached_tokens),0) AS cached_tokens,
+                       coalesce(sum(cache_write_tokens),0) AS cache_write_tokens,
+                       coalesce(sum(output_tokens),0) AS output_tokens,
+                       coalesce(sum(reasoning_tokens),0) AS reasoning_tokens,
+                       coalesce(sum(image_input_tokens),0) AS image_input_tokens,
+                       coalesce(sum(image_output_tokens),0) AS image_output_tokens,
+                       coalesce(sum(cost_usd),0) AS cost_usd,
+                       coalesce(sum(nocache_cost_usd),0) AS nocache_cost_usd
+                FROM ai_usage WHERE run_id=?""",
+                (str(run_id or ''),),
+            ).fetchone()
+        input_tokens = int(row['input_tokens'])
+        cached_tokens = int(row['cached_tokens'])
+        return {
+            'calls': int(row['calls']),
+            'input_tokens': input_tokens,
+            'uncached_input_tokens': int(row['uncached_input_tokens']),
+            'cached_tokens': cached_tokens,
+            'cache_write_tokens': int(row['cache_write_tokens']),
+            'output_tokens': int(row['output_tokens']),
+            'reasoning_tokens': int(row['reasoning_tokens']),
+            'image_input_tokens': int(row['image_input_tokens']),
+            'image_output_tokens': int(row['image_output_tokens']),
+            'cost_usd': round(float(row['cost_usd']), 8),
+            'nocache_cost_usd': round(float(row['nocache_cost_usd']), 8),
+            'cache_hit_pct': round(cached_tokens / input_tokens * 100.0, 1) if input_tokens > 0 else 0.0,
+        }
 
 
 _store: StateStore | None = None

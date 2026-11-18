@@ -17,7 +17,7 @@ def publish(run_id,payload):
     store=state_store()
     encoded=json.dumps(payload,ensure_ascii=False)
     # Per-run bounded diagnostics; terminal state and final answer always survive.
-    if payload.get('type') not in {'status','final','image','supplement'}:
+    if payload.get('type') not in {'status','final','image','supplement','usage'}:
         used=store.rows('SELECT coalesce(sum(bytes),0) n FROM run_events WHERE run_id=?',(run_id,))[0]['n']
         if used+len(encoded.encode())>MAX_BYTES:
             if not store.rows("SELECT 1 FROM run_events WHERE run_id=? AND payload LIKE '%\"trace_limit\"%' LIMIT 1",(run_id,)):

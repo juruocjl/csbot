@@ -22,6 +22,7 @@ from .media import media_cache
 from .runner import run_dsh,scope_key
 from .store import state_store
 from .style import instruction
+from .usage import record_usage_for_run
 from .events import publish
 
 LOCKS=weakref.WeakValueDictionary()
@@ -181,7 +182,8 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     remember=channel in {"qq","web"},vision=vision,thinking=thinking,guard=guard if channel!='web' else None,
                     run_id=chat_id,on_event=lambda event:publish(chat_id,event),on_images=images,on_started=started,
                     openai_proxy_url=openai_proxy_url,image_model=image_model,
-                    search_url=search_url,search_api_key=search_api_key)
+                    search_url=search_url,search_api_key=search_api_key,
+                    on_usage=lambda item: record_usage_for_run(store,run_id=chat_id,channel=channel,group_id=gid,item=item,publish_fn=publish))
                 output="\n\n".join(item["content"] for item in result["messages"])
                 if not output.strip():
                     generated=store.rows('SELECT id FROM run_images WHERE run_id=?',(chat_id,))

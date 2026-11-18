@@ -2,6 +2,7 @@
 import asyncio
 from contextlib import nullcontext
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .source import source_snapshot
+from .usage import normalize_dsh_usage
 from .openai_support import (
     DEFAULT_IMAGE_MODEL,
     generate_openai_image,
@@ -219,7 +221,8 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                   vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False,
                   run_id=None,on_event=None,on_images=None,on_started=None,memory_only=False,memory_check_titles=(),memory_actions=(),
                   openai_proxy_url: str | None=None, image_model: str | None=None,
-                  search_url: str="", search_api_key: str="", enable_image_gen: bool | None=None):
+                  search_url: str="", search_api_key: str="", enable_image_gen: bool | None=None,
+                  on_usage=None):
     from .sandbox import ScriptSandbox
     use_openai=is_openai_endpoint(endpoint)
     effective_image_model=(image_model if image_model is not None
@@ -335,6 +338,17 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
             rpc_tasks=[]
             rpc_slots=asyncio.Semaphore(1)
             submitted_images=0
+            # Billing telemetry is collected per turn and never blocks the reply:
+            # a ledger failure must not turn a delivered answer into an error.
+            usage_events=[]
+            async def report_usage(item):
+                if not item: return
+                usage_events.append(item)
+                if on_usage is None: return
+                try:
+                    pending=on_usage(item)
+                    if inspect.isawaitable(pending): await pending
+                except Exception: pass
             async def handle_rpc(event):
                 nonlocal submitted_images
                 async with rpc_slots:
@@ -376,6 +390,9 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                                     paths.add(value['file_path'])
                                     _register_image_path(value['file_path'])
                             submitted_images+=1
+                            # Keep the normalized usage out of the model-visible
+                            # reply while still recording it for this turn.
+                            await report_usage(value.pop('usage', None))
                         else:raise ValueError('unknown bridge method')
                         reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths),
                                'imageReadPaths':list(authorized_image_paths)}
@@ -402,6 +419,8 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                                 for item in event['events']:on_event(item)
                         elif event["type"]=="rpc":
                             rpc_tasks.append(asyncio.create_task(handle_rpc(event)))
+                        elif event["type"]=="usage":
+                            await report_usage(normalize_dsh_usage(event))
                         elif event["type"]=="complete": result=event
                         elif event["type"]=="error":
                             # Configuration/runtime details are available through
@@ -413,6 +432,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                     if result.get("reason",{}).get("kind")!="completed":
                         if diagnostics: diagnostics(str(result.get("reason", {})).replace(api_key,"[REDACTED]").replace(endpoint,"[MODEL_ENDPOINT]"))
                         raise RuntimeError("DSH turn did not complete")
+                    result["usage"]=usage_events
                     return result
             finally:
                 if run_id:ACTIVE.pop(run_id,None)

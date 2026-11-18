@@ -174,7 +174,7 @@ async def _open_ai_client():
             await http_client.aclose()
 
 
-async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api: bool = False) -> QQOutputGuardResult:
+async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api: bool = False, on_usage: Any = None) -> QQOutputGuardResult:
     guard_model = config.cs_ai_guard_model.strip() or await runtime_config.get("cs_ai_model")
     last_error: Exception | None = None
     for attempt in range(2):
@@ -206,6 +206,9 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api
                     ]),
                     tool_choice={"type": "function", "name": "submit_qq_guard_decision"},
                 )
+                if on_usage is not None and getattr(response, "usage", None) is not None:
+                    from ai_runtime.usage import normalize_guard_usage
+                    on_usage(normalize_guard_usage(response.usage, provider="openai" if use_responses_api else "deepseek", model=str(getattr(response, "model", "") or guard_model)))
                 raw_result = ""
                 for item in getattr(response, "output", None) or []:
                     if (
@@ -227,6 +230,9 @@ async def _guard_qq_output(client: AsyncOpenAI, draft: str, *, use_responses_api
                 },
                 extra_body={"thinking": {"type": "disabled"}},
             )
+            if on_usage is not None and getattr(response, "usage", None) is not None:
+                from ai_runtime.usage import normalize_guard_usage
+                on_usage(normalize_guard_usage(response.usage, provider="openai" if use_responses_api else "deepseek", model=str(getattr(response, "model", "") or guard_model)))
             message = response.choices[0].message
             raw_result = message.content or ""
             if message.tool_calls:
@@ -1065,20 +1071,27 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
     if config.cs_ai_engine != "dsh":
         raise ValueError("旧 AI 引擎已停用；CS_AI_ENGINE 必须为 dsh")
     model_name = await runtime_config.get("cs_ai_model")
+    from ai_runtime.events import publish
+    from ai_runtime.store import state_store
+    from ai_runtime.usage import record_usage_for_run
+    gid = group_id_from_sid(sid)
     async def guard(output):
         if channel == "web": return output
         if config.cs_ai_output_guard_enabled:
             try:
                 async with _open_ai_client() as client:
                     verdict = await _guard_qq_output(
-                        client, output, use_responses_api=is_openai_endpoint(config.cs_ai_url)
+                        client, output, use_responses_api=is_openai_endpoint(config.cs_ai_url),
+                        on_usage=lambda item: record_usage_for_run(
+                            state_store(), run_id=chat_id, channel=channel,
+                            group_id=gid, item=item, publish_fn=publish),
                     )
                 return normalize_qq_plain_text(verdict.text)
             except Exception:
                 logger.warning("QQ output guard failed closed")
                 return QQ_GUARD_FAILED_TEXT
         return normalize_qq_plain_text(output)
-    return await ask(chat_id=chat_id,gid=group_id_from_sid(sid),uid=uid,prompt=text,persona=persona,
+    return await ask(chat_id=chat_id,gid=gid,uid=uid,prompt=text,persona=persona,
         channel=channel,conversation=chat_id if channel=="report" else conversation,
         model=model_name,endpoint=config.cs_ai_url,api_key=config.cs_ai_api_key,
         factory=async_session_factory,chat_history=chat_history_db,archive=db.insert_chat_record,
