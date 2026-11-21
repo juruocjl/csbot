@@ -25,6 +25,7 @@ require("models")
 from ..models import MemberSteamID, GroupMember, SteamBaseInfo, SteamDetailInfo, SteamExtraInfo, MatchStatsPW, MatchStatsPWExtra, MatchStatsGP, MatchStatsGPExtra, SteamFaceitID, MatchStatsFaceit
 
 from .config import Config
+from .elo_logic import S_RANK_MIN_SCORE, S_STAR_EQUIVALENT_POINTS, calc_effective_pvp_score, format_s_rank_badge_label
 
 __plugin_meta__ = PluginMetadata(
     name="cs_db_val",
@@ -333,15 +334,51 @@ class DataManager:
             return result.scalar_one()
 
     async def get_pvp_score_history(self, steamid: str, time_type: str) -> list[tuple[int, int]]:
+        """天梯分数变化序列，时间正序。
+
+        S 段位（``pvpScore >= 2401``）按 ``pvpScore + 25 * max(pvpStars, 0)``
+        折算等效分，避免升星后曲线卡在 2401 的水平线；原始字段值不变。
+        """
         async with async_session_factory() as session:
             stmt = (
-                select(MatchStatsPW.timeStamp, MatchStatsPW.pvpScore)
+                select(MatchStatsPW.timeStamp, MatchStatsPW.pvpScore, MatchStatsPW.pvpStars)
                 .where(*await get_ladder_filter(steamid, time_type))
                 .where(MatchStatsPW.pvpScore > 0)
                 .order_by(MatchStatsPW.timeStamp.asc())
             )
             rows = (await session.execute(stmt)).all()
-            return [(int(ts), int(score)) for ts, score in rows]
+            return [(int(ts), calc_effective_pvp_score(score, stars)) for ts, score, stars in rows]
+
+    async def get_elo_detail(self, steamid: str, time_type: str) -> tuple[float, int, int, int]:
+        """取最新一场天梯的 ELO 明细：(等效分, 场次, 原始分, 原始星数)。
+
+        S 段位（``pvpScore >= 2401``）按 ``pvpScore + 25 * max(pvpStars, 0)``
+        计算等效分；原始分与星数仅供展示层生成 ``S ★N`` 标注。
+        """
+        filters = await get_ladder_filter(steamid, time_type)
+        async with async_session_factory() as session:
+            stmt_latest = (
+                select(MatchStatsPW.pvpScore, MatchStatsPW.pvpStars)
+                .where(*filters)
+                .order_by(MatchStatsPW.timeStamp.desc())
+                .limit(1)
+            )
+            latest_row = (await session.execute(stmt_latest)).first()
+            if latest_row is None or latest_row[0] is None or int(latest_row[0]) <= 0:
+                raise NoValueError()
+
+            stmt_count = (
+                select(func.count(MatchStatsPW.mid))
+                .where(*filters)
+            )
+            total_count = (await session.execute(stmt_count)).scalar()
+            if total_count is None or total_count == 0:
+                raise NoValueError()
+
+        raw_score = int(latest_row[0])
+        raw_stars = max(int(latest_row[1] or 0), 0)
+        effective_score = calc_effective_pvp_score(raw_score, raw_stars)
+        return (float(effective_score), int(total_count), raw_score, raw_stars)
 
     async def get_match_detail(self, mid: str) -> list[MatchStatsPW] | None:
         async with async_session_factory() as session:
@@ -714,33 +751,13 @@ class NoValueError(Exception):
 
 @db.register("ELO", "天梯分数", "本赛季", ["本赛季", "上赛季"], True, MinAdd(-10), "d0")
 async def get_elo(steamid: str, time_type: str) -> tuple[float, int]:
-    filters = await get_ladder_filter(steamid, time_type)
-    async with async_session_factory() as session:
+    """最新一场天梯的 ELO 分数与场次。
 
-        stmt_latest = (
-            select(MatchStatsPW.pvpScore)
-            .where(*filters)
-            .order_by(MatchStatsPW.timeStamp.desc())
-            .limit(1)
-        )
-        
-        stmt_count = (
-            select(func.count(MatchStatsPW.mid))
-            .where(*filters)
-        )
-
-        latest_score_res = await session.execute(stmt_latest)
-        current_elo = latest_score_res.scalar() 
-        
-        if current_elo is None or current_elo == 0:
-            raise NoValueError()
-
-        count_res = await session.execute(stmt_count)
-        total_count = count_res.scalar()
-        if total_count is None or total_count == 0:
-            raise NoValueError()
-
-        return float(current_elo), total_count
+    ``pvpScore >= 2401``（S 段位）按 ``pvpScore + 25 * max(pvpStars, 0)``
+    计算 S 等效分后参与排名，原始字段值不变。
+    """
+    effective_score, total_count, _raw_score, _raw_stars = await db.get_elo_detail(steamid, time_type)
+    return (effective_score, total_count)
 
 @db.register("rt", "rating", "本赛季", valid_time, True, MinAdd(-0.05), "d2")
 async def get_rt(steamid: str, time_type: str) -> tuple[float, int]:

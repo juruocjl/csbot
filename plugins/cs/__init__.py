@@ -459,7 +459,7 @@ async def scoretrend_function(message: MessageEvent, args: Message = CommandArg(
             ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.5, label=label)
         ax.set_title(f"天梯分数变化（{time_type}）")
         ax.set_xlabel("时间")
-        ax.set_ylabel("天梯分数（MatchStatsPW.pvpScore）")
+        ax.set_ylabel("天梯等效分数（S 每星 +25）")
         ax.grid(True, linestyle="--", alpha=0.4)
         ax.legend(loc="best", fontsize=9)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))

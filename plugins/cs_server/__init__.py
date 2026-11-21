@@ -49,7 +49,7 @@ from ..models import AuthSession, GroupMember, MajorHWSnapshot, MemberSteamID, S
 from ..models import MatchStatsPW, MatchStatsGP, MatchStatsFaceit
 require("cs_db_val")
 from ..cs_db_val import db as db_val
-from ..cs_db_val import valid_time, gp_time, NoValueError
+from ..cs_db_val import valid_time, gp_time, NoValueError, format_s_rank_badge_label
 from ..cs_db_val import SteamDetailInfo
 require("cs_db_upd")
 from ..cs_db_upd import db as db_upd
@@ -2558,6 +2558,9 @@ class RankItem(BaseModel):
     nickname: str = Field(..., description="玩家昵称")
     value: float = Field(..., description="值")
     count: int = Field(..., description="场次")
+    rawPvpScore: int | None = Field(None, description="原始天梯分（仅 ELO 榜单）")
+    pvpStars: int | None = Field(None, description="天梯 S 星数（仅 ELO 榜单）")
+    badgeText: str | None = Field(None, description="段位附加标注，如 S ★2（仅 ELO 榜单 S 段位）")
 
 class RankResponse(BaseModel):
     minValue: float = Field(..., description="最小值")
@@ -3104,12 +3107,20 @@ async def get_rank_list(
         base_info = await db_val.get_base_info(steamId)
         return base_info.name if base_info else "未知玩家"
     steamids = await db_val.get_group_member_steamid(info.group_id)
+    is_elo_rank = rankName == "ELO"
     datas = []
     for steamid in steamids:
         try:
-            val = await rank_config.func(steamid, timeType)
+            if is_elo_rank:
+                # ELO 榜直接复用 get_elo_detail，避免再查一次原始分与星数
+                effective_value, count, raw_score, raw_stars = await db_val.get_elo_detail(steamid, timeType)
+                val = (effective_value, count)
+                extra = (raw_score, raw_stars, format_s_rank_badge_label(raw_score, raw_stars))
+            else:
+                val = await rank_config.func(steamid, timeType)
+                extra = None
             print(val)
-            datas.append((steamid, val))
+            datas.append((steamid, val, extra))
         except NoValueError:
             pass
     print(datas)
@@ -3127,8 +3138,11 @@ async def get_rank_list(
                 steamId=steamid,
                 nickname=await get_nickname(steamid),
                 value=val[0],
-                count=val[1]
-            ) for steamid, val in datas
+                count=val[1],
+                rawPvpScore=extra[0] if extra else None,
+                pvpStars=extra[1] if extra else None,
+                badgeText=extra[2] if extra else None
+            ) for steamid, val, extra in datas
         ]
     )
 
