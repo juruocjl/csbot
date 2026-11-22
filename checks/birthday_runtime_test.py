@@ -542,6 +542,28 @@ class BridgeContractTest(unittest.TestCase):
         self.assertIn("process.env.CSBOT_MEMORY_READONLY==='1'", source)
         self.assertIn("allow.delete('memory_save')", source)
         self.assertIn("allow.delete('memory_forget')", source)
+        self.assertIn("const emitAndExit =", source)
+        self.assertNotIn("process.exit(0);\n", source)
+
+    def test_large_utf8_stdout_flush_before_exit(self) -> None:
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('node is not installed')
+        import subprocess
+        script = (
+            "const payload = {type:'complete', text:'生日快乐'.repeat(16000)};"
+            "const finish = () => process.exit(0);"
+            "process.stdout.once('error', finish);"
+            "process.stdout.write('CSBOT:' + JSON.stringify(payload) + '\\n', finish);"
+        )
+        result = subprocess.run([node, '-e', script], capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        raw = result.stdout
+        self.assertGreater(len(raw), 128 * 1024)
+        self.assertTrue(raw.startswith(b'CSBOT:'))
+        decoded = json.loads(raw[6:].decode('utf-8'))
+        self.assertEqual(decoded['type'], 'complete')
+        self.assertEqual(len(decoded['text']), 4 * 16000)
 
     def test_runner_signature_and_snapshot_order(self) -> None:
         source = (REPO / 'ai_runtime' / 'runner.py').read_text(encoding='utf-8')

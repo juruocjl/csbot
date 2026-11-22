@@ -12,6 +12,13 @@ import {Agent, Pool, ProxyAgent, setGlobalDispatcher} from 'undici';
 export const name = 'csbot-bridge';
 export const inject = ['agents', 'sessionPersistence', 'compaction', 'tools', 'systemPrompt', 'llm'];
 const emit = value => process.stdout.write('CSBOT:' + JSON.stringify(value) + '\n');
+// Pipe writes over 64 KiB buffer in Node; wait for stdout to drain before exit
+// so tool-heavy turns (such as full-retrieval birthday wishes) never truncate.
+const emitAndExit = (value, code = 0) => {
+  const finish = () => process.exit(code);
+  process.stdout.once('error', finish);
+  process.stdout.write('CSBOT:' + JSON.stringify(value) + '\n', finish);
+};
 // The ledger and the DSH provider id differ: DSH mounts the domestic direct
 // channel as `deepseek-official`, while billing must always read `deepseek`.
 const canonicalProvider = raw => {
@@ -307,8 +314,9 @@ export function apply(ctx) {
       await flushMemory();await ctx.sessionPersistence.flush();
       clearInterval(traceTimer);trace=[];
       await handle.dispose();
-      emit({type:'complete',reason:{kind:'completed'},messages:[],tools:[],verified,repaired});
-      input.close();process.exit(0);
+      input.close();
+      emitAndExit({type:'complete',reason:{kind:'completed'},messages:[],tools:[],verified,repaired}, 0);
+      return;
     }
     memoryConfig.trusted=false;
     const before = handle.agent.session.snapshotEvents().length;
@@ -327,8 +335,7 @@ export function apply(ctx) {
     const toolEvents=events.filter(event=>event.type==='tool/call'||event.type==='tool/result').map(event=>({type:event.type,data:event.data}));
     clearInterval(traceTimer);flushTrace();
     await handle.dispose();
-    emit({type:'complete',reason:end?.data.reason,messages,tools:toolEvents,resumed:Boolean(exists),compacted:Boolean(compaction)});
     input.close();
-    process.exit(0);
-  })().catch(error=>{emit({type:'error',error:String(error.message)});process.exit(1);});
+    emitAndExit({type:'complete',reason:end?.data.reason,messages,tools:toolEvents,resumed:Boolean(exists),compacted:Boolean(compaction)}, 0);
+  })().catch(error=>{input.close();emitAndExit({type:'error',error:String(error.message)}, 1);});
 }
