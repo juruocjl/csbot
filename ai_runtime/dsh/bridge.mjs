@@ -108,7 +108,7 @@ export function apply(ctx) {
       const usageScene = options.purpose === 'summarization' ? 'memory_extract'
         : options.purpose === 'csbot-memory-verification' ? 'memory_verify'
         : options.purpose === 'compaction' ? 'compaction'
-        : isAgentLoopRequest(options) ? 'chat'
+        : isAgentLoopRequest(options) ? (process.env.CSBOT_USAGE_SCENE || 'chat')
         : String(options.purpose || 'chat');
       // Tap the native usage chunk once per upstream call while leaving the
       // stream itself untouched for the token meter and the existing plumbing.
@@ -174,6 +174,9 @@ export function apply(ctx) {
     const safeRealpath = p => { try { return realpathSync(p); } catch { return null; } };
     const allowedImages = new Set((req.imageReadPaths ?? []).map(safeRealpath).filter(Boolean));
     const allow = new Set(['read', 'read_image', 'execute_python', 'memory_search', 'memory_save', 'memory_forget']);
+    // A read-only mounted group memory snapshot must never be written back:
+    // keep memory_search but drop both mutating memory tools.
+    if(process.env.CSBOT_MEMORY_READONLY==='1'){allow.delete('memory_save');allow.delete('memory_forget');}
     if(process.env.CSBOT_WEB_ENABLED==='1'){allow.add('web_search');allow.add('web_fetch');}
     if(process.env.CSBOT_WEB_ENABLED==='1' && process.env.CSBOT_FETCH_PROXY_URL)allow.add('web_fetch_proxy');
     if(process.env.CSBOT_IMAGE_GEN_ENABLED==='1')allow.add('generate_image');

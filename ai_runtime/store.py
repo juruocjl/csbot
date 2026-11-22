@@ -95,6 +95,27 @@ class StateStore:
         );
         CREATE INDEX IF NOT EXISTS ai_usage_run ON ai_usage(run_id, id);
         CREATE INDEX IF NOT EXISTS ai_usage_created ON ai_usage(created_at);
+        CREATE TABLE IF NOT EXISTS birthday_cooldowns (
+          user_id TEXT PRIMARY KEY,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS birthday_wishes (
+          group_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          year INTEGER NOT NULL,
+          target_date TEXT NOT NULL,
+          source TEXT NOT NULL,
+          status TEXT NOT NULL,
+          run_id TEXT,
+          draft_text TEXT,
+          delivered_via TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          sent_at INTEGER,
+          PRIMARY KEY (group_id, user_id, year)
+        );
+        CREATE INDEX IF NOT EXISTS birthday_wishes_date ON birthday_wishes(group_id, target_date, status);
         """)
         if 'recalled_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(outbound)')}:
             self.db.execute('ALTER TABLE outbound ADD COLUMN recalled_at INTEGER')
@@ -177,7 +198,7 @@ class StateStore:
         if before is not None and (type(before) is not int or not 0 < before < 2**63):
             raise ValueError('invalid list cursor')
         rows = self.rows("""SELECT rowid AS cursor,id,substr(request,1,300) AS request,status,channel,created_at
-            FROM runs WHERE group_id=? AND (channel IN ('qq','report') OR (channel='web' AND user_id=?))
+            FROM runs WHERE group_id=? AND (channel IN ('qq','report','birthday') OR (channel='web' AND user_id=?))
             AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT 31""", (gid, uid, before, before))
         page = rows[:30]
         cursor = page[-1]['cursor'] if len(rows)>30 else None
@@ -187,7 +208,103 @@ class StateStore:
     def can_read(self, key: str, gid: str, uid: str) -> bool:
         row = self.get_run(key)
         return bool(gid and uid and row and row["group_id"] == gid and
-                    (row["channel"] in ('qq', 'report') or (row["channel"] == 'web' and row["user_id"] == uid)))
+                    (row["channel"] in ('qq', 'report', 'birthday') or (row["channel"] == 'web' and row["user_id"] == uid)))
+
+    def get_birthday_cooldown(self, user_id: str) -> int | None:
+        rows = self.rows('SELECT updated_at FROM birthday_cooldowns WHERE user_id=?', (str(user_id),))
+        return int(rows[0]['updated_at']) if rows else None
+
+    def set_birthday_cooldown(self, user_id: str, updated_at: int | None = None) -> None:
+        stamp = int(time.time()) if updated_at is None else int(updated_at)
+        self.execute(
+            """INSERT INTO birthday_cooldowns(user_id,updated_at) VALUES(?,?)
+               ON CONFLICT(user_id) DO UPDATE SET updated_at=excluded.updated_at""",
+            (str(user_id), stamp),
+        )
+
+    def get_birthday_wish(self, group_id: str, user_id: str, year: int) -> dict | None:
+        rows = self.rows(
+            'SELECT * FROM birthday_wishes WHERE group_id=? AND user_id=? AND year=?',
+            (str(group_id), str(user_id), int(year)),
+        )
+        return rows[0] if rows else None
+
+    def upsert_birthday_draft(self, group_id: str, user_id: str, year: int,
+                              target_date: str, source: str, run_id: str,
+                              draft_text: str) -> None:
+        """Store a pre-generated draft without ever demoting an already sent wish."""
+        now = int(time.time())
+        self.execute(
+            """INSERT INTO birthday_wishes(group_id,user_id,year,target_date,source,status,
+                   run_id,draft_text,created_at,updated_at)
+               VALUES(?,?,?,?,?,'drafted',?,?,?,?)
+               ON CONFLICT(group_id,user_id,year) DO UPDATE SET
+                   target_date=excluded.target_date,
+                   source=excluded.source,
+                   status='drafted',
+                   run_id=excluded.run_id,
+                   draft_text=excluded.draft_text,
+                   error=NULL,
+                   updated_at=excluded.updated_at
+               WHERE birthday_wishes.status!='sent'""",
+            (str(group_id), str(user_id), int(year), str(target_date), str(source),
+             str(run_id), str(draft_text), now, now),
+        )
+
+    def mark_birthday_failed(self, group_id: str, user_id: str, year: int,
+                             target_date: str, source: str, error: str,
+                             run_id: str | None = None) -> None:
+        now = int(time.time())
+        self.execute(
+            """INSERT INTO birthday_wishes(group_id,user_id,year,target_date,source,status,
+                   run_id,error,created_at,updated_at)
+               VALUES(?,?,?,?,?,'failed',?,?,?,?)
+               ON CONFLICT(group_id,user_id,year) DO UPDATE SET
+                   target_date=excluded.target_date,
+                   source=excluded.source,
+                   status='failed',
+                   run_id=coalesce(excluded.run_id,birthday_wishes.run_id),
+                   error=excluded.error,
+                   updated_at=excluded.updated_at
+               WHERE birthday_wishes.status!='sent'""",
+            (str(group_id), str(user_id), int(year), str(target_date), str(source),
+             None if run_id is None else str(run_id), str(error)[:500], now, now),
+        )
+
+    def mark_birthday_sent(self, group_id: str, user_id: str, year: int,
+                           target_date: str, source: str, run_id: str | None,
+                           draft_text: str, delivered_via: str) -> None:
+        now = int(time.time())
+        self.execute(
+            """INSERT INTO birthday_wishes(group_id,user_id,year,target_date,source,status,
+                   run_id,draft_text,delivered_via,created_at,updated_at,sent_at)
+               VALUES(?,?,?,?,?,'sent',?,?,?,?,?,?)
+               ON CONFLICT(group_id,user_id,year) DO UPDATE SET
+                   target_date=excluded.target_date,
+                   source=excluded.source,
+                   status='sent',
+                   run_id=coalesce(excluded.run_id,birthday_wishes.run_id),
+                   draft_text=excluded.draft_text,
+                   delivered_via=excluded.delivered_via,
+                   error=NULL,
+                   updated_at=excluded.updated_at,
+                   sent_at=excluded.sent_at""",
+            (str(group_id), str(user_id), int(year), str(target_date), str(source),
+             None if run_id is None else str(run_id), str(draft_text), str(delivered_via),
+             now, now, now),
+        )
+
+    def clear_unsent_birthday_draft(self, user_id: str, year: int | None = None) -> int:
+        """Drop drafts for a member who just changed/disabled their birthday."""
+        with self.lock:
+            cur = self.db.execute(
+                """DELETE FROM birthday_wishes
+                   WHERE user_id=? AND status!='sent' AND (? IS NULL OR year=?)""",
+                (str(user_id), None if year is None else int(year),
+                 None if year is None else int(year)),
+            )
+            self.db.commit()
+            return int(cur.rowcount)
 
     def record_usage(self, item: dict) -> int:
         """Append one immutable billing row and return its autoincrement id."""

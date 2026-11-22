@@ -1101,10 +1101,21 @@ async def ai_called_function(bot: Bot, event: GroupMessageEvent):
 
 
 async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_id: str | None,
-                      *, channel: str | None = None, conversation: str = "default") -> str:
+                      *, channel: str | None = None, conversation: str = "default",
+                      enable_image_gen: bool | None = None, usage_scene: str = "",
+                      share_group_memory_readonly: bool | None = None) -> str:
     from ai_runtime.service import ask
     channel = channel or ("qq" if uid else "report")
     chat_id = chat_id or str(uuid.uuid4())
+    if channel == "birthday":
+        # Birthday wishes reuse the same DSH/persona/toolchain, but each wish
+        # is its own isolated conversation and never distills new memory.
+        conversation = chat_id
+        if enable_image_gen is None:
+            enable_image_gen = False
+        usage_scene = usage_scene or "birthday_wish"
+        if share_group_memory_readonly is None:
+            share_group_memory_readonly = True
     from ..allmsg.outgoing import current_run
     current_run.set(chat_id)
     if config.cs_ai_engine != "dsh":
@@ -1139,7 +1150,9 @@ async def ai_ask_main(uid: str, sid: str, persona: str | None, text: str, chat_i
         openai_proxy_url=config.cs_ai_openai_proxy_url,image_model=config.cs_ai_image_model,
         search_url=config.cs_ai_search_url,search_api_key=config.cs_ai_search_api_key,
         aux_url=config.cs_ai_aux_url,aux_api_key=config.cs_ai_aux_api_key,
-        aux_model=config.cs_ai_aux_model)
+        aux_model=config.cs_ai_aux_model,enable_image_gen=enable_image_gen,
+        usage_scene=usage_scene,
+        share_group_memory_readonly=share_group_memory_readonly)
 
 
 def _ai_chat_link(chat_id: str) -> str:

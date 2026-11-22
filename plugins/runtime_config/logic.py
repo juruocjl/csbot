@@ -3,9 +3,19 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import date
+import re
 from typing import Annotated, Any
 
-from pydantic import ConfigDict, Field, PositiveInt, StringConstraints, TypeAdapter, ValidationError
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    PositiveInt,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+)
 
 
 SeasonId = Annotated[str, Field(pattern=r"^S[1-9][0-9]*$", max_length=20)]
@@ -17,6 +27,47 @@ LiveWatchId = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 LiveWatchList = Annotated[list[LiveWatchId], Field(max_length=200)]
 FollowedTeamName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 FollowedTeamList = Annotated[list[FollowedTeamName], Field(max_length=50)]
+
+BIRTHDAY_QQ_PATTERN = re.compile(r"^\d{5,12}$")
+BIRTHDAY_MMDD_PATTERN = re.compile(r"^(\d{1,2})-(\d{1,2})$")
+
+
+def normalize_birthday_override(value: Any) -> dict[str, str]:
+    """Normalize and validate a ``{"QQ号": "MM-DD" | "none"}`` mapping.
+
+    Keys are trimmed QQ numbers; values are either the case-insensitive
+    ``none`` sentinel or a real calendar month/day (leap day included).
+    """
+    if not isinstance(value, dict):
+        raise ValueError("生日覆盖配置必须是 JSON 对象")
+    if len(value) > 500:
+        raise ValueError("生日覆盖配置最多 500 条")
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+            raise ValueError("生日覆盖配置的键和值都必须是字符串")
+        key = raw_key.strip()
+        if not BIRTHDAY_QQ_PATTERN.fullmatch(key):
+            raise ValueError(f"生日覆盖配置的 QQ 号非法: {raw_key!r}")
+        item = raw_value.strip()
+        if item.lower() == "none":
+            normalized[key] = "none"
+            continue
+        match = BIRTHDAY_MMDD_PATTERN.fullmatch(item)
+        if not match:
+            raise ValueError(f"生日覆盖配置的日期必须是 MM-DD 或 none: {raw_value!r}")
+        month, day = int(match.group(1)), int(match.group(2))
+        try:
+            date(2024, month, day)
+        except ValueError as exc:
+            raise ValueError(f"生日覆盖配置的日期非法: {raw_value!r}") from exc
+        normalized[key] = f"{month:02d}-{day:02d}"
+    return normalized
+
+
+BirthdayOverrides = Annotated[
+    dict[str, str], Field(max_length=500), AfterValidator(normalize_birthday_override)
+]
 
 
 @dataclass(frozen=True)
@@ -121,6 +172,18 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
         annotation=LiveWatchList,
         default=[],
         value_type="string_list",
+    ),
+    "birthday_overrides": RuntimeConfigDefinition(
+        key="birthday_overrides",
+        name="生日覆盖配置",
+        description=(
+            '按 QQ 号覆盖群成员生日或关闭自动祝福，格式为 JSON 对象 {"QQ号":"MM-DD"} '
+            '或 {"QQ号":"none"}。设为 "none" 表示不发送自动生日祝福，删除该键恢复读取 QQ 资料。'
+            "保存后立即生效。"
+        ),
+        annotation=BirthdayOverrides,
+        default={},
+        value_type="string_map",
     ),
 }
 

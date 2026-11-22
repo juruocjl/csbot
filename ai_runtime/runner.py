@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -123,9 +124,47 @@ def scope_key(channel: str, group_id: str, user_id: str, conversation="default")
         identity = f"web:{group_id}:{user_id}:{conversation}"
     elif channel == "report":
         identity = f"report:{group_id}:{conversation}"
+    elif channel == "birthday":
+        identity = f"birthday:{group_id}:{conversation}"
     else:
         raise ValueError("unknown conversation channel")
     return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _snapshot_memory_dir(source_dir: Path, target_dir: Path) -> bool:
+    """Hot-copy a group's Mneme SQLite database for read-only mounting.
+
+    The SQLite online backup API copies a consistent snapshot including data
+    still sitting in the source ``-wal`` file, without taking any write lock on
+    the live database. Only a regular ``memory.db`` is accepted, so a symlink
+    cannot redirect the snapshot to an unrelated file.
+    """
+    source = Path(source_dir)
+    info = source / "memory.db"
+    target = Path(target_dir)
+    if not source.is_dir() or info.is_symlink() or not info.is_file():
+        return False
+    if source.resolve() == target.resolve():
+        return False  # never snapshot a directory onto itself
+    target.mkdir(parents=True, exist_ok=True)
+    os.chmod(target, 0o700)
+    destination = target / "memory.db"
+    for suffix in ("", "-wal", "-shm"):
+        stale = destination.with_name(destination.name + suffix)
+        if stale.exists() or stale.is_symlink():
+            stale.unlink(missing_ok=True)
+    src_conn = sqlite3.connect(f"file:{info}?mode=ro", uri=True)
+    try:
+        dst_conn = sqlite3.connect(destination)
+        try:
+            src_conn.backup(dst_conn)
+            dst_conn.commit()
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+    os.chmod(destination, 0o600)
+    return True
 
 
 def render_profile(env):
@@ -247,7 +286,8 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                   openai_proxy_url: str | None=None, image_model: str | None=None,
                   search_url: str="", search_api_key: str="", enable_image_gen: bool | None=None,
                   aux_url: str="", aux_api_key: str="", aux_model: str="",
-                  on_usage=None):
+                  on_usage=None, memory_source_dir: Path | None=None,
+                  read_only_memory: bool=False, usage_scene: str=""):
     from .sandbox import ScriptSandbox
     use_openai=is_openai_endpoint(endpoint)
     effective_image_model=(image_model if image_model is not None
@@ -269,6 +309,10 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
             source=RUNTIME/filename
             if source.is_file(): shutil.copyfile(source,workspace/filename)
         (workspace/"SOURCE.md").write_text(code_snapshot.guide if code_snapshot else "本次离线记忆维护未开放源码。\n")
+        if memory_source_dir is not None:
+            # Mount a point-in-time copy of the source group's Mneme database;
+            # the live group memory is never opened for writing by this turn.
+            _snapshot_memory_dir(Path(memory_source_dir), root/"memory")
         executable=RUNTIME/"dsh/node_modules/.bin/dsh"
         if not executable.is_file():
             raise ValueError("DSH runtime not installed; run deployment preflight")
@@ -282,6 +326,12 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
              "CSBOT_BRIDGE":str(RUNTIME/"dsh/bridge.mjs"),"CSBOT_REMEMBER":"1" if remember else "0",
              "CSBOT_VISION":"1" if vision else "0","CSBOT_THINKING":"1" if thinking else "0",
              "NODE_OPTIONS":"--max-old-space-size=256"}
+        if read_only_memory:
+            # Read-only group memory snapshot: retrieval only, never distill.
+            env["CSBOT_MEMORY_READONLY"]="1"
+            env["CSBOT_REMEMBER"]="0"
+        if usage_scene:
+            env["CSBOT_USAGE_SCENE"]=usage_scene.strip()
         if use_openai:
             env["CSBOT_PROVIDER"]="openai"
             env["OPENAI_API_KEY"]=api_key

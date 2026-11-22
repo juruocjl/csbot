@@ -107,7 +107,9 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
               factory,chat_history,archive,guard=None,vision=False,thinking=False,
               openai_proxy_url: str | None = None, image_model: str | None = None,
               search_url: str = "", search_api_key: str = "",
-              aux_url: str = "", aux_api_key: str = "", aux_model: str = ""):
+              aux_url: str = "", aux_api_key: str = "", aux_model: str = "",
+              enable_image_gen: bool | None = None, usage_scene: str = "",
+              share_group_memory_readonly: bool = False):
     store=state_store()
     row=register(chat_id,gid,uid,prompt,channel,conversation)
     if row["status"]=="completed": return row["response"]
@@ -152,6 +154,12 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     return await broker.dispatch(request)
                 if channel=="qq":
                     context,cutoff=await catch_up(factory,store,gid,scope)
+                elif channel=="birthday":
+                    # Same DSH/persona/toolchain as normal chat, but this turn
+                    # only reads a snapshot of the group memory and never adds
+                    # new memories or advances the group chat cursor.
+                    context,cutoff=("自动生日祝福任务；已只读挂载本群长期记忆，请先全面检索与该群友相关的记忆、"
+                                    "聊天记录和游戏数据再编写纯文本群公告，不提炼新记忆。"),0
                 else:
                     context,cutoff="网页个人对话；需要群资料时主动检索，不把网页内容写入群记忆。" if channel=="web" else "自动报告任务；不提炼长期记忆。",0
                 context="本轮表达风格："+instruction(persona)+"\n服务端确认的本轮身份："+json.dumps({"channel":channel,"group_id":gid,"user_id":uid,"persona_this_turn":persona,
@@ -177,6 +185,14 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                         publish(chat_id,{'type':'image','id':image_id,'caption':value['caption']})
                     return persisted_paths
                 recent_image_paths=recent_scope_image_paths(store,scope,leases)
+                memory_source_dir=None
+                if gid and (share_group_memory_readonly or channel=="birthday"):
+                    # The group conversation scope owns the group's Mneme data;
+                    # mount a snapshot of it instead of this turn's own scope.
+                    memory_source_dir=(Path(os.getenv("CS_AI_STATE_DIR","data/ai")).resolve()
+                                       /"scopes"/scope_key("qq",gid,"")/"memory")
+                effective_image_gen = False if (channel=="birthday" and enable_image_gen is None) else enable_image_gen
+                effective_usage_scene = usage_scene or ("birthday_wish" if channel=="birthday" else "")
                 result=await run_dsh(scope=scope,text=f"QQ用户 {uid}：{prompt}" if uid else prompt,
                     context=context,model=model,endpoint=endpoint,api_key=api_key,dispatch=dispatch,
                     read_paths=recent_image_paths,
@@ -185,6 +201,9 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     openai_proxy_url=openai_proxy_url,image_model=image_model,
                     search_url=search_url,search_api_key=search_api_key,
                     aux_url=aux_url,aux_api_key=aux_api_key,aux_model=aux_model,
+                    memory_source_dir=memory_source_dir,
+                    read_only_memory=bool(memory_source_dir is not None),
+                    usage_scene=effective_usage_scene,enable_image_gen=effective_image_gen,
                     on_usage=lambda item: record_usage_for_run(store,run_id=chat_id,channel=channel,group_id=gid,item=item,publish_fn=publish))
                 output="\n\n".join(item["content"] for item in result["messages"])
                 if not output.strip():

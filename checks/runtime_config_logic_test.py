@@ -123,6 +123,45 @@ class RuntimeConfigLogicTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     LOGIC.encode_value(definition, value)
 
+    def test_birthday_overrides_round_trip_and_normalize(self) -> None:
+        definition = LOGIC.get_definition("birthday_overrides")
+
+        value, encoded = LOGIC.encode_value(
+            definition,
+            {" 123456 ": " 7-1 ", "234567": "NONE", "345678": "02-29"},
+        )
+
+        self.assertEqual(
+            value, {"123456": "07-01", "234567": "none", "345678": "02-29"}
+        )
+        self.assertEqual(LOGIC.decode_value(definition, encoded), value)
+        self.assertEqual(
+            LOGIC.decode_value(definition, "{}"),
+            {},
+        )
+
+    def test_invalid_birthday_overrides_are_rejected(self) -> None:
+        definition = LOGIC.get_definition("birthday_overrides")
+        for value in (
+            {"123456": "02-30"},
+            {"123456": "04-31"},
+            {"123456": "13-01"},
+            {"123456": "00-10"},
+            {"123": "07-10"},
+            {"1234567890123": "07-10"},
+            {"123456": "07/10"},
+            {"123456": "明天"},
+            {"123456": 710},
+            {123456: "07-10"},
+            [],
+            "07-10",
+            None,
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    LOGIC.encode_value(definition, value)
+        self.assertEqual(definition.default, {})
+
 
 if __name__ == "__main__":
     unittest.main()
