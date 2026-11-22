@@ -129,6 +129,32 @@ def matches_birthday_on_date(mmdd: str | None, target_date: date) -> bool:
     return False
 
 
+def days_until_birthday(mmdd: str | None, today: date) -> int | None:
+    """Days until the next MM-DD occurrence (today -> 0), or ``None`` if invalid.
+
+    Keeps the same leap-day rule as :func:`matches_birthday_on_date`: a 02-29
+    birthday fires on 02-28 in common years.
+    """
+    if not isinstance(mmdd, str):
+        return None
+    match = re.fullmatch(r"(\d{2})-(\d{2})", mmdd.strip())
+    if not match:
+        return None
+    month, day = int(match.group(1)), int(match.group(2))
+    for year in (today.year, today.year + 1):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            if (month, day) == (2, 29) and not calendar.isleap(year):
+                candidate = date(year, 2, 28)
+            else:
+                return None
+        delta = (candidate - today).days
+        if delta >= 0:
+            return delta
+    return None
+
+
 def check_cooldown(last_updated_at: int | None, now: int,
                    cooldown_seconds: int) -> tuple[bool, int]:
     """Return ``(allowed, remaining_seconds)`` for self-service edits."""

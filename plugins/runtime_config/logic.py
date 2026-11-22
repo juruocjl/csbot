@@ -175,11 +175,11 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
     ),
     "birthday_overrides": RuntimeConfigDefinition(
         key="birthday_overrides",
-        name="生日覆盖配置",
+        name="生日覆盖配置（旧版迁移）",
         description=(
-            '按 QQ 号覆盖群成员生日或关闭自动祝福，格式为 JSON 对象 {"QQ号":"MM-DD"} '
-            '或 {"QQ号":"none"}。设为 "none" 表示不发送自动生日祝福，删除该键恢复读取 QQ 资料。'
-            "保存后立即生效。"
+            '旧版生日覆盖配置，格式为 JSON 对象 {"QQ号":"MM-DD"} 或 {"QQ号":"none"}。'
+            "Bot 连接时会自动迁移进 SQLite 生日库（member_birthdays）并清空该配置；"
+            "之后请让群友使用 /设置生日 与 /清除生日，查询以生日库为唯一事实源。"
         ),
         annotation=BirthdayOverrides,
         default={},

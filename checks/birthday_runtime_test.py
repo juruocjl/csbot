@@ -8,7 +8,7 @@ from __future__ import annotations
 import ast
 import asyncio
 from contextlib import nullcontext
-from datetime import date
+from datetime import date, datetime
 import importlib.util
 import json
 import os
@@ -275,11 +275,14 @@ def _load_plugin() -> dict:
     source = (PLUGIN / '__init__.py').read_text(encoding='utf-8')
     tree = ast.parse(source)
     functions = {
-        'now_shanghai', '_background_disabled', '_group_members', '_display_name',
-        '_known_override', '_profile_birthday', '_resolve_member', 'fetch_group_birthdays',
-        '_generate_wish', 'pregen_birthdays', '_send_notice', 'dispatch_birthdays_for_date',
-        '_is_superuser', '_parse_target', 'describe_birthday', 'set_birthday_for',
-        'birthday_overview', 'send_test_wish',
+        'now_shanghai', '_background_disabled', '_group_members', '_trackable_members',
+        '_display_name', '_fetch_profile_birthday', '_store_profile_birthday',
+        'refresh_group_index', 'group_birthdays', '_generate_wish', 'pregen_birthdays',
+        '_send_notice', 'dispatch_birthdays_for_date', '_is_superuser', '_parse_target',
+        '_text_args', 'describe_birthday', '_drop_legacy_override',
+        'migrate_legacy_birthday_overrides', 'set_birthday_for', 'birthday_overview',
+        'sync_birthdays', 'send_test_wish', '_run_startup_birthday_sync',
+        'startup_birthday_sync',
     }
     constants = {'BLOCKED_TEXTS'}
     nodes = []
@@ -341,16 +344,16 @@ def _load_plugin() -> dict:
         'QQ_GUARD_BLOCKED_TEXT': GUARD.QQ_GUARD_BLOCKED_TEXT,
         'QQ_GUARD_FAILED_TEXT': GUARD.QQ_GUARD_FAILED_TEXT,
         'BIRTHDAY_LOCK': asyncio.Lock(),
+        'STARTUP_SYNC': {'task': None},
         'MemberBirthday': LOGIC.MemberBirthday,
-        'BirthdayResolution': LOGIC.BirthdayResolution,
         'CLEAR_OVERRIDE': LOGIC.CLEAR_OVERRIDE,
         'DISABLED_VALUE': LOGIC.DISABLED_VALUE,
         'build_birthday_prompt': LOGIC.build_birthday_prompt,
         'check_cooldown': LOGIC.check_cooldown,
+        'days_until_birthday': LOGIC.days_until_birthday,
         'format_cooldown_remaining': LOGIC.format_cooldown_remaining,
         'matches_birthday_on_date': LOGIC.matches_birthday_on_date,
         'parse_birthday_input': LOGIC.parse_birthday_input,
-        'resolve_effective_birthday': LOGIC.resolve_effective_birthday,
         'sanitize_notice_text': LOGIC.sanitize_notice_text,
         'validate_mmdd': LOGIC.validate_mmdd,
     }
@@ -367,10 +370,12 @@ class MockBot:
     self_id = 999999
 
     def __init__(self, members: list[dict], profiles: dict | None = None,
-                 notice_error: Exception | None = None) -> None:
+                 notice_error: Exception | None = None,
+                 profile_errors: set[str] | None = None) -> None:
         self.members = members
         self.profiles = profiles or {}
         self.notice_error = notice_error
+        self.profile_errors = profile_errors or set()
         self.calls: list[tuple] = []
         self.group_messages: list[tuple] = []
 
@@ -380,6 +385,8 @@ class MockBot:
 
     async def get_stranger_info(self, user_id, no_cache=True):
         self.calls.append(('stranger', user_id, no_cache))
+        if str(user_id) in self.profile_errors:
+            raise RuntimeError('profile unavailable')
         return dict(self.profiles.get(str(user_id), {}))
 
     async def call_api(self, api, **params):
@@ -396,9 +403,17 @@ class MockBot:
         return [call[2] for call in self.calls
                 if call[0] == 'call_api' and call[1] == '_send_group_notice']
 
+    def stranger_uids(self) -> list[int]:
+        return [call[1] for call in self.calls if call[0] == 'stranger']
+
+    def member_list_calls(self) -> int:
+        return len([call for call in self.calls if call[0] == 'member_list'])
+
 
 MEMBER_1001 = {'user_id': 1001, 'nickname': '小明', 'card': '明', 'is_robot': False}
 MEMBER_1002 = {'user_id': 1002, 'nickname': '小红', 'card': '', 'is_robot': False}
+MEMBER_1003 = {'user_id': 1003, 'nickname': '小刚', 'card': '刚', 'is_robot': False}
+MEMBER_1004 = {'user_id': 1004, 'nickname': '小美', 'card': '', 'is_robot': False}
 PROFILES = {
     '1001': {'birthday_month': 7, 'birthday_day': 10, 'birthday_year': 2000},
     '1002': {'birthday_month': 7, 'birthday_day': 11, 'birthday_year': 1999},
@@ -421,6 +436,10 @@ class BirthdayScheduleTest(unittest.IsolatedAsyncioTestCase):
         self.ns['_ask'].return_value = '[at:1001] 生日快乐呀。'
         drafted = await self.ns['pregen_birthdays'](bot, date(2026, 7, 10))
         self.assertEqual(drafted, 1)
+        row = self.ns['_store'].get_member_birthday('1001')
+        self.assertEqual((row['source'], row['mmdd']), ('qq_profile', '07-10'))
+        self.assertEqual(bot.stranger_uids(), [1001])  # one profile query on first sync
+        self.assertEqual(bot.member_list_calls(), 1)
         wish = self.ns['_store'].get_birthday_wish(GID, '1001', 2026)
         self.assertEqual(wish['status'], 'drafted')
         self.assertEqual(wish['draft_text'], '明 生日快乐呀。')
@@ -437,15 +456,19 @@ class BirthdayScheduleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(notices[0]['content'], '明 生日快乐呀。')
         wish = self.ns['_store'].get_birthday_wish(GID, '1001', 2026)
         self.assertEqual((wish['status'], wish['delivered_via']), ('sent', 'group_notice'))
+        # 23:50 + 00:00 reuse the stored row: no repeated full profile scan.
+        self.assertEqual(bot.stranger_uids(), [1001])
+        self.assertEqual(bot.member_list_calls(), 2)  # one member list per job
 
         sent_again = await self.ns['dispatch_birthdays_for_date'](bot, date(2026, 7, 10))
         self.assertEqual(sent_again, 0)
         self.assertEqual(len(bot.notices()), 1)
+        self.assertEqual(bot.stranger_uids(), [1001])
 
     async def test_disable_between_pregen_and_dispatch_skips_send(self) -> None:
         bot = MockBot([MEMBER_1001], PROFILES)
         await self.ns['pregen_birthdays'](bot, date(2026, 7, 10))
-        self.ns['_config_stub'].values['birthday_overrides'] = {'1001': 'none'}
+        self.ns['_store'].upsert_member_birthday('1001', None, 'disabled', force=True)
         sent = await self.ns['dispatch_birthdays_for_date'](bot, date(2026, 7, 10))
         self.assertEqual(sent, 0)
         self.assertEqual(bot.notices(), [])
@@ -493,19 +516,22 @@ class BirthdayScheduleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wish['status'], 'failed')
         self.assertIn('祝福正文不可发布', wish['error'])
 
-    async def test_command_permissions_and_cooldown(self) -> None:
-        bot = MockBot([])
+    async def test_command_permissions_cooldown_and_legacy_cleanup(self) -> None:
+        bot = MockBot([MEMBER_1001], PROFILES)
         event = SimpleNamespace(user_id='2001')
         ns = self.ns
+        ns['_config_stub'].values['birthday_overrides'] = {'1001': '01-01'}
 
         first = await ns['set_birthday_for'](bot, event, '2001', '2001', '7月10日')
         self.assertIn('设为 07-10', first)
-        self.assertEqual(ns['_config_stub'].values['birthday_overrides'], {'2001': '07-10'})
+        row = ns['_store'].get_member_birthday('2001')
+        self.assertEqual((row['source'], row['mmdd']), ('manual', '07-10'))
         self.assertIsNotNone(ns['_store'].get_birthday_cooldown('2001'))
 
         again = await ns['set_birthday_for'](bot, event, '2001', '2001', '08-11')
         self.assertIn('冷却', again)
-        self.assertEqual(ns['_config_stub'].values['birthday_overrides'], {'2001': '07-10'})
+        row = ns['_store'].get_member_birthday('2001')
+        self.assertEqual((row['source'], row['mmdd']), ('manual', '07-10'))
 
         other = await ns['set_birthday_for'](bot, event, '2001', '1001', '09-09')
         self.assertIn('只能修改自己的生日', other)
@@ -514,12 +540,21 @@ class BirthdayScheduleTest(unittest.IsolatedAsyncioTestCase):
         super_event = SimpleNamespace(user_id='2002')
         changed = await ns['set_birthday_for'](bot, super_event, '2002', '1001', '09-09')
         self.assertIn('设为 09-09', changed)
-        self.assertEqual(ns['_config_stub'].values['birthday_overrides']['1001'], '09-09')
+        row = ns['_store'].get_member_birthday('1001')
+        self.assertEqual((row['source'], row['mmdd']), ('manual', '09-09'))
+        self.assertNotIn('1001', ns['_config_stub'].values.get('birthday_overrides', {}))
         self.assertIsNone(ns['_store'].get_birthday_cooldown('2002'))
 
         cleared = await ns['set_birthday_for'](bot, super_event, '2002', '1001', '默认')
-        self.assertIn('恢复读取 QQ 资料', cleared)
-        self.assertNotIn('1001', ns['_config_stub'].values['birthday_overrides'])
+        self.assertIn('按 QQ 资料恢复为 07-10', cleared)
+        row = ns['_store'].get_member_birthday('1001')
+        self.assertEqual((row['source'], row['mmdd']), ('qq_profile', '07-10'))
+
+        unknown_bot = MockBot([], {})
+        unknown = await ns['set_birthday_for'](unknown_bot, super_event, '2002', '1004', '默认')
+        self.assertIn('未公开生日', unknown)
+        row = ns['_store'].get_member_birthday('1004')
+        self.assertEqual(row['source'], 'unknown')
 
     async def test_dry_test_wish_does_not_write_sent_record(self) -> None:
         bot = MockBot([dict(MEMBER_1001)], PROFILES)
@@ -533,6 +568,155 @@ class BirthdayScheduleTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('group_notice', reply)
         self.assertEqual(len(bot.notices()), 1)
         self.assertIsNone(self.ns['_store'].get_birthday_wish(GID, '1001', 2026))
+
+
+    async def test_first_sync_stores_profiles_marks_unknown_and_skips_on_rerun(self) -> None:
+        members = [MEMBER_1001, MEMBER_1002, MEMBER_1003, MEMBER_1004]
+        bot = MockBot(members, {'1001': PROFILES['1001'], '1002': PROFILES['1002']})
+        snapshot = await self.ns['refresh_group_index'](bot, GID)
+        self.assertEqual(snapshot['stats']['added'], 4)
+        self.assertEqual(snapshot['stats']['unknown'], 2)
+        self.assertEqual(bot.stranger_uids(), [1001, 1002, 1003, 1004])
+        self.assertEqual(self.ns['_store'].get_member_birthday('1003')['source'], 'unknown')
+        self.assertEqual(self.ns['_store'].get_member_birthday('1003')['mmdd'], None)
+
+        again = await self.ns['refresh_group_index'](bot, GID)
+        self.assertEqual(again['stats']['added'], 0)
+        self.assertEqual(again['stats']['cached'], 4)
+        # Every known row (including unknown) is reused without another API call.
+        self.assertEqual(bot.stranger_uids(), [1001, 1002, 1003, 1004])
+        birthdays = self.ns['group_birthdays'](again['index'], again['members'])
+        self.assertEqual({member.uid for member in birthdays}, {'1001', '1002'})
+
+    async def test_profile_failure_is_not_persisted_so_next_sync_retries(self) -> None:
+        bot = MockBot([MEMBER_1001], {}, profile_errors={'1001'})
+        snapshot = await self.ns['refresh_group_index'](bot, GID)
+        self.assertEqual(snapshot['stats']['added'], 0)
+        self.assertEqual(snapshot['stats']['failed'], 1)
+        self.assertIsNone(self.ns['_store'].get_member_birthday('1001'))
+        await self.ns['refresh_group_index'](bot, GID)
+        self.assertEqual(bot.stranger_uids(), [1001, 1001])
+        bot.profile_errors.clear()
+        bot.profiles['1001'] = PROFILES['1001']
+        recovered = await self.ns['refresh_group_index'](bot, GID)
+        self.assertEqual(recovered['stats']['added'], 1)
+        self.assertEqual(self.ns['_store'].get_member_birthday('1001')['source'], 'qq_profile')
+
+    async def test_sync_command_incremental_then_full(self) -> None:
+        members = [MEMBER_1001, MEMBER_1002, MEMBER_1003]
+        bot = MockBot(members, {'1001': PROFILES['1001'], '1002': PROFILES['1002']})
+
+        incremental = await self.ns['sync_birthdays'](bot, GID)
+        self.assertIn('增量', incremental)
+        self.assertIn('新增入库 3 人', incremental)
+        self.assertIn('未公开 1 人', incremental)
+
+        # Incremental sync never re-reads a known profile.
+        bot.profiles['1001'] = {'birthday_month': 12, 'birthday_day': 25}
+        cached = await self.ns['sync_birthdays'](bot, GID)
+        self.assertIn('刷新资料 0 人', cached)
+        self.assertEqual(self.ns['_store'].get_member_birthday('1001')['mmdd'], '07-10')
+
+        # A manual choice is protected even by the forced full sync.
+        self.ns['_store'].upsert_member_birthday('1002', '01-01', 'manual', force=True)
+        bot.profiles['1002'] = {'birthday_month': 2, 'birthday_day': 2}
+        bot.profiles['1003'] = {'birthday_month': 3, 'birthday_day': 3}
+        full = await self.ns['sync_birthdays'](bot, GID, full=True)
+        self.assertIn('全量', full)
+        self.assertIn('刷新资料 2 人', full)
+        self.assertIn('手动/关闭 1 人', full)
+        self.assertEqual(self.ns['_store'].get_member_birthday('1001')['mmdd'], '12-25')
+        self.assertEqual(self.ns['_store'].get_member_birthday('1002')['source'], 'manual')
+        self.assertEqual(self.ns['_store'].get_member_birthday('1003')['source'], 'qq_profile')
+        self.assertEqual(bot.stranger_uids().count(1002), 1)
+
+    async def test_birthday_list_reads_db_with_sources_and_proximity(self) -> None:
+        members = [MEMBER_1001, MEMBER_1002, MEMBER_1003, MEMBER_1004]
+        bot = MockBot(members, {})
+        store = self.ns['_store']
+        store.upsert_member_birthday('1001', '12-30', 'manual', force=True)
+        store.upsert_member_birthday('1002', '01-01', 'qq_profile')
+        store.upsert_member_birthday('1003', None, 'disabled', force=True)
+        store.upsert_member_birthday('1004', None, 'unknown')
+        self.ns['now_shanghai'] = lambda: datetime(2026, 12, 30, 12, 0)
+
+        text = await self.ns['birthday_overview'](bot, GID)
+        self.assertIn('2 位成员有生效生日', text)
+        self.assertIn('1 人关闭了自动祝福', text)
+        self.assertIn('1 人未公开生日', text)
+        rows = [line for line in text.splitlines() if '（1001）' in line or '（1002）' in line]
+        self.assertEqual(len(rows), 2)
+        self.assertIn('[手动]', rows[0])
+        self.assertIn('12-30', rows[0])
+        self.assertIn('今天', rows[0])
+        self.assertIn('[资料]', rows[1])
+        self.assertIn('01-01', rows[1])
+        self.assertIn('2 天后', rows[1])
+        self.assertEqual(bot.stranger_uids(), [])
+
+    async def test_migrate_legacy_overrides_once(self) -> None:
+        self.ns['_config_stub'].values['birthday_overrides'] = {
+            '1001': '8-8', '1002': 'none', 'oops': '07-10',
+        }
+        result = await self.ns['migrate_legacy_birthday_overrides']()
+        self.assertEqual(result['migrated'], 2)
+        row = self.ns['_store'].get_member_birthday('1001')
+        self.assertEqual((row['source'], row['mmdd']), ('manual', '08-08'))
+        self.assertEqual(self.ns['_store'].get_member_birthday('1002')['source'], 'disabled')
+        self.assertEqual(self.ns['_config_stub'].values['birthday_overrides'], {})
+
+        second = await self.ns['migrate_legacy_birthday_overrides']()
+        self.assertEqual(second['migrated'], 0)
+        row = self.ns['_store'].get_member_birthday('1001')
+        self.assertEqual((row['source'], row['mmdd']), ('manual', '08-08'))
+
+    async def test_startup_sync_seeds_database_once(self) -> None:
+        bot = MockBot([MEMBER_1001, MEMBER_1002], PROFILES)
+        await self.ns['startup_birthday_sync'](bot)
+        task = self.ns['STARTUP_SYNC']['task']
+        self.assertIsNotNone(task)
+        # A second connect event while the first sync is pending must not start another.
+        await self.ns['startup_birthday_sync'](bot)
+        self.assertIs(self.ns['STARTUP_SYNC']['task'], task)
+        await task
+        self.assertEqual(self.ns['_store'].get_member_birthday('1001')['source'], 'qq_profile')
+        self.assertEqual(self.ns['_store'].get_member_birthday('1002')['source'], 'qq_profile')
+        self.assertEqual(sorted(bot.stranger_uids()), [1001, 1002])
+
+        await self.ns['_run_startup_birthday_sync'](bot)
+        self.assertEqual(sorted(bot.stranger_uids()), [1001, 1002])
+        self.assertEqual(bot.member_list_calls(), 2)  # one member list per startup sync
+
+    async def test_describe_birthday_reads_db_and_queries_missing_once(self) -> None:
+        bot = MockBot([MEMBER_1001], PROFILES)
+        store = self.ns['_store']
+        first = await self.ns['describe_birthday'](bot, GID, '2001', '1001')
+        self.assertIn('来自 QQ 资料', first)
+        self.assertEqual(bot.stranger_uids(), [1001])
+
+        store.upsert_member_birthday('1001', '08-08', 'manual', force=True)
+        self.assertIn('来自手动设置', await self.ns['describe_birthday'](bot, GID, '2001', '1001'))
+        store.upsert_member_birthday('1001', None, 'disabled', force=True)
+        self.assertIn('已关闭自动生日祝福',
+                      await self.ns['describe_birthday'](bot, GID, '2001', '1001'))
+        store.upsert_member_birthday('1001', None, 'unknown', force=True)
+        self.assertIn('未公开生日', await self.ns['describe_birthday'](bot, GID, '2001', '1001'))
+        self.assertEqual(bot.stranger_uids(), [1001])
+        missing = await self.ns['describe_birthday'](MockBot([], {}), GID, '2001', '1001')
+        self.assertIn('不在本群', missing)
+
+    async def test_describe_and_clear_report_profile_failure(self) -> None:
+        bot = MockBot([MEMBER_1001], {}, profile_errors={'1001'})
+        reply = await self.ns['describe_birthday'](bot, GID, '2001', '1001')
+        self.assertIn('资料失败', reply)
+        self.assertIsNone(self.ns['_store'].get_member_birthday('1001'))
+
+        self.ns['_superuser'].allowed.add('2002')
+        clear_bot = MockBot([MEMBER_1001], {}, profile_errors={'1001'})
+        cleared = await self.ns['set_birthday_for'](
+            clear_bot, SimpleNamespace(user_id='2002'), '2002', '1001', '默认')
+        self.assertIn('资料失败', cleared)
+        self.assertIsNone(self.ns['_store'].get_member_birthday('1001'))
 
 
 class BridgeContractTest(unittest.TestCase):

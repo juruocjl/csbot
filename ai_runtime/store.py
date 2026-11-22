@@ -10,7 +10,30 @@ import sqlite3
 import threading
 import time
 import uuid
+from datetime import date as _date
 from pathlib import Path
+
+
+# Sources of truth for ``member_birthdays``. ``unknown`` means the QQ profile was
+# already queried and does not expose a birthday, so it must not be queried again
+# on every incremental sync.
+BIRTHDAY_SOURCES = frozenset({'qq_profile', 'manual', 'disabled', 'unknown'})
+BIRTHDAY_MANUAL_SOURCES = frozenset({'manual', 'disabled'})
+
+
+def normalize_member_birthday(mmdd) -> str | None:
+    """Normalize ``"M-D"``/``"MM-DD"`` into ``"MM-DD"`` (leap day included)."""
+    if not isinstance(mmdd, str):
+        return None
+    match = re.fullmatch(r'(\d{1,2})-(\d{1,2})', mmdd.strip())
+    if not match:
+        return None
+    month, day = int(match.group(1)), int(match.group(2))
+    try:
+        _date(2024, month, day)
+    except ValueError:
+        return None
+    return f'{month:02d}-{day:02d}'
 
 
 USAGE_COLUMNS = (
@@ -116,6 +139,16 @@ class StateStore:
           PRIMARY KEY (group_id, user_id, year)
         );
         CREATE INDEX IF NOT EXISTS birthday_wishes_date ON birthday_wishes(group_id, target_date, status);
+        CREATE TABLE IF NOT EXISTS member_birthdays (
+          uid TEXT PRIMARY KEY,
+          mmdd TEXT,
+          source TEXT NOT NULL,
+          profile_year INTEGER,
+          name TEXT NOT NULL DEFAULT '',
+          synced_at INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS member_birthdays_mmdd ON member_birthdays(mmdd);
         """)
         if 'recalled_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(outbound)')}:
             self.db.execute('ALTER TABLE outbound ADD COLUMN recalled_at INTEGER')
@@ -305,6 +338,118 @@ class StateStore:
             )
             self.db.commit()
             return int(cur.rowcount)
+
+    def get_member_birthday(self, uid: str) -> dict | None:
+        rows = self.rows('SELECT * FROM member_birthdays WHERE uid=?', (str(uid).strip(),))
+        return rows[0] if rows else None
+
+    def list_member_birthdays(self, uids=None) -> dict[str, dict]:
+        """Return ``{uid: row}`` for every stored member (or just ``uids``)."""
+        if uids is None:
+            return {row['uid']: row for row in
+                    self.rows('SELECT * FROM member_birthdays ORDER BY uid')}
+        wanted = sorted({str(uid).strip() for uid in uids if str(uid).strip()})
+        result: dict[str, dict] = {}
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start:start + 500]
+            marks = ','.join('?' for _ in chunk)
+            for row in self.rows(
+                    f'SELECT * FROM member_birthdays WHERE uid IN ({marks})', tuple(chunk)):
+                result[row['uid']] = row
+        return result
+
+    def upsert_member_birthday(self, uid: str, mmdd, source: str, *,
+                               profile_year: int | None = None,
+                               name: str | None = None,
+                               synced_at: int | None = None,
+                               force: bool = False) -> dict:
+        """Insert/refresh one row while never clobbering a manual/disabled choice.
+
+        ``force=True`` is reserved for restoring the QQ profile (``/清除生日``)
+        or for an explicit ``/设置生日`` write. ``name=None`` keeps the stored
+        group card name, so a profile refresh cannot blank it.
+        """
+        uid = str(uid).strip()
+        if not uid:
+            raise ValueError('member birthday requires a user id')
+        if source not in BIRTHDAY_SOURCES:
+            raise ValueError(f'invalid birthday source: {source!r}')
+        normalized = normalize_member_birthday(mmdd)
+        if source in {'manual', 'qq_profile'} and not normalized:
+            raise ValueError(f'{source} birthday requires a valid MM-DD')
+        if source in {'disabled', 'unknown'}:
+            normalized = None
+        existing = self.get_member_birthday(uid)
+        if (existing and existing['source'] in BIRTHDAY_MANUAL_SOURCES
+                and source not in BIRTHDAY_MANUAL_SOURCES and not force):
+            return existing
+        now = int(time.time())
+        if synced_at is None:
+            synced_at = 0 if source in BIRTHDAY_MANUAL_SOURCES else now
+        year = profile_year if type(profile_year) is int and 1 <= profile_year <= 9999 else None
+        display_name = None if name is None else str(name)[:100]
+        self.execute(
+            """INSERT INTO member_birthdays(uid,mmdd,source,profile_year,name,synced_at,updated_at)
+               VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(uid) DO UPDATE SET
+                   mmdd=excluded.mmdd,
+                   source=excluded.source,
+                   profile_year=excluded.profile_year,
+                   name=CASE WHEN ? THEN member_birthdays.name ELSE excluded.name END,
+                   synced_at=excluded.synced_at,
+                   updated_at=excluded.updated_at""",
+            (uid, normalized, str(source), year, display_name or '', int(synced_at), now,
+             1 if display_name is None else 0),
+        )
+        return self.get_member_birthday(uid) or {}
+
+    def update_member_birthday_names(self, names: dict) -> int:
+        """Refresh stored group card names; returns how many rows changed."""
+        changed = 0
+        now = int(time.time())
+        with self.lock:
+            for raw_uid, raw_name in (names or {}).items():
+                uid = str(raw_uid).strip()
+                name = str(raw_name or '').strip()[:100]
+                if not uid or not name:
+                    continue
+                cur = self.db.execute(
+                    'UPDATE member_birthdays SET name=?,updated_at=? WHERE uid=? AND name!=?',
+                    (name, now, uid, name),
+                )
+                changed += max(int(cur.rowcount), 0)
+            self.db.commit()
+        return changed
+
+    def migrate_birthday_overrides(self, overrides: dict | None) -> tuple[int, dict]:
+        """Idempotently import legacy ``birthday_overrides`` into the member table.
+
+        Returns ``(migrated_count, unrecognized_remaining)``. Existing
+        manual/disabled rows win, so a second run changes nothing.
+        """
+        migrated = 0
+        remaining: dict[str, str] = {}
+        for raw_uid, raw_value in (overrides or {}).items():
+            uid = str(raw_uid).strip()
+            source: str | None = None
+            mmdd: str | None = None
+            if isinstance(raw_value, str):
+                value = raw_value.strip()
+                if value.lower() == 'none':
+                    source = 'disabled'
+                else:
+                    mmdd = normalize_member_birthday(value)
+                    if mmdd:
+                        source = 'manual'
+            if source is None or not uid.isdigit():
+                remaining[raw_uid] = raw_value
+                continue
+            existing = self.get_member_birthday(uid)
+            if existing and existing['source'] in BIRTHDAY_MANUAL_SOURCES:
+                continue
+            self.upsert_member_birthday(uid, mmdd, source, force=True)
+            migrated += 1
+        return migrated, remaining
 
     def record_usage(self, item: dict) -> int:
         """Append one immutable billing row and return its autoincrement id."""

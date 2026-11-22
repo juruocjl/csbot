@@ -216,6 +216,23 @@ class BirthdayPromptTest(unittest.TestCase):
         self.assertIn("覆盖设置", prompt)
         self.assertIn("群名片=无", prompt)
 
+    def test_days_until_birthday_orders_next_occurrences(self) -> None:
+        cases = (
+            ("07-10", date(2026, 7, 10), 0),
+            ("07-10", date(2026, 7, 11), 364),
+            ("01-01", date(2026, 12, 30), 2),
+            ("02-29", date(2026, 2, 27), 1),   # common year -> 02-28
+            ("02-29", date(2028, 2, 29), 0),   # leap year
+            ("02-29", date(2028, 3, 1), 364),  # next common-year 02-28
+            ("12-31", date(2026, 1, 1), 364),
+        )
+        for mmdd, today, expected in cases:
+            with self.subTest(mmdd=mmdd, today=today):
+                self.assertEqual(LOGIC.days_until_birthday(mmdd, today), expected)
+        for invalid in (None, "", "7-10", "13-01", "02-30", "abc"):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(LOGIC.days_until_birthday(invalid, date(2026, 1, 1)))
+
 
 if __name__ == "__main__":
     unittest.main()

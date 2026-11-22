@@ -1,9 +1,14 @@
 """CSBot automatic birthday wishes.
 
-Every day at 23:50 (Asia/Shanghai) the plugin pre-generates tomorrow's wishes
-with the same DSH chatbot used for normal chat (read-only group memory
-snapshot), then publishes them as plain-text QQ group notices at 00:00. Every
-send is idempotent per (group, member, year) so a restart never re-sends.
+Every day at 23:50 (Asia/Shanghai) the plugin refreshes one group member list
+per configured group (card names + incremental profile lookups for newcomers),
+pre-generates tomorrow's wishes from the SQLite ``member_birthdays`` table with
+the same DSH chatbot used for normal chat (read-only group memory snapshot),
+then publishes them as plain-text QQ group notices at 00:00. Every send is
+idempotent per (group, member, year) so a restart never re-sends.
+
+Birthday data lives in ``member_birthdays`` as the single source of truth;
+legacy ``runtime_config.birthday_overrides`` entries are migrated on connect.
 """
 from __future__ import annotations
 
@@ -38,22 +43,21 @@ from .config import Config
 from .logic import (
     CLEAR_OVERRIDE,
     DISABLED_VALUE,
-    BirthdayResolution,
     MemberBirthday,
     build_birthday_prompt,
     check_cooldown,
+    days_until_birthday,
     format_cooldown_remaining,
     matches_birthday_on_date,
     parse_birthday_input,
-    resolve_effective_birthday,
     sanitize_notice_text,
     validate_mmdd,
 )
 
 __plugin_meta__ = PluginMetadata(
     name="birthday",
-    description="自动生日祝福：读取 QQ 资料生日、支持覆盖/关闭，0 点发群公告",
-    usage="/生日 [@人]；/设置生日 <MM-DD|关闭|默认>；/清除生日",
+    description="自动生日祝福：生日落库 SQLite、增量同步 QQ 资料，0 点发群公告",
+    usage="/生日 [@人]；/设置生日 <MM-DD|关闭|默认>；/清除生日；/同步生日 [全量]",
     config=Config,
 )
 
@@ -62,8 +66,12 @@ config = get_plugin_config(Config)
 # Model stage direction is never publishable as a group notice.
 BLOCKED_TEXTS = frozenset({QQ_GUARD_BLOCKED_TEXT, QQ_GUARD_FAILED_TEXT})
 
-# Serializes the 23:50 pre-generation, the 00:00 dispatch and restart catch-up.
+# Serializes the 23:50 pre-generation, the 00:00 dispatch, startup sync and
+# restart catch-up so two flows can never scan the same group at once.
 BIRTHDAY_LOCK = asyncio.Lock()
+
+# One in-flight startup sync at a time (on_bot_connect can fire on reconnects).
+STARTUP_SYNC = {"task": None}
 
 
 def now_shanghai() -> datetime:
@@ -81,69 +89,138 @@ async def _group_members(bot, group_id: str, *, no_cache: bool = False) -> list[
     return [item for item in (members or []) if isinstance(item, dict)]
 
 
+def _trackable_members(bot, members: list[dict]) -> list[dict]:
+    """Drop the bot itself and other robots from a group member list."""
+    result: list[dict] = []
+    for item in members or []:
+        uid = str(item.get("user_id") or "").strip()
+        if not uid or uid == str(bot.self_id) or item.get("is_robot") is True:
+            continue
+        result.append(item)
+    return result
+
+
 def _display_name(member: dict, uid: str) -> str:
     return str(member.get("card") or member.get("nickname") or uid)
 
 
-def _known_override(overrides: dict | None, uid: str) -> str | None:
-    """Return a recognized override value, or ``None`` when the profile is needed."""
-    raw = (overrides or {}).get(str(uid))
-    if not isinstance(raw, str):
-        return None
-    value = raw.strip()
-    if value.lower() == DISABLED_VALUE:
-        return DISABLED_VALUE
-    match = re.fullmatch(r"(\d{1,2})-(\d{1,2})", value)
-    if not match:
-        return None
-    try:
-        return validate_mmdd(int(match.group(1)), int(match.group(2)))
-    except ValueError:
-        return None
+async def _fetch_profile_birthday(bot, uid: str) -> tuple[str | None, int | None, bool]:
+    """Query one QQ profile once.
 
-
-async def _profile_birthday(bot, uid: str) -> tuple[int | None, int | None, int | None]:
+    Returns ``(mmdd, year, ok)``: ``ok=False`` means the query itself failed (a
+    later incremental sync may retry); ``ok=True`` with no ``mmdd`` means the
+    profile was read and does not expose a birthday, so it is stored ``unknown``.
+    """
     try:
         info = await asyncio.wait_for(
             bot.get_stranger_info(user_id=int(uid), no_cache=True), timeout=8
         )
-    except Exception as exc:  # one member's privacy/failure must not stop the scan
-        logger.warning(f"读取 QQ {uid} 资料生日失败，按未公开处理: {type(exc).__name__}")
-        return None, None, None
+    except Exception as exc:  # one member's privacy/failure must not stop the sync
+        logger.warning(f"读取 QQ {uid} 资料生日失败，稍后重试: {type(exc).__name__}")
+        return None, None, False
     if not isinstance(info, dict):
-        return None, None, None
-    return info.get("birthday_month"), info.get("birthday_day"), info.get("birthday_year")
+        return None, None, False
+    try:
+        mmdd = validate_mmdd(info.get("birthday_month"), info.get("birthday_day"))
+    except ValueError:
+        mmdd = None
+    year = info.get("birthday_year")
+    return mmdd, (year if type(year) is int and 1 <= year <= 9999 else None), True
 
 
-async def _resolve_member(bot, uid: str, member: dict, overrides: dict) -> BirthdayResolution:
-    if _known_override(overrides, uid) is not None:
-        # An explicit override wins; skipping the stranger query saves API calls.
-        return resolve_effective_birthday(uid, None, None, overrides)
-    month, day, year = await _profile_birthday(bot, uid)
-    return resolve_effective_birthday(uid, month, day, overrides, profile_year=year)
+async def _store_profile_birthday(bot, uid: str, name: str = "",
+                                  *, force: bool = False) -> dict | None:
+    """Fetch one profile and persist it; ``None`` when the query failed."""
+    mmdd, year, ok = await _fetch_profile_birthday(bot, uid)
+    if not ok:
+        return None
+    store = state_store()
+    if mmdd:
+        return store.upsert_member_birthday(
+            uid, mmdd, "qq_profile", profile_year=year,
+            name=name or None, force=force,
+        )
+    return store.upsert_member_birthday(uid, None, "unknown", name=name or None, force=force)
 
 
-async def fetch_group_birthdays(bot, group_id: str, overrides: dict) -> list[MemberBirthday]:
-    """Scan one group and return every member with an effective birthday."""
-    gid = str(group_id)
-    result: list[MemberBirthday] = []
-    for item in await _group_members(bot, gid, no_cache=True):
+async def refresh_group_index(bot, gid: str, *, full: bool = False,
+                              no_cache: bool = False) -> dict:
+    """Refresh one group's card names and incrementally fill the birthday table.
+
+    Only members missing from ``member_birthdays`` trigger a profile query; with
+    ``full=True`` every row that is not ``manual``/``disabled`` is refreshed.
+    """
+    gid = str(gid)
+    members = _trackable_members(bot, await _group_members(bot, gid, no_cache=no_cache))
+    uids = [str(item.get("user_id") or "").strip() for item in members]
+    index = state_store().list_member_birthdays(uids)
+    stats = {"members": len(members), "added": 0, "refreshed": 0, "unknown": 0,
+             "cached": 0, "manual": 0, "failed": 0, "names_updated": 0}
+    names: dict[str, str] = {}
+    for item in members:
         uid = str(item.get("user_id") or "").strip()
-        if not uid or uid == str(bot.self_id):
+        name = _display_name(item, uid)
+        row = index.get(uid)
+        if row is None:
+            try:
+                row = await _store_profile_birthday(bot, uid, name)
+            except Exception as exc:
+                stats["failed"] += 1
+                logger.warning(f"群 {gid} 成员 {uid} 生日入库失败: {type(exc).__name__}")
+                continue
+            if row is None:
+                stats["failed"] += 1
+                continue
+            index[uid] = row
+            stats["added"] += 1
+            if row["source"] == "unknown":
+                stats["unknown"] += 1
             continue
-        if item.get("is_robot") is True:
+        if full and row["source"] not in ("manual", "disabled"):
+            try:
+                row = await _store_profile_birthday(bot, uid, name, force=True)
+            except Exception as exc:
+                stats["failed"] += 1
+                logger.warning(f"群 {gid} 成员 {uid} 生日刷新失败: {type(exc).__name__}")
+                continue
+            if row is None:
+                stats["failed"] += 1
+                continue
+            index[uid] = row
+            if row["source"] == "unknown":
+                stats["unknown"] += 1
+            else:
+                stats["refreshed"] += 1
             continue
-        resolution = await _resolve_member(bot, uid, item, overrides or {})
-        if not resolution.mmdd:
+        if row["source"] in ("manual", "disabled"):
+            stats["manual"] += 1
+        else:
+            stats["cached"] += 1
+        if name and row.get("name") != name:
+            names[uid] = name
+    if names:
+        stats["names_updated"] = state_store().update_member_birthday_names(names)
+        for uid, name in names.items():
+            index[uid]["name"] = name
+    return {"members": members, "index": index, "stats": stats}
+
+
+def group_birthdays(index: dict, members: list[dict]) -> list[MemberBirthday]:
+    """Build prompt-facing entries for group members with an enabled birthday."""
+    result: list[MemberBirthday] = []
+    for item in members:
+        uid = str(item.get("user_id") or "").strip()
+        row = (index or {}).get(uid)
+        if not row or not row.get("mmdd"):
             continue
         result.append(MemberBirthday(
             uid=uid,
-            mmdd=resolution.mmdd,
-            source=resolution.source,
+            mmdd=row["mmdd"],
+            source="override" if row["source"] == "manual" else "profile",
             name=_display_name(item, uid),
             nickname=str(item.get("nickname") or ""),
             card=str(item.get("card") or ""),
-            profile_year=resolution.profile_year,
+            profile_year=row.get("profile_year"),
         ))
     return result
 
@@ -169,21 +246,20 @@ async def _generate_wish(gid: str, member: MemberBirthday, target_date: date) ->
 
 
 async def pregen_birthdays(bot, target_date: date | None = None) -> int:
-    """23:50 job: pre-generate drafts for tomorrow (idempotent per year)."""
+    """23:50 job: refresh names/newcomers once, then draft tomorrow's wishes."""
     if _background_disabled():
         return 0
     async with BIRTHDAY_LOCK:
         target = target_date or (now_shanghai().date() + timedelta(days=1))
-        overrides = await runtime_config.get("birthday_overrides") or {}
         drafted = 0
         for group_id in config.cs_group_list:
             gid = str(group_id)
             try:
-                members = await fetch_group_birthdays(bot, gid, overrides)
+                snapshot = await refresh_group_index(bot, gid)
             except Exception as exc:
                 logger.warning(f"群 {gid} 生日预生成扫描失败: {type(exc).__name__}")
                 continue
-            for member in members:
+            for member in group_birthdays(snapshot["index"], snapshot["members"]):
                 if not matches_birthday_on_date(member.mmdd, target):
                     continue
                 existing = state_store().get_birthday_wish(gid, member.uid, target.year)
@@ -241,17 +317,16 @@ async def dispatch_birthdays_for_date(bot, target_date: date | None = None) -> i
         return 0
     async with BIRTHDAY_LOCK:
         today = target_date or now_shanghai().date()
-        # Re-read the overrides so a 23:50~00:00 edit/disable takes effect.
-        overrides = await runtime_config.get("birthday_overrides") or {}
         sent = 0
         for group_id in config.cs_group_list:
             gid = str(group_id)
             try:
-                members = [member for member in await fetch_group_birthdays(bot, gid, overrides)
-                           if matches_birthday_on_date(member.mmdd, today)]
+                snapshot = await refresh_group_index(bot, gid)
             except Exception as exc:
                 logger.warning(f"群 {gid} 生日发送扫描失败: {type(exc).__name__}")
                 continue
+            members = [member for member in group_birthdays(snapshot["index"], snapshot["members"])
+                       if matches_birthday_on_date(member.mmdd, today)]
             members.sort(key=lambda member: int(member.uid) if member.uid.isdigit() else 10**18)
             for member in members:
                 wish = state_store().get_birthday_wish(gid, member.uid, today.year)
@@ -320,21 +395,30 @@ def _parse_target(event, args: Message) -> tuple[str, str]:
     return uid, raw
 
 
+def _text_args(args: Message) -> str:
+    return " ".join(
+        str(segment.data.get("text", "")) for segment in args if segment.type == "text"
+    ).strip()
+
+
 async def describe_birthday(bot, gid: str, actor_uid: str, target_uid: str) -> str:
     gid, actor_uid, target_uid = str(gid), str(actor_uid), str(target_uid)
     members = {str(item.get("user_id")): item for item in await _group_members(bot, gid)}
     member = members.get(target_uid)
     if member is None:
         return f"QQ {target_uid} 不在本群，无法查询。"
-    overrides = await runtime_config.get("birthday_overrides") or {}
-    resolution = await _resolve_member(bot, target_uid, member, overrides)
     name = _display_name(member, target_uid)
-    if resolution.source == "override":
-        body = f"生日 {resolution.mmdd}（来自覆盖设置）"
-    elif resolution.source == "disabled":
+    row = state_store().get_member_birthday(target_uid)
+    if row is None:
+        row = await _store_profile_birthday(bot, target_uid, name)
+    if row is None:
+        return f"读取 QQ {target_uid} 资料失败，请稍后再试。"
+    if row["source"] == "manual":
+        body = f"生日 {row['mmdd']}（来自手动设置）"
+    elif row["source"] == "disabled":
         body = "已关闭自动生日祝福（none）"
-    elif resolution.source == "profile":
-        body = f"生日 {resolution.mmdd}（来自 QQ 资料）"
+    elif row["source"] == "qq_profile":
+        body = f"生日 {row['mmdd']}（来自 QQ 资料）"
     else:
         body = "未公开生日，当前不会收到自动生日祝福"
     note = ""
@@ -347,6 +431,37 @@ async def describe_birthday(bot, gid: str, actor_uid: str, target_uid: str) -> s
             note = f"\n修改冷却中，还需 {format_cooldown_remaining(remaining)}。"
     owner = "你" if target_uid == actor_uid else f"群友 {name}（{target_uid}）"
     return f"{owner}：{body}。{note}".rstrip()
+
+
+async def _drop_legacy_override(uid: str) -> bool:
+    """Best-effort removal of a stale ``birthday_overrides`` entry (double source)."""
+    try:
+        overrides = dict(await runtime_config.get("birthday_overrides") or {})
+    except Exception:
+        return False
+    if uid not in overrides:
+        return False
+    overrides.pop(uid, None)
+    try:
+        await runtime_config.set("birthday_overrides", overrides, updated_by="birthday")
+    except Exception as exc:
+        logger.warning(f"清理旧生日覆盖 {uid} 失败: {type(exc).__name__}")
+        return False
+    return True
+
+
+async def migrate_legacy_birthday_overrides() -> dict:
+    """Import legacy runtime-config overrides into the member table once."""
+    overrides = dict(await runtime_config.get("birthday_overrides") or {})
+    if not overrides:
+        return {"migrated": 0, "remaining": 0}
+    migrated, remaining = state_store().migrate_birthday_overrides(overrides)
+    if migrated:
+        # Clear the legacy map so queries only ever use member_birthdays.
+        await runtime_config.set("birthday_overrides", {}, updated_by="birthday-migration")
+    if remaining:
+        logger.warning(f"生日覆盖迁移丢弃 {len(remaining)} 条无法识别的旧配置")
+    return {"migrated": migrated, "remaining": len(remaining)}
 
 
 async def set_birthday_for(bot, event, actor_uid: str, target_uid: str,
@@ -367,44 +482,87 @@ async def set_birthday_for(bot, event, actor_uid: str, target_uid: str,
         )
         if not allowed:
             return f"生日修改还在冷却中，请在 {format_cooldown_remaining(remaining)} 后再试。"
-    overrides = dict(await runtime_config.get("birthday_overrides") or {})
+    store = state_store()
+    await _drop_legacy_override(target_uid)
     if value == CLEAR_OVERRIDE:
-        overrides.pop(target_uid, None)
-    else:
-        overrides[target_uid] = value
-    await runtime_config.set("birthday_overrides", overrides, updated_by=actor_uid)
-    if not superuser:
-        state_store().set_birthday_cooldown(actor_uid)
-    removed = state_store().clear_unsent_birthday_draft(target_uid)
-    if value == DISABLED_VALUE:
+        row = await _store_profile_birthday(bot, target_uid, "", force=True)
+        if row is None:
+            return f"读取 QQ {target_uid} 资料失败，请稍后再发送 /清除生日。"
+        if row["source"] == "qq_profile":
+            action = f"已清除 {target_uid} 的生日设置，按 QQ 资料恢复为 {row['mmdd']}"
+        else:
+            action = f"已清除 {target_uid} 的生日设置，QQ 资料未公开生日，后续不会自动祝福"
+    elif value == DISABLED_VALUE:
+        store.upsert_member_birthday(target_uid, None, "disabled", force=True)
         action = f"已关闭 {target_uid} 的自动生日祝福"
-    elif value == CLEAR_OVERRIDE:
-        action = f"已清除 {target_uid} 的生日覆盖，恢复读取 QQ 资料"
     else:
+        store.upsert_member_birthday(target_uid, value, "manual", force=True)
         action = f"已把 {target_uid} 的生日设为 {value}"
+    if not superuser:
+        store.set_birthday_cooldown(actor_uid)
+    removed = store.clear_unsent_birthday_draft(target_uid)
     suffix = f"，并清理了 {removed} 条未发送草稿" if removed else ""
     return action + suffix + "。"
 
 
 async def birthday_overview(bot, gid: str) -> str:
+    """``/生日列表``: read the DB, show sources and order by next occurrence."""
     gid = str(gid)
-    overrides = await runtime_config.get("birthday_overrides") or {}
-    entries: list[tuple[str, str, str, str]] = []
-    disabled = 0
-    for item in await _group_members(bot, gid):
+    try:
+        snapshot = await refresh_group_index(bot, gid)
+    except Exception as exc:
+        logger.warning(f"群 {gid} 生日列表读取失败: {type(exc).__name__}")
+        return "读取生日库失败，请稍后重试。"
+    today = now_shanghai().date()
+    entries: list[tuple[int, str, dict, dict]] = []
+    disabled = unknown = 0
+    for item in snapshot["members"]:
         uid = str(item.get("user_id") or "").strip()
-        if not uid or uid == str(bot.self_id) or item.get("is_robot") is True:
+        row = snapshot["index"].get(uid)
+        if not row:
             continue
-        resolution = await _resolve_member(bot, uid, item, overrides)
-        if resolution.source == "disabled":
+        if row["source"] == "disabled":
             disabled += 1
-        if resolution.mmdd:
-            entries.append((resolution.mmdd, uid, _display_name(item, uid), resolution.source))
-    entries.sort()
-    lines = [f"本群共有 {len(entries)} 位成员有生效生日，另有 {disabled} 人关闭了自动祝福。"]
-    for mmdd, uid, name, source in entries:
-        tag = "[覆盖]" if source == "override" else "[资料]"
-        lines.append(f"{mmdd} {tag} {name}（{uid}）")
+            continue
+        if not row.get("mmdd"):
+            unknown += 1
+            continue
+        days = days_until_birthday(row["mmdd"], today)
+        entries.append((days if days is not None else 10**6, uid, row, item))
+    entries.sort(key=lambda entry: (entry[0], entry[2]["mmdd"], entry[1]))
+    lines = [
+        f"本群共有 {len(entries)} 位成员有生效生日，"
+        f"另有 {disabled} 人关闭了自动祝福，{unknown} 人未公开生日。"
+    ]
+    if not entries:
+        lines.append("当前没有可用的生日记录。")
+        return "\n".join(lines)
+    lines.append("按离今天最近的排期排序：")
+    for days, uid, row, item in entries:
+        tag = "[手动]" if row["source"] == "manual" else "[资料]"
+        when = "今天" if days == 0 else f"{days} 天后"
+        lines.append(f"{row['mmdd']} {tag} {_display_name(item, uid)}（{uid}）· {when}")
+    return "\n".join(lines)
+
+
+async def sync_birthdays(bot, gid: str, *, full: bool = False) -> str:
+    """``/同步生日``: incremental (default) or forced full profile refresh."""
+    gid = str(gid)
+    try:
+        snapshot = await refresh_group_index(bot, gid, full=full, no_cache=True)
+    except Exception as exc:
+        logger.warning(f"群 {gid} 生日同步失败: {type(exc).__name__}")
+        return f"生日库同步失败：{type(exc).__name__}"
+    stats = snapshot["stats"]
+    mode = "全量" if full else "增量"
+    lines = [
+        f"生日库{mode}同步完成：扫描 {stats['members']} 人，新增入库 {stats['added']} 人，"
+        f"刷新资料 {stats['refreshed']} 人，未公开 {stats['unknown']} 人，"
+        f"手动/关闭 {stats['manual']} 人，库内复用 {stats['cached']} 人，"
+        f"失败 {stats['failed']} 人。"
+    ]
+    if stats["names_updated"]:
+        lines.append(f"更新群名片 {stats['names_updated']} 人。")
     return "\n".join(lines)
 
 
@@ -415,17 +573,21 @@ async def send_test_wish(bot, gid: str, actor_uid: str, target_uid: str,
     member = members.get(target_uid)
     if member is None:
         return f"QQ {target_uid} 不在本群，无法测试。"
-    overrides = await runtime_config.get("birthday_overrides") or {}
-    resolution = await _resolve_member(bot, target_uid, member, overrides)
-    source = resolution.source if resolution.source in ("override", "profile") else "profile"
+    name = _display_name(member, target_uid)
+    row = state_store().get_member_birthday(target_uid)
+    if row is None:
+        row = await _store_profile_birthday(bot, target_uid, name)
+    if row is None:
+        row = {"mmdd": None, "source": "unknown", "profile_year": None}
+    source = "override" if row["source"] == "manual" else "profile"
     wish_member = MemberBirthday(
         uid=target_uid,
-        mmdd=resolution.mmdd or "01-01",
+        mmdd=row["mmdd"] or "01-01",
         source=source,
-        name=_display_name(member, target_uid),
+        name=name,
         nickname=str(member.get("nickname") or ""),
         card=str(member.get("card") or ""),
-        profile_year=resolution.profile_year,
+        profile_year=row.get("profile_year"),
     )
     try:
         text, run_id = await _generate_wish(gid, wish_member, now_shanghai().date())
@@ -441,10 +603,25 @@ async def send_test_wish(bot, gid: str, actor_uid: str, target_uid: str,
     return f"已在当前群发送测试生日祝福（{delivered_via}）。\nAI 记录：{link}"
 
 
+async def _run_startup_birthday_sync(bot) -> None:
+    try:
+        await migrate_legacy_birthday_overrides()
+    except Exception as exc:
+        logger.warning(f"旧生日覆盖迁移失败: {type(exc).__name__}")
+    async with BIRTHDAY_LOCK:
+        for group_id in config.cs_group_list:
+            gid = str(group_id)
+            try:
+                await refresh_group_index(bot, gid, no_cache=True)
+            except Exception as exc:
+                logger.warning(f"群 {gid} 生日启动同步失败: {type(exc).__name__}")
+
+
 birthday_query = on_command("生日", aliases={"查看生日"}, priority=10, block=True)
 birthday_set = on_command("设置生日", priority=10, block=True)
 birthday_clear = on_command("清除生日", aliases={"重置生日"}, priority=10, block=True)
 birthday_list = on_command("生日列表", priority=10, block=True, permission=SUPERUSER)
+birthday_sync = on_command("同步生日", priority=10, block=True, permission=SUPERUSER)
 birthday_test = on_command("测试生日祝福", priority=10, block=True, permission=SUPERUSER)
 
 
@@ -485,6 +662,13 @@ async def birthday_clear_function(bot: Bot, event: GroupMessageEvent,
 @birthday_list.handle()
 async def birthday_list_function(bot: Bot, event: GroupMessageEvent):
     await birthday_list.finish(await birthday_overview(bot, str(event.group_id)))
+
+
+@birthday_sync.handle()
+async def birthday_sync_function(bot: Bot, event: GroupMessageEvent,
+                                 args: Message = CommandArg()):
+    full = _text_args(args).lower() in {"全量", "全部", "all", "force", "--all", "--force"}
+    await birthday_sync.finish(await sync_birthdays(bot, str(event.group_id), full=full))
 
 
 @birthday_test.handle()
@@ -544,6 +728,17 @@ async def scheduled_birthday_dispatch() -> None:
         await dispatch_birthdays_for_date(bot)
     except Exception as exc:
         logger.error(f"生日祝福发送任务异常: {type(exc).__name__}")
+
+
+@get_driver().on_bot_connect
+async def startup_birthday_sync(bot: Bot) -> None:
+    """First connect: migrate legacy overrides and seed missing members once."""
+    if _background_disabled():
+        return
+    task = STARTUP_SYNC.get("task")
+    if task is not None and not task.done():
+        return
+    STARTUP_SYNC["task"] = asyncio.create_task(_run_startup_birthday_sync(bot))
 
 
 @get_driver().on_bot_connect
