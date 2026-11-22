@@ -183,9 +183,30 @@ class BirthdayPromptTest(unittest.TestCase):
         for expected in ("2026年07月10日", "1058060222", "QQ=123456", "群名片", "nick",
                          "小明", "memory_search", "csdata.search", "csdata.query",
                          "matches_pw", "game_history", "不要输出 [at:QQ号]",
-                         "严禁编造", "120~350"):
+                         "严禁编造"):
             with self.subTest(expected=expected):
                 self.assertIn(expected, prompt)
+
+    def test_prompt_uses_deadpan_exaggeration_with_layered_fallback(self) -> None:
+        prompt = LOGIC.build_birthday_prompt(
+            group_id="1058060222",
+            user_id="123456",
+            display_name="小明",
+            nickname="nick",
+            card="群名片",
+            target_date=date(2026, 7, 10),
+            source="profile",
+            birthday_year=2000,
+        )
+        for expected in ("一本正经的夸张反差", "夸张外壳", "群史馆", "授勋词",
+                         "春晚式官话", "彩虹屁", "反差靠具体实料",
+                         "料很足", "料不多", "几乎没料", "40~90",
+                         "绝不假装很熟", "严禁编造", "350 字以内"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, prompt)
+        # The old "sincere and warm" fallback was the AI-flavoured default we replaced.
+        self.assertNotIn("真诚温暖地祝贺", prompt)
+        self.assertNotIn("120~350", prompt)
 
     def test_prompt_marks_override_source(self) -> None:
         prompt = LOGIC.build_birthday_prompt(

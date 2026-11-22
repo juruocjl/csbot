@@ -201,17 +201,29 @@ def sanitize_notice_text(text: str, *, fallback_name: str = "",
 def build_birthday_prompt(*, group_id: str, user_id: str, display_name: str,
                           nickname: str, card: str, target_date: date, source: str,
                           birthday_year: int | None = None) -> str:
-    """Prompt for the same DSH chatbot, with an enforced research-first flow."""
-    source_line = ("生日来自群管理员覆盖设置" if source == "override"
+    """Prompt for the same DSH chatbot: research first, then a deadpan-exaggerated notice."""
+    source_line = ("生日来自覆盖设置" if source == "override"
                    else "生日来自该群友的 QQ 资料")
     year_line = (f"资料生日年份：{birthday_year}（仅用于判断是否成年，不要主动报年龄）\n"
                  if birthday_year else "")
-    return f"""你现在要写一条生日祝福，将于 {target_date:%Y年%m月%d日} 0 点作为 QQ 群公告发到本群（群号 {group_id}）。
-寿星身份：QQ={user_id}，当前群名片={card or '无'}，QQ 昵称={nickname or '无'}，建议称呼参考={display_name}。
-{source_line}。
+    return f"""你现在要为本群（群号 {group_id}）写一条将于 {target_date:%Y年%m月%d日} 0 点发布的 QQ 群公告生日祝福。
+寿星信息：QQ={user_id}，当前群名片={card or '无'}，QQ 昵称={nickname or '无'}，参考称呼={display_name}（{source_line}）。
 {year_line}
-动笔前必须先检索，再写：这是群公告，不是普通聊天回复。
-1. 先调用 memory_search，分别用 QQ 号、群名片、QQ 昵称以及已知外号检索，全面了解对方在群里的外号/称呼、性格、爱好、标志性梗与过往话题。
-2. 再调用 execute_python，用 csdata 检索该群友的历史聊天发言与被提及记录（csdata.search / csdata.query），以及绑定信息与 CS 战绩、常玩游戏（members / profiles / matches_pw / matches_gp / game_history / points_today）。
-3. 基于真实查证到的资料写个性化祝福：可以提外号、常聊话题、最近打 CS 或常玩游戏里真实存在的高光或搞笑片段。如果资料很少或查不到具体内容，就真诚温暖地祝贺；严禁编造不存在的战绩、梗或经历。
-4. 输出规范：直接输出可以作为 QQ 群公告发布的纯文本正文，不要 Markdown、不要链接、绝对不要输出 [at:QQ号] 标记；不要输出查询过程或工具步骤，也不要提“我查了数据库/记忆”。篇幅约 120~350 字，自然真诚，有熟人群友的氛围。"""
+【第一步：动笔前必须先全面检索】
+1. 先用 memory_search 分别按 QQ 号、群名片、QQ 昵称及查到的外号检索，摸清对方在群里的常用外号、性格、口头禅、标志性名场面与常聊话题。
+2. 再用 execute_python 调用 csdata 检索其历史群聊发言与被提及记录（csdata.search / csdata.query），以及绑定信息、CS 战绩与常玩游戏（members / profiles / matches_pw / matches_gp / game_history / points_today）。
+
+【第二步：写作风格——用“一本正经的夸张反差”消解 AI 味】
+AI 写祝福最违和的是假装很熟的抒情套话；反而把群公告写成“排场极大、一本正经的夸张庆贺”，再塞进只有本群才知道的真实细节，反差感最好笑也最像自己人。
+- **选一个贴合此人的夸张外壳**（按查到的真实人设自然挑选，不必每次固定同一种）：例如群史馆特大喜讯通告、Major 赛后 MVP / 年度 Top 1 授勋词、突发头版快讯、全群荣誉嘉奖令等。
+- **反差靠具体实料，不靠空洞辞藻**：越是具体的真细节（真实外号、经典口癖、离谱下饭操作或高光战绩、作息习惯、爱玩的游戏），放进越郑重其事的排场里越有喜剧效果。把这些真实梗一本正经包装成“震撼全群的传奇履历”，末尾干脆利落收在生日祝福。
+- **称呼自然**：查到群友习惯叫的真实外号就优先用外号，不要机械念 QQ 号或硬凑称呼。
+- **按实料多少自然伸缩**：
+  - 料很足：挑最出彩的 2~4 个真梗串成有节奏的夸张公告，约 180~350 字；
+  - 料不多（仅 1~2 条零星记录）：围绕这件真事抖一个夸张机灵即可，约 100~180 字，不强行扩写成通稿；
+  - 几乎没料（潜水/新人）：40~90 字短平快，用“本群稀有潜水传奇迎来一年一度合法现身日”这类轻松戏谑的轻量排场祝一句生日快乐，绝不假装很熟、不硬凑长篇。
+
+【第三步：红线与输出格式】
+- **拒绝油腻模板**：严禁“在这个特别的日子里”“愿你被世界温柔以待”“乘风破浪”“璀璨星河”等春晚式官话、空洞排比和干瘪彩虹屁。
+- **严禁编造与越线**：提到的每一个外号、战绩、游戏、名场面都必须来自本次检索到的真实记录，查不到一律不脑补；调侃点到为止、底色喜庆友善，绝不人身攻击、不碰隐私与敏感话题。
+- **纯文本群公告**：直接输出可发布的纯文本正文，不要 Markdown 符号（不用 **、#、列表符）、不要链接、不要表情包占位、绝对不要输出 [at:QQ号]；不要暴露检索过程，不要出现“我查了数据库/记忆”等字样，总字数控制在 350 字以内。"""
