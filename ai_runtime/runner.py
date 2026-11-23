@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import hashlib
 import inspect
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -15,17 +16,22 @@ from .source import source_snapshot
 from .usage import normalize_dsh_usage
 from .openai_support import (
     DEFAULT_IMAGE_MODEL,
+    OpenAICircuitBreaker,
     generate_openai_image,
     is_openai_endpoint,
     is_openai_non_reasoning_model,
     normalize_openai_base_url,
+    openai_circuit_breaker,
     resolve_deepseek_aux,
+    resolve_openai_connect_timeout_ms,
+    resolve_openai_fallback,
     resolve_openai_proxy,
 )
 
 RUNTIME = Path(__file__).resolve().parent
 LIVE_SLOTS = asyncio.Semaphore(1)
 ACTIVE = {}
+logger = logging.getLogger(__name__)
 
 
 async def steer_run(run_id,text):
@@ -185,15 +191,27 @@ def render_profile(env):
     # while memory distill + verification run on domestic direct deepseek-flash.
     aux_enabled=bool(provider=="openai" and env.get("CSBOT_AUX_PROVIDER")=="deepseek-official"
                      and env.get("CSBOT_AUX_MODEL") and env.get("DEEPSEEK_API_KEY"))
+    # Primary-channel fallback stays orthogonal to the aux switch: the same
+    # domestic provider is mounted even when CS_AI_AUX_ENABLE=0.
+    fallback_enabled=bool(provider=="openai" and env.get("CSBOT_FALLBACK_PROVIDER")=="deepseek-official"
+                          and env.get("CSBOT_FALLBACK_MODEL") and env.get("DEEPSEEK_API_KEY"))
     if provider=="openai":
         for index,item in enumerate(profile):
             if item.get("id")=="llm-deepseek":
-                if aux_enabled:
+                if aux_enabled or fallback_enabled:
                     deepseek_config=dict(item.get("config") or {})
-                    deepseek_config["models"]=[{
-                        "id":env["CSBOT_AUX_MODEL"],
-                        "contextWindow":int(env.get("CSBOT_AUX_CONTEXT_WINDOW","65536")),
-                        "maxTokens":8192,"inputModalities":["text"]}]
+                    models=[]
+                    for ident,context_key,context_default in (
+                        (env.get("CSBOT_AUX_MODEL"),"CSBOT_AUX_CONTEXT_WINDOW","65536"),
+                        (env.get("CSBOT_FALLBACK_MODEL"),"CSBOT_FALLBACK_CONTEXT_WINDOW",None),
+                    ):
+                        if not ident or any(entry["id"]==ident for entry in models): continue
+                        context_window=(int(env[context_key]) if env.get(context_key) else None)
+                        if context_window is None:
+                            context_window=(int(context_default) if context_default else 65536)
+                        models.append({"id":ident,"contextWindow":context_window,
+                                       "maxTokens":8192,"inputModalities":["text"]})
+                    deepseek_config["models"]=models
                     profile[index]={"id":"llm-deepseek","config":deepseek_config}
                 else:
                     profile[index]={"id":"llm-deepseek","disabled":True}
@@ -229,6 +247,18 @@ def render_profile(env):
         }
         if not non_reasoning:
             provider_profile["reasoning"]="medium" if env.get("CSBOT_THINKING")=="1" else "low"
+        if fallback_enabled:
+            # Native dsh-llm-retry would otherwise retry a dead proxy five times
+            # (~90s). Retry only the two cheap transient shapes once, then let
+            # the step-level hook move the turn to deepseek-flash.
+            if env.get("CSBOT_OPENAI_PROBE")=="1":
+                provider_profile["retryPolicy"]={"mode":"normal","maxRetries":0}
+            else:
+                provider_profile["retryPolicy"]={
+                    "mode":"normal","maxRetries":1,
+                    "retryableCodes":["EMPTY_RESPONSE","SERVER"],
+                    "backoff":{"initialDelayMs":500,"maxDelayMs":1000,"jitterRatio":0.1},
+                }
         profile.append({"insert":[
             {"id":"llm-pi-ai","name":"@deepseek-ai/dsh-llm-pi-ai",
              "config":{"providers":{"openai":provider_profile}}}
@@ -287,263 +317,379 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                   search_url: str="", search_api_key: str="", enable_image_gen: bool | None=None,
                   aux_url: str="", aux_api_key: str="", aux_model: str="",
                   on_usage=None, memory_source_dir: Path | None=None,
-                  read_only_memory: bool=False, usage_scene: str=""):
+                  read_only_memory: bool=False, usage_scene: str="",
+                  circuit_breaker: OpenAICircuitBreaker | None=None):
     from .sandbox import ScriptSandbox
     use_openai=is_openai_endpoint(endpoint)
     effective_image_model=(image_model if image_model is not None
                            else os.getenv("CS_AI_IMAGE_MODEL", DEFAULT_IMAGE_MODEL)).strip()
-    if use_openai:
-        image_gen_enabled=bool(not memory_only and enable_image_gen is not False and effective_image_model)
-    else:
-        image_gen_enabled=bool(enable_image_gen is True and effective_image_model)
-    with source_snapshot() if not memory_only else nullcontext(None) as code_snapshot:
-        root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
-        workspace=root/"workspace"
-        workspace.mkdir(parents=True,exist_ok=True)
-        # Generated scratch artifacts live for one turn. Chat thumbnails and
-        # normalized DSH previews retain their separate persistence policy.
-        artifacts=workspace/'artifacts'
-        image_views=[]
-        os.chmod(root,0o700)
-        for filename in ("DATA.md",):
-            source=RUNTIME/filename
-            if source.is_file(): shutil.copyfile(source,workspace/filename)
-        (workspace/"SOURCE.md").write_text(code_snapshot.guide if code_snapshot else "本次离线记忆维护未开放源码。\n")
-        if memory_source_dir is not None:
-            # Mount a point-in-time copy of the source group's Mneme database;
-            # the live group memory is never opened for writing by this turn.
-            _snapshot_memory_dir(Path(memory_source_dir), root/"memory")
-        executable=RUNTIME/"dsh/node_modules/.bin/dsh"
-        if not executable.is_file():
-            raise ValueError("DSH runtime not installed; run deployment preflight")
-        # No bot, database, SSH, proxy, or unrelated provider secrets inherited.
-        context_window=os.getenv("CS_AI_CONTEXT_WINDOW") or ("131072" if use_openai else "65536")
-        env={"PATH":os.environ.get("PATH","/usr/local/bin:/usr/bin:/bin"),"HOME":str(root),
-             "DSH_HOME":str(root/"harness"),
-             "DSH_CONTEXT_WINDOW":context_window,
-             "DSH_SYSTEM_PROMPT":SYSTEM_PROMPT+f"\n当前接入的模型标识是 {model}；问到具体型号时以此为准，不猜测其他版本。\n","CSBOT_MODEL":model,
-             "CSBOT_MEMORY_DIR":str(root/"memory"),"CSBOT_WORKSPACE":str(workspace),
-             "CSBOT_BRIDGE":str(RUNTIME/"dsh/bridge.mjs"),"CSBOT_REMEMBER":"1" if remember else "0",
-             "CSBOT_VISION":"1" if vision else "0","CSBOT_THINKING":"1" if thinking else "0",
-             "NODE_OPTIONS":"--max-old-space-size=256"}
-        if read_only_memory:
-            # Read-only group memory snapshot: retrieval only, never distill.
-            env["CSBOT_MEMORY_READONLY"]="1"
-            env["CSBOT_REMEMBER"]="0"
-        if usage_scene:
-            env["CSBOT_USAGE_SCENE"]=usage_scene.strip()
-        if use_openai:
-            env["CSBOT_PROVIDER"]="openai"
-            env["OPENAI_API_KEY"]=api_key
-            env["CSBOT_OPENAI_BASE_URL"]=normalize_openai_base_url(endpoint)
-            llm_proxy=resolve_openai_proxy(endpoint,openai_proxy_url)
-            if llm_proxy:
-                env["CSBOT_LLM_PROXY_URL"]=llm_proxy
-                env["CSBOT_LLM_PROXY_HOST"]=(urlsplit(endpoint.strip()).hostname or "").lower()
-            # Side channel is resolved before the profile is rendered; without a
-            # DeepSeek credential everything degrades to the primary channel.
-            if not memory_only:
-                aux=resolve_deepseek_aux(endpoint,aux_url=aux_url,aux_api_key=aux_api_key,
-                                         aux_model=aux_model,search_url=search_url,
-                                         search_api_key=search_api_key)
-                if aux is not None:
-                    env["DEEPSEEK_API_KEY"]=aux["api_key"]
-                    env["DEEPSEEK_BASE_URL"]=aux["base_url"]
-                    env["CSBOT_AUX_PROVIDER"]=aux["provider"]
-                    env["CSBOT_AUX_MODEL"]=aux["model"]
-                    env["CSBOT_AUX_CONTEXT_WINDOW"]=os.getenv("CS_AI_AUX_CONTEXT_WINDOW","65536")
+    # Layer 1: process-wide OpenAI circuit breaker. Native DeepSeek turns and
+    # offline memory maintenance never consult it.
+    breaker=None
+    fallback_route=None
+    route_decision=None
+    route_mode="native" if not use_openai else "primary"
+    effective_endpoint=endpoint
+    effective_api_key=api_key
+    effective_provider="openai" if use_openai else "deepseek-official"
+    effective_model=model
+    if use_openai and not memory_only:
+        fallback_route=resolve_openai_fallback(endpoint,aux_url=aux_url,aux_api_key=aux_api_key,
+                                               aux_model=aux_model,search_url=search_url,
+                                               search_api_key=search_api_key)
+        if fallback_route is not None:
+            breaker=circuit_breaker or openai_circuit_breaker()
+            route_decision=breaker.acquire()
+            route_mode=route_decision["mode"]
+            if route_mode=="probe":
+                logger.info("OpenAI 半开探测放行：本轮单请求探测主通道（目标兜底 %s）",
+                            fallback_route["model"])
+            elif route_mode=="fallback":
+                # Trip-open fast path: never spend the connect timeout again.
+                logger.warning("OpenAI 主通道熔断中，本轮直走兜底 %s（剩余冷却 %.1fs，上次故障 %s）",
+                               fallback_route["model"],
+                               route_decision["remaining_cooldown_seconds"],
+                               route_decision["reason_code"] or "CIRCUIT_OPEN")
+                effective_endpoint=fallback_route["base_url"]
+                effective_api_key=fallback_route["api_key"]
+                effective_provider=fallback_route["provider"]
+                effective_model=fallback_route["model"]
+                vision=False
+    fallback_active=route_mode=="fallback"
+    probe_lease=(route_decision or {}).get("lease_id")
+    try:
+        if fallback_active:
+            image_gen_enabled=False
+        elif use_openai:
+            image_gen_enabled=bool(not memory_only and enable_image_gen is not False and effective_image_model)
         else:
-            env["DEEPSEEK_API_KEY"]=api_key
-            env["DEEPSEEK_BASE_URL"]=endpoint
-            env["CSBOT_PROVIDER"]="deepseek-official"
-        if image_gen_enabled:
-            env["CSBOT_IMAGE_GEN_ENABLED"]="1"
-        if not memory_only: env.update(web_environment(endpoint,api_key,search_url=search_url,search_api_key=search_api_key))
-        def _redact(value):
-            # Diagnostics are crash forensics only: neither side-channel keys nor
-            # the DeepSeek endpoint may ever appear in an operational log.
-            text=str(value)
-            for secret in (api_key,env.get("DEEPSEEK_API_KEY",""),env.get("CSBOT_SEARCH_API_KEY","")):
-                secret=str(secret or "").strip()
-                if secret: text=text.replace(secret,"[REDACTED]")
-            for target in (endpoint,env.get("DEEPSEEK_BASE_URL","")):
-                target=str(target or "").strip()
-                if target: text=text.replace(target,"[MODEL_ENDPOINT]")
-            return text
-        paths=set(map(str,read_paths))
-        if code_snapshot: paths.update(code_snapshot.files)
-        # Reference images an edit may re-upload are tracked apart from plain
-        # readable paths: only real image bytes the user could legitimately
-        # supply this turn (chat images, avatars, generated results) qualify.
-        authorized_image_paths: set[str]=set()
-        def _register_image_path(raw):
-            if raw is None: return
-            try:
-                text=str(raw).strip()
-                if not text: return
-                cand=Path(text)
-                if cand.is_symlink() or not cand.is_file(): return
-                if image_suffix(cand) is None: return
-                authorized_image_paths.add(str(cand.resolve()))
-            except (OSError, ValueError):
-                return
-        for item in read_paths: _register_image_path(item)
-        async def gateway(request):
-            result=await dispatch(request)
-            if request.get("method")=="image" or (request.get('method')=='call' and request.get('name')=='member_avatar'):
-                result=readable_image_view(result,artifacts,image_views)
-                for field in ("full_path","thumbnail_path"):
-                    if result.get(field):
-                        paths.add(result[field])
-                        _register_image_path(result[field])
-            return result
-        sandbox=ScriptSandbox(gateway,workspace/"artifacts",source_root=code_snapshot.root if code_snapshot else None)
-        profile=root/("memory-import-profile.json" if memory_only else "profile.json")
-        profile.write_text(json.dumps(render_profile(env)))
-        async with LIVE_SLOTS:
-            if not memory_only and artifacts.is_dir():
-                for path in artifacts.iterdir():
-                    if path.is_file() and not path.is_symlink(): path.unlink()
-            if on_started:await on_started()
-            process=await asyncio.create_subprocess_exec(str(executable),"--profile","sdk-minimal",
-                "--patch",str(profile),cwd=workspace,env=env,
-                stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,
-                limit=2*1024**2)
-            # Drain diagnostics without copying user chat or credentials into logs.
-            error_tail=bytearray()
-            async def drain_errors():
-                while chunk:=await process.stderr.read(8192):
-                    error_tail.extend(chunk)
-                    del error_tail[:-16000]
-            errors=asyncio.create_task(drain_errors())
-            result=None
-            acks={}
-            write_lock=asyncio.Lock()
-            async def send(value):
-                async with write_lock:
-                    process.stdin.write((json.dumps(value,ensure_ascii=False)+'\n').encode())
-                    await process.stdin.drain()
-            async def steer(text):
-                import uuid
-                key=uuid.uuid4().hex
-                future=asyncio.get_running_loop().create_future();acks[key]=future
+            image_gen_enabled=bool(enable_image_gen is True and effective_image_model)
+        with source_snapshot() if not memory_only else nullcontext(None) as code_snapshot:
+            root=(state_root or Path(os.getenv("CS_AI_STATE_DIR","data/ai"))).resolve()/"scopes"/scope
+            workspace=root/"workspace"
+            workspace.mkdir(parents=True,exist_ok=True)
+            # Generated scratch artifacts live for one turn. Chat thumbnails and
+            # normalized DSH previews retain their separate persistence policy.
+            artifacts=workspace/'artifacts'
+            image_views=[]
+            os.chmod(root,0o700)
+            for filename in ("DATA.md",):
+                source=RUNTIME/filename
+                if source.is_file(): shutil.copyfile(source,workspace/filename)
+            (workspace/"SOURCE.md").write_text(code_snapshot.guide if code_snapshot else "本次离线记忆维护未开放源码。\n")
+            if memory_source_dir is not None:
+                # Mount a point-in-time copy of the source group's Mneme database;
+                # the live group memory is never opened for writing by this turn.
+                _snapshot_memory_dir(Path(memory_source_dir), root/"memory")
+            executable=RUNTIME/"dsh/node_modules/.bin/dsh"
+            if not executable.is_file():
+                raise ValueError("DSH runtime not installed; run deployment preflight")
+            # No bot, database, SSH, proxy, or unrelated provider secrets inherited.
+            if fallback_active:
+                context_window=str(fallback_route["context_window"])
+            else:
+                context_window=os.getenv("CS_AI_CONTEXT_WINDOW") or ("131072" if use_openai else "65536")
+            system_prompt=SYSTEM_PROMPT+f"\n当前接入的模型标识是 {effective_model}；问到具体型号时以此为准，不猜测其他版本。\n"
+            if fallback_active:
+                # Honest capability downgrade: no original-image access, no image tools.
+                system_prompt+=(
+                    "\n【本轮降级说明】OpenAI 主通道近期连续失败，本轮已自动切换到国内直连的纯文本模型 "
+                    f"{effective_model}，以先保证回复可用。请如实告知用户当前模型已降级；"
+                    "你没有生图/改图能力，也没有看过本轮之前对话中的原图，不要假装看过图片或已经生成图片。"
+                    "机器人数据截图可改用 csdata.image(id) 读取文本 metadata；统计图表仍可用 execute_python + matplotlib；"
+                    "本轮不要调用 generate_image 或 read_image。\n")
+            env={"PATH":os.environ.get("PATH","/usr/local/bin:/usr/bin:/bin"),"HOME":str(root),
+                 "DSH_HOME":str(root/"harness"),
+                 "DSH_CONTEXT_WINDOW":context_window,
+                 "DSH_SYSTEM_PROMPT":system_prompt,"CSBOT_MODEL":effective_model,
+                 "CSBOT_MEMORY_DIR":str(root/"memory"),"CSBOT_WORKSPACE":str(workspace),
+                 "CSBOT_BRIDGE":str(RUNTIME/"dsh/bridge.mjs"),"CSBOT_REMEMBER":"1" if remember else "0",
+                 "CSBOT_VISION":"1" if vision else "0","CSBOT_THINKING":"1" if thinking else "0",
+                 "NODE_OPTIONS":"--max-old-space-size=256"}
+            if read_only_memory:
+                # Read-only group memory snapshot: retrieval only, never distill.
+                env["CSBOT_MEMORY_READONLY"]="1"
+                env["CSBOT_REMEMBER"]="0"
+            if usage_scene:
+                env["CSBOT_USAGE_SCENE"]=usage_scene.strip()
+            if fallback_active:
+                env["CSBOT_FALLBACK_ACTIVE"]="1"
+                env["CSBOT_PRIMARY_MODEL"]=model
+                env["CSBOT_FALLBACK_REASON_CODE"]=route_decision["reason_code"] or "CIRCUIT_OPEN"
+            if use_openai and not fallback_active:
+                env["CSBOT_PROVIDER"]="openai"
+                env["OPENAI_API_KEY"]=api_key
+                env["CSBOT_OPENAI_BASE_URL"]=normalize_openai_base_url(endpoint)
+                llm_proxy=resolve_openai_proxy(endpoint,openai_proxy_url)
+                if llm_proxy:
+                    env["CSBOT_LLM_PROXY_URL"]=llm_proxy
+                    env["CSBOT_LLM_PROXY_HOST"]=(urlsplit(endpoint.strip()).hostname or "").lower()
+                # Side channel is resolved before the profile is rendered; without a
+                # DeepSeek credential everything degrades to the primary channel.
+                if not memory_only:
+                    aux=resolve_deepseek_aux(endpoint,aux_url=aux_url,aux_api_key=aux_api_key,
+                                             aux_model=aux_model,search_url=search_url,
+                                             search_api_key=search_api_key)
+                    if aux is not None:
+                        env["DEEPSEEK_API_KEY"]=aux["api_key"]
+                        env["DEEPSEEK_BASE_URL"]=aux["base_url"]
+                        env["CSBOT_AUX_PROVIDER"]=aux["provider"]
+                        env["CSBOT_AUX_MODEL"]=aux["model"]
+                        env["CSBOT_AUX_CONTEXT_WINDOW"]=os.getenv("CS_AI_AUX_CONTEXT_WINDOW","65536")
+                if fallback_route is not None and not memory_only:
+                    # Layer 2: arm the in-turn step-level fallback. The aux channel
+                    # already owns DEEPSEEK_* when it resolved; never overwrite it.
+                    env.setdefault("DEEPSEEK_API_KEY",fallback_route["api_key"])
+                    env.setdefault("DEEPSEEK_BASE_URL",fallback_route["base_url"])
+                    env["CSBOT_FALLBACK_PROVIDER"]=fallback_route["provider"]
+                    env["CSBOT_FALLBACK_MODEL"]=fallback_route["model"]
+                    env["CSBOT_FALLBACK_CONTEXT_WINDOW"]=str(fallback_route["context_window"])
+                    env["CSBOT_OPENAI_CONNECT_TIMEOUT_MS"]=str(resolve_openai_connect_timeout_ms())
+                    if route_mode=="probe":
+                        # Half-open probe must fail fast: a 15s proxy hang plus
+                        # native retries would defeat the single-probe lease.
+                        env["CSBOT_OPENAI_PROBE"]="1"
+            else:
+                env["DEEPSEEK_API_KEY"]=effective_api_key
+                env["DEEPSEEK_BASE_URL"]=effective_endpoint
+                env["CSBOT_PROVIDER"]="deepseek-official"
+            if image_gen_enabled:
+                env["CSBOT_IMAGE_GEN_ENABLED"]="1"
+            if not memory_only: env.update(web_environment(effective_endpoint,effective_api_key,search_url=search_url,search_api_key=search_api_key))
+            def _redact(value):
+                # Diagnostics are crash forensics only: neither side-channel keys nor
+                # the DeepSeek endpoint may ever appear in an operational log.
+                text=str(value)
+                for secret in (api_key,effective_api_key,env.get("OPENAI_API_KEY",""),
+                               env.get("DEEPSEEK_API_KEY",""),env.get("CSBOT_SEARCH_API_KEY","")):
+                    secret=str(secret or "").strip()
+                    if secret: text=text.replace(secret,"[REDACTED]")
+                for target in (endpoint,effective_endpoint,env.get("DEEPSEEK_BASE_URL","")):
+                    target=str(target or "").strip()
+                    if target: text=text.replace(target,"[MODEL_ENDPOINT]")
+                return text
+            paths=set(map(str,read_paths))
+            if code_snapshot: paths.update(code_snapshot.files)
+            # Reference images an edit may re-upload are tracked apart from plain
+            # readable paths: only real image bytes the user could legitimately
+            # supply this turn (chat images, avatars, generated results) qualify.
+            authorized_image_paths: set[str]=set()
+            def _register_image_path(raw):
+                if raw is None: return
                 try:
-                    await send({'type':'steer','id':key,'text':text})
-                    return await asyncio.wait_for(asyncio.shield(future),10)
-                except (BrokenPipeError,ConnectionResetError,TimeoutError):
-                    raise ValueError('补充的投递状态尚未确认，请查看当前回复；未自动重复提交') from None
-                finally:acks.pop(key,None)
-            rpc_tasks=[]
-            rpc_slots=asyncio.Semaphore(1)
-            submitted_images=0
-            # Billing telemetry is collected per turn and never blocks the reply:
-            # a ledger failure must not turn a delivered answer into an error.
-            usage_events=[]
-            async def report_usage(item):
-                if not item: return
-                usage_events.append(item)
-                if on_usage is None: return
-                try:
-                    pending=on_usage(item)
-                    if inspect.isawaitable(pending): await pending
-                except Exception: pass
-            async def handle_rpc(event):
-                nonlocal submitted_images
-                async with rpc_slots:
+                    text=str(raw).strip()
+                    if not text: return
+                    cand=Path(text)
+                    if cand.is_symlink() or not cand.is_file(): return
+                    if image_suffix(cand) is None: return
+                    authorized_image_paths.add(str(cand.resolve()))
+                except (OSError, ValueError):
+                    return
+            for item in read_paths: _register_image_path(item)
+            async def gateway(request):
+                result=await dispatch(request)
+                if request.get("method")=="image" or (request.get('method')=='call' and request.get('name')=='member_avatar'):
+                    result=readable_image_view(result,artifacts,image_views)
+                    for field in ("full_path","thumbnail_path"):
+                        if result.get(field):
+                            paths.add(result[field])
+                            _register_image_path(result[field])
+                return result
+            sandbox=ScriptSandbox(gateway,workspace/"artifacts",source_root=code_snapshot.root if code_snapshot else None)
+            profile=root/("memory-import-profile.json" if memory_only else "profile.json")
+            profile.write_text(json.dumps(render_profile(env)))
+            async with LIVE_SLOTS:
+                if not memory_only and artifacts.is_dir():
+                    for path in artifacts.iterdir():
+                        if path.is_file() and not path.is_symlink(): path.unlink()
+                if on_started:await on_started()
+                process=await asyncio.create_subprocess_exec(str(executable),"--profile","sdk-minimal",
+                    "--patch",str(profile),cwd=workspace,env=env,
+                    stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,
+                    limit=2*1024**2)
+                # Drain diagnostics without copying user chat or credentials into logs.
+                error_tail=bytearray()
+                async def drain_errors():
+                    while chunk:=await process.stderr.read(8192):
+                        error_tail.extend(chunk)
+                        del error_tail[:-16000]
+                errors=asyncio.create_task(drain_errors())
+                result=None
+                fallback_event=None
+                acks={}
+                write_lock=asyncio.Lock()
+                async def send(value):
+                    async with write_lock:
+                        process.stdin.write((json.dumps(value,ensure_ascii=False)+'\n').encode())
+                        await process.stdin.drain()
+                async def steer(text):
+                    import uuid
+                    key=uuid.uuid4().hex
+                    future=asyncio.get_running_loop().create_future();acks[key]=future
                     try:
-                        if event['method']=='guard_output' and guard is not None:
-                            value=await guard(event['text'])
-                        elif event['method']=='execute_python':
-                            value=await sandbox.run(event['code'])
-                            paths.update(value.get('artifacts',[]))
-                            for artifact in value.get('artifacts',[]): _register_image_path(artifact)
-                            if on_images and value.get('deliver_images') and value['exit_code']==0:
-                                await on_images(value['deliver_images'])
-                                submitted_images+=len(value['deliver_images'])
-                        elif event['method']=='generate_image':
-                            if not image_gen_enabled:
-                                raise ValueError('image generation is not enabled')
-                            if submitted_images>=4:
-                                raise ValueError('每轮最多提交 4 张图片')
-                            value=await generate_openai_image(
-                                prompt=event.get('prompt',''),api_key=api_key,endpoint=endpoint,
-                                artifacts_dir=workspace/'artifacts',model=effective_image_model,
-                                proxy_url=openai_proxy_url,
-                                size=str(event.get('size') or '1024x1024'),
-                                quality=str(event.get('quality') or 'medium'),
-                                background=str(event.get('background') or 'auto'),
-                                caption=str(event.get('caption') or ''),
-                                image_paths=event.get('image_paths'),
-                                allowed_image_paths=authorized_image_paths,
-                                workspace=workspace)
-                            artifact_file=value['file_path']
-                            paths.add(artifact_file)
-                            _register_image_path(artifact_file)
-                            if on_images:
-                                persisted=await on_images([{'path':artifact_file,'caption':value['caption']}])
-                                if persisted and persisted[0]:
-                                    # Keep the persisted path authorized too, so the
-                                    # file_path stored in history stays editable next turn.
-                                    value['file_path']=str(persisted[0])
-                                    paths.add(value['file_path'])
-                                    _register_image_path(value['file_path'])
-                            submitted_images+=1
-                            # Keep the normalized usage out of the model-visible
-                            # reply while still recording it for this turn.
-                            await report_usage(value.pop('usage', None))
-                        else:raise ValueError('unknown bridge method')
-                        reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths),
-                               'imageReadPaths':list(authorized_image_paths)}
-                    except Exception as exc:
-                        reply={'type':'rpc_result','id':event['id'],'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
-                    await send(reply)
-            try:
-                async with asyncio.timeout(600):
-                    while line:=await process.stdout.readline():
-                        if not line.startswith(b"CSBOT:"): continue
-                        event=json.loads(line[6:])
-                        if event["type"]=="ready":
-                            request={"type":"start","sessionId":"csbot-"+scope,"text":text,
-                                     "context":context,"remember":remember,"readPaths":list(paths),
-                                     "imageReadPaths":list(authorized_image_paths),"guard":guard is not None,
-                                     "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles),"memoryActions":list(memory_actions)}
-                            await send(request)
-                            if run_id:ACTIVE[run_id]=steer
-                        elif event['type']=='steer_ack':
-                            if future:=acks.get(event['id']):
-                                if not future.done():future.set_result(event['accepted'])
-                        elif event['type']=='trace':
-                            if on_event:
-                                for item in event['events']:on_event(item)
-                        elif event["type"]=="rpc":
-                            rpc_tasks.append(asyncio.create_task(handle_rpc(event)))
-                        elif event["type"]=="usage":
-                            await report_usage(normalize_dsh_usage(event))
-                        elif event["type"]=="complete": result=event
-                        elif event["type"]=="error":
-                            # Configuration/runtime details are available through
-                            # explicit preflight, never echoed into a group chat.
-                            raise RuntimeError("DSH execution failed")
-                    await process.wait()
-                    if process.returncode or not result:
-                        raise RuntimeError("DSH process exited without a durable result")
-                    if result.get("reason",{}).get("kind")!="completed":
-                        if diagnostics: diagnostics(_redact(result.get("reason", {})))
-                        raise RuntimeError("DSH turn did not complete")
-                    result["usage"]=usage_events
-                    return result
-            finally:
-                if run_id:ACTIVE.pop(run_id,None)
-                for future in acks.values():
-                    if not future.done():future.set_exception(ValueError('补充未确认，执行进程已退出；未自动重复提交'))
-                for task in rpc_tasks:
-                    if not task.done():task.cancel()
-                await asyncio.gather(*rpc_tasks,return_exceptions=True)
-                if process.returncode is None:
-                    process.kill()
-                    await process.wait()
-                await errors
-                if diagnostics and error_tail:
-                    diagnostics(_redact(error_tail.decode(errors="replace")))
-                for view in image_views:
-                    view.unlink(missing_ok=True)
+                        await send({'type':'steer','id':key,'text':text})
+                        return await asyncio.wait_for(asyncio.shield(future),10)
+                    except (BrokenPipeError,ConnectionResetError,TimeoutError):
+                        raise ValueError('补充的投递状态尚未确认，请查看当前回复；未自动重复提交') from None
+                    finally:acks.pop(key,None)
+                rpc_tasks=[]
+                rpc_slots=asyncio.Semaphore(1)
+                submitted_images=0
+                # Billing telemetry is collected per turn and never blocks the reply:
+                # a ledger failure must not turn a delivered answer into an error.
+                usage_events=[]
+                async def report_usage(item):
+                    if not item: return
+                    usage_events.append(item)
+                    if on_usage is None: return
+                    try:
+                        pending=on_usage(item)
+                        if inspect.isawaitable(pending): await pending
+                    except Exception: pass
+                async def handle_rpc(event):
+                    nonlocal submitted_images
+                    async with rpc_slots:
+                        try:
+                            if event['method']=='guard_output' and guard is not None:
+                                value=await guard(event['text'])
+                            elif event['method']=='execute_python':
+                                value=await sandbox.run(event['code'])
+                                paths.update(value.get('artifacts',[]))
+                                for artifact in value.get('artifacts',[]): _register_image_path(artifact)
+                                if on_images and value.get('deliver_images') and value['exit_code']==0:
+                                    await on_images(value['deliver_images'])
+                                    submitted_images+=len(value['deliver_images'])
+                            elif event['method']=='generate_image':
+                                if fallback_event is not None or fallback_active:
+                                    # A step retried on deepseek-flash may still hold
+                                    # the old OpenAI tool schema: never spend a
+                                    # request after the turn already moved channels.
+                                    raise ValueError('OpenAI 主通道本轮已临时故障并切换到纯文本兜底，当前无法生成或修改图片；请如实告知用户，不要重复调用。')
+                                if not image_gen_enabled:
+                                    raise ValueError('image generation is not enabled')
+                                if submitted_images>=4:
+                                    raise ValueError('每轮最多提交 4 张图片')
+                                value=await generate_openai_image(
+                                    prompt=event.get('prompt',''),api_key=api_key,endpoint=endpoint,
+                                    artifacts_dir=workspace/'artifacts',model=effective_image_model,
+                                    proxy_url=openai_proxy_url,
+                                    size=str(event.get('size') or '1024x1024'),
+                                    quality=str(event.get('quality') or 'medium'),
+                                    background=str(event.get('background') or 'auto'),
+                                    caption=str(event.get('caption') or ''),
+                                    image_paths=event.get('image_paths'),
+                                    allowed_image_paths=authorized_image_paths,
+                                    workspace=workspace)
+                                artifact_file=value['file_path']
+                                paths.add(artifact_file)
+                                _register_image_path(artifact_file)
+                                if on_images:
+                                    persisted=await on_images([{'path':artifact_file,'caption':value['caption']}])
+                                    if persisted and persisted[0]:
+                                        # Keep the persisted path authorized too, so the
+                                        # file_path stored in history stays editable next turn.
+                                        value['file_path']=str(persisted[0])
+                                        paths.add(value['file_path'])
+                                        _register_image_path(value['file_path'])
+                                submitted_images+=1
+                                # Keep the normalized usage out of the model-visible
+                                # reply while still recording it for this turn.
+                                await report_usage(value.pop('usage', None))
+                            else:raise ValueError('unknown bridge method')
+                            reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths),
+                                   'imageReadPaths':list(authorized_image_paths)}
+                        except Exception as exc:
+                            reply={'type':'rpc_result','id':event['id'],'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
+                        await send(reply)
+                try:
+                    async with asyncio.timeout(600):
+                        while line:=await process.stdout.readline():
+                            if not line.startswith(b"CSBOT:"): continue
+                            event=json.loads(line[6:])
+                            if event["type"]=="ready":
+                                request={"type":"start","sessionId":"csbot-"+scope,"text":text,
+                                         "context":context,"remember":remember,"readPaths":list(paths),
+                                         "imageReadPaths":list(authorized_image_paths),"guard":guard is not None,
+                                         "legacyMemory":legacy_memory,"compact":compact,"memoryOnly":memory_only,"memoryCheckTitles":list(memory_check_titles),"memoryActions":list(memory_actions)}
+                                await send(request)
+                                if run_id:ACTIVE[run_id]=steer
+                            elif event['type']=='steer_ack':
+                                if future:=acks.get(event['id']):
+                                    if not future.done():future.set_result(event['accepted'])
+                            elif event['type']=='trace':
+                                if on_event:
+                                    for item in event['events']:on_event(item)
+                            elif event["type"]=="rpc":
+                                rpc_tasks.append(asyncio.create_task(handle_rpc(event)))
+                            elif event["type"]=="usage":
+                                await report_usage(normalize_dsh_usage(event))
+                            elif event["type"]=="fallback":
+                                # Layer 2 moved this step to deepseek-flash: trip the
+                                # shared breaker immediately so the next turn skips
+                                # the dead proxy instead of waiting out a timeout.
+                                fallback_event=event
+                                summary=None
+                                if breaker is not None:
+                                    summary=breaker.record_failure(
+                                        code=str(event.get("code") or "UNKNOWN"),
+                                        reason=str(event.get("reason") or ""),
+                                        lease_id=probe_lease,
+                                        secrets=(api_key,effective_api_key,
+                                                 env.get("DEEPSEEK_API_KEY",""),
+                                                 env.get("CSBOT_SEARCH_API_KEY","")))
+                                logger.warning("DSH 轮内已切换纯文本兜底（code=%s, to=%s, tripped=%s）",
+                                               str(event.get("code") or "UNKNOWN"),
+                                               str(event.get("toModel") or effective_model),
+                                               bool(summary and summary.get("tripped")))
+                            elif event["type"]=="complete": result=event
+                            elif event["type"]=="error":
+                                # Configuration/runtime details are available through
+                                # explicit preflight, never echoed into a group chat.
+                                raise RuntimeError("DSH execution failed")
+                        await process.wait()
+                        if process.returncode or not result:
+                            raise RuntimeError("DSH process exited without a durable result")
+                        if result.get("reason",{}).get("kind")!="completed":
+                            if diagnostics: diagnostics(_redact(result.get("reason", {})))
+                            raise RuntimeError("DSH turn did not complete")
+                        result["usage"]=usage_events
+                        if breaker is not None and route_mode in ("primary","probe") and fallback_event is None:
+                            transition=breaker.record_success(lease_id=probe_lease)
+                            if transition.get("recovered"):
+                                logger.info("OpenAI 半开探测成功，熔断器已恢复 CLOSED")
+                        if fallback_active:
+                            result["fallback"]={"used":True,"mode":"circuit_open_fallback",
+                                                "from_provider":"openai","from_model":model,
+                                                "provider":effective_provider,"model":effective_model,
+                                                "code":(route_decision or {}).get("reason_code") or "CIRCUIT_OPEN"}
+                        elif fallback_event is not None:
+                            result["fallback"]={"used":True,"mode":"mid_turn_fallback",
+                                                "from_provider":"openai","from_model":model,
+                                                "provider":str(fallback_event.get("toProvider") or effective_provider),
+                                                "model":str(fallback_event.get("toModel") or effective_model),
+                                                "code":str(fallback_event.get("code") or "")}
+                        else:
+                            result["fallback"]={"used":False,"mode":"primary" if use_openai else "native",
+                                                "provider":effective_provider,"model":effective_model}
+                        return result
+                finally:
+                    if run_id:ACTIVE.pop(run_id,None)
+                    for future in acks.values():
+                        if not future.done():future.set_exception(ValueError('补充未确认，执行进程已退出；未自动重复提交'))
+                    for task in rpc_tasks:
+                        if not task.done():task.cancel()
+                    await asyncio.gather(*rpc_tasks,return_exceptions=True)
+                    if process.returncode is None:
+                        process.kill()
+                        await process.wait()
+                    await errors
+                    if diagnostics and error_tail:
+                        diagnostics(_redact(error_tail.decode(errors="replace")))
+                    for view in image_views:
+                        view.unlink(missing_ok=True)
+    finally:
+        # A half-open probe lease must never outlive this turn, whatever
+        # fails before the process slot is even taken (profile render,
+        # source snapshot, proxy/env validation, sandbox setup, or cancel).
+        if probe_lease and breaker is not None:
+            breaker.release_probe(probe_lease)

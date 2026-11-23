@@ -9,9 +9,12 @@ from __future__ import annotations
 import asyncio
 import base64
 from io import BytesIO
+import math
 import os
 from pathlib import Path
 import re
+import threading
+import time
 from typing import Any
 import uuid
 from urllib.parse import urlsplit
@@ -28,6 +31,39 @@ DEFAULT_IMAGE_MODEL = "gpt-image-2.6-sunburst"
 # They never traverse the cross-border loopback proxy.
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_AUX_MODEL = "deepseek-flash"
+# Automatic primary-channel fallback (OpenAI outage -> domestic deepseek-flash).
+DEFAULT_OPENAI_FALLBACK_COOLDOWN_SECONDS = 240.0
+DEFAULT_OPENAI_FALLBACK_FAIL_THRESHOLD = 1
+DEFAULT_OPENAI_CONNECT_TIMEOUT_MS = 10_000
+DEFAULT_OPENAI_FALLBACK_CONTEXT_WINDOW = 65_536
+_OPENAI_FALLBACK_DENY_CODES = frozenset({
+    "INVALID_REQUEST",
+    "CONTEXT_WINDOW_EXCEEDED",
+    "ABORTED",
+    "UNSUPPORTED_CONTENT",
+    "UNSUPPORTED_REASONING_EFFORT",
+    "NO_ADAPTER",
+    "INVALID_CREDENTIAL",
+    "INVALID_PREPARED_CALL",
+})
+_OPENAI_FALLBACK_ALLOW_CODES = frozenset({
+    "TRANSPORT",
+    "TIMEOUT",
+    "SERVER",
+    "RATE_LIMIT",
+    "QUOTA",
+    "AUTH",
+    "EMPTY_RESPONSE",
+    "STREAM_CLOSED",
+})
+# Only transport/proxy/5xx/429/403/timeout evidence may promote an unknown code.
+_OPENAI_FALLBACK_MESSAGE_RE = re.compile(
+    r"(?:proxy|tunnel|econn[a-z]*|etimedout|enotfound|eai_again|ehostunreach|"
+    r"enetunreach|epipe|tls|ssl|socket|fetch failed|und_err|timed?\s*out|"
+    r"bad gateway|service unavailable|gateway timeout|overloaded|rate.?limit|"
+    r"\b5\d\d\b|\b429\b|\b403\b)",
+    re.IGNORECASE,
+)
 
 IMAGE_SIZES = {"1024x1024", "1536x1024", "1024x1536", "auto"}
 IMAGE_QUALITIES = {"low", "medium", "high", "auto"}
@@ -243,6 +279,396 @@ def resolve_deepseek_aux(
             "model": model,
         }
     return None
+
+
+def _positive_int(raw: Any, default: int) -> int:
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def resolve_openai_fallback_cooldown_seconds() -> float:
+    """Cooldown window for a tripped breaker; 0.0 disables the shared cache."""
+    raw = (os.getenv("CS_AI_OPENAI_FALLBACK_COOLDOWN_SECONDS") or "").strip()
+    if not raw:
+        return DEFAULT_OPENAI_FALLBACK_COOLDOWN_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_OPENAI_FALLBACK_COOLDOWN_SECONDS
+    if not math.isfinite(value):
+        return DEFAULT_OPENAI_FALLBACK_COOLDOWN_SECONDS
+    return max(0.0, value)
+
+
+def resolve_openai_fallback_fail_threshold() -> int:
+    return max(
+        1,
+        _positive_int(
+            os.getenv("CS_AI_OPENAI_FALLBACK_FAIL_THRESHOLD"),
+            DEFAULT_OPENAI_FALLBACK_FAIL_THRESHOLD,
+        ),
+    )
+
+
+def resolve_openai_connect_timeout_ms() -> int:
+    value = _positive_int(
+        os.getenv("CS_AI_OPENAI_CONNECT_TIMEOUT_MS"), DEFAULT_OPENAI_CONNECT_TIMEOUT_MS
+    )
+    return min(60_000, max(1_000, value))
+
+
+def resolve_openai_fallback_context_window() -> int:
+    for name in ("CS_AI_OPENAI_FALLBACK_CONTEXT_WINDOW", "CS_AI_AUX_CONTEXT_WINDOW"):
+        raw = (os.getenv(name) or "").strip()
+        if raw:
+            return _positive_int(raw, DEFAULT_OPENAI_FALLBACK_CONTEXT_WINDOW)
+    return DEFAULT_OPENAI_FALLBACK_CONTEXT_WINDOW
+
+
+def _same_official_deepseek_origin(url: str) -> bool:
+    scheme, hostname, port = _origin(url)
+    return scheme == "https" and hostname == "api.deepseek.com" and port in (None, 443)
+
+
+def resolve_openai_fallback(
+    endpoint: str,
+    *,
+    fallback_url: str = "",
+    fallback_api_key: str = "",
+    fallback_model: str = "",
+    aux_url: str = "",
+    aux_api_key: str = "",
+    aux_model: str = "",
+    search_url: str = "",
+    search_api_key: str = "",
+    provider_override: str = "",
+) -> dict[str, Any] | None:
+    """Resolve the target that replaces the OpenAI primary channel on failure.
+
+    Stateless and independent of `CS_AI_AUX_ENABLE`: the primary channel may be
+    armed for fallback even when the memory side channel is switched off. The
+    same-origin rule is absolute, so a third-party gateway credential is never
+    replayed against `api.deepseek.com` (and vice versa).
+    """
+    if not is_openai_endpoint(endpoint, provider_override):
+        return None
+    if (os.getenv("CS_AI_OPENAI_FALLBACK_ENABLE", "1") or "").strip() == "0":
+        return None
+    model = (
+        fallback_model
+        or os.getenv("CS_AI_OPENAI_FALLBACK_MODEL", "")
+        or aux_model
+        or os.getenv("CS_AI_AUX_MODEL", "")
+    ).strip() or DEFAULT_DEEPSEEK_AUX_MODEL
+    context_window = resolve_openai_fallback_context_window()
+
+    explicit_fallback_key = (fallback_api_key or os.getenv("CS_AI_FALLBACK_API_KEY", "")).strip()
+    explicit_fallback_url = (fallback_url or os.getenv("CS_AI_FALLBACK_URL", "")).strip()
+    if explicit_fallback_key:
+        return {
+            "provider": "deepseek-official",
+            "ledger_provider": "deepseek",
+            "base_url": normalize_deepseek_base_url(
+                explicit_fallback_url or DEFAULT_DEEPSEEK_BASE_URL
+            ),
+            "api_key": explicit_fallback_key,
+            "model": model,
+            "context_window": context_window,
+        }
+
+    explicit_aux_key = (aux_api_key or os.getenv("CS_AI_AUX_API_KEY", "")).strip()
+    explicit_aux_url = (aux_url or os.getenv("CS_AI_AUX_URL", "")).strip()
+    if explicit_aux_key:
+        return {
+            "provider": "deepseek-official",
+            "ledger_provider": "deepseek",
+            "base_url": normalize_deepseek_base_url(
+                explicit_fallback_url or explicit_aux_url or DEFAULT_DEEPSEEK_BASE_URL
+            ),
+            "api_key": explicit_aux_key,
+            "model": model,
+            "context_window": context_window,
+        }
+
+    cand_search_key = (search_api_key or os.getenv("CS_AI_SEARCH_API_KEY", "")).strip()
+    cand_search_url = (search_url or os.getenv("CS_AI_SEARCH_URL", "")).strip()
+    if cand_search_key and is_official_deepseek_search_url(cand_search_url):
+        # A shared official key may only ever address the official DeepSeek origin.
+        for candidate in (explicit_fallback_url, explicit_aux_url):
+            if candidate and not _same_official_deepseek_origin(candidate):
+                raise ValueError(
+                    "CS_AI_FALLBACK_URL / CS_AI_AUX_URL outside api.deepseek.com "
+                    "requires a dedicated CS_AI_FALLBACK_API_KEY or CS_AI_AUX_API_KEY"
+                )
+        return {
+            "provider": "deepseek-official",
+            "ledger_provider": "deepseek",
+            "base_url": normalize_deepseek_base_url(
+                explicit_fallback_url or explicit_aux_url or DEFAULT_DEEPSEEK_BASE_URL
+            ),
+            "api_key": cand_search_key,
+            "model": model,
+            "context_window": context_window,
+        }
+    return None
+
+
+def is_openai_fallback_eligible(code: str, message: str = "") -> bool:
+    """Whether a primary-channel failure justifies switching to deepseek-flash.
+
+    Kept byte-for-byte consistent with `isFallbackEligibleFailure` in
+    `dsh/bridge.mjs`: business/protocol/local-config errors stay on OpenAI,
+    while transport and upstream-availability failures move the step.
+    """
+    value = str(code or "").strip().upper()
+    if value in _OPENAI_FALLBACK_DENY_CODES:
+        return False
+    if value in _OPENAI_FALLBACK_ALLOW_CODES:
+        return True
+    return bool(_OPENAI_FALLBACK_MESSAGE_RE.search(str(message or "")))
+
+
+def _sanitize_fallback_reason(
+    reason: Any, secrets: tuple[str, ...] | list[str] = ()
+) -> str:
+    text = str(reason or "")
+    for secret in secrets or ():
+        value = str(secret or "").strip()
+        if value:
+            text = text.replace(value, "[REDACTED]")
+    return re.sub(r"\s+", " ", text).strip()[:160]
+
+
+class OpenAICircuitBreaker:
+    """Thread-safe CLOSED/OPEN/HALF_OPEN breaker for the OpenAI primary channel.
+
+    OPEN short-circuits every new turn to the fallback route without touching
+    the proxy; after the cooldown exactly one probe is admitted, and concurrent
+    turns go straight to fallback so a recovering upstream is not stampeded.
+    `monotonic_fn`/`wall_fn` are injectable so the state machine is testable
+    offline without sleeping.
+    """
+
+    def __init__(
+        self,
+        *,
+        cooldown_seconds: float | None = None,
+        fail_threshold: int | None = None,
+        monotonic_fn=time.monotonic,
+        wall_fn=time.time,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._cooldown_override = (
+            None if cooldown_seconds is None else max(0.0, float(cooldown_seconds))
+        )
+        self._threshold_override = (
+            None if fail_threshold is None else max(1, int(fail_threshold))
+        )
+        self._monotonic = monotonic_fn
+        self._wall = wall_fn
+        self._state = "closed"
+        self._consecutive_failures = 0
+        self._open_until = 0.0
+        self._probe_in_flight = False
+        self._active_lease_id: str | None = None
+        self._last_failure_code = ""
+        self._last_failure_reason = ""
+        self._last_failure_at = 0.0
+        self._last_recovery_at = 0.0
+        self._trip_count = 0
+        self._fallback_count = 0
+        self._recovery_count = 0
+
+    @property
+    def cooldown_seconds(self) -> float:
+        if self._cooldown_override is not None:
+            return self._cooldown_override
+        return resolve_openai_fallback_cooldown_seconds()
+
+    @property
+    def fail_threshold(self) -> int:
+        if self._threshold_override is not None:
+            return self._threshold_override
+        return resolve_openai_fallback_fail_threshold()
+
+    def acquire(self) -> dict[str, Any]:
+        with self._lock:
+            now = self._monotonic()
+            if self._state == "open":
+                if now < self._open_until:
+                    self._fallback_count += 1
+                    return {
+                        "mode": "fallback",
+                        "state": "open",
+                        "lease_id": None,
+                        "remaining_cooldown_seconds": round(self._open_until - now, 1),
+                        "reason_code": self._last_failure_code or "CIRCUIT_OPEN",
+                    }
+                # The cooldown elapsed: admit at most one half-open probe.
+                self._state = "half_open"
+                self._open_until = 0.0
+            if self._state == "half_open":
+                if self._probe_in_flight:
+                    self._fallback_count += 1
+                    return {
+                        "mode": "fallback",
+                        "state": "half_open",
+                        "lease_id": None,
+                        "remaining_cooldown_seconds": 0.0,
+                        "reason_code": self._last_failure_code or "PROBE_IN_FLIGHT",
+                    }
+                lease_id = uuid.uuid4().hex
+                self._probe_in_flight = True
+                self._active_lease_id = lease_id
+                return {
+                    "mode": "probe",
+                    "state": "half_open",
+                    "lease_id": lease_id,
+                    "remaining_cooldown_seconds": 0.0,
+                    "reason_code": "",
+                }
+            return {
+                "mode": "primary",
+                "state": "closed",
+                "lease_id": None,
+                "remaining_cooldown_seconds": 0.0,
+                "reason_code": "",
+            }
+
+    def record_success(self, lease_id: str | None = None) -> dict:
+        with self._lock:
+            previous = self._state
+            if (
+                self._state == "half_open"
+                and lease_id is not None
+                and lease_id == self._active_lease_id
+            ):
+                self._state = "closed"
+                self._consecutive_failures = 0
+                self._open_until = 0.0
+                self._probe_in_flight = False
+                self._active_lease_id = None
+                self._recovery_count += 1
+                self._last_recovery_at = self._wall()
+                return {"previous_state": previous, "state": self._state, "recovered": True}
+            if self._state == "closed":
+                self._consecutive_failures = 0
+            return {"previous_state": previous, "state": self._state, "recovered": False}
+
+    def record_failure(
+        self,
+        *,
+        code: str,
+        reason: str = "",
+        lease_id: str | None = None,
+        secrets: tuple[str, ...] | list[str] = (),
+    ) -> dict:
+        safe_code = str(code or "UNKNOWN").strip()[:48] or "UNKNOWN"
+        safe_reason = _sanitize_fallback_reason(reason, secrets)
+        with self._lock:
+            now = self._monotonic()
+            previous = self._state
+            if lease_id is not None and lease_id == self._active_lease_id:
+                self._probe_in_flight = False
+                self._active_lease_id = None
+            self._consecutive_failures += 1
+            self._last_failure_code = safe_code
+            self._last_failure_reason = safe_reason
+            self._last_failure_at = self._wall()
+            self._fallback_count += 1
+            cooldown = self.cooldown_seconds
+            tripped = False
+            if cooldown > 0 and (
+                previous == "half_open"
+                or self._consecutive_failures >= self.fail_threshold
+            ):
+                self._state = "open"
+                self._open_until = now + cooldown
+                self._trip_count += 1
+                tripped = True
+            elif self._state == "half_open":
+                # Cooldown caching disabled at runtime: never strand half-open.
+                self._state = "closed"
+                self._open_until = 0.0
+                self._probe_in_flight = False
+                self._active_lease_id = None
+            return {
+                "tripped": tripped,
+                "previous_state": previous,
+                "state": self._state,
+                "cooldown_seconds": cooldown if tripped else 0.0,
+                "code": safe_code,
+                "reason": safe_reason,
+            }
+
+    def release_probe(self, lease_id: str | None) -> None:
+        """Drop a half-open probe lease without closing or cooling the breaker.
+
+        A cancelled turn or a non-breaker error (400 / CancelledError) must not
+        leave `probe_in_flight` stuck, which would short-circuit every later
+        turn into fallback forever.
+        """
+        if not lease_id:
+            return
+        with self._lock:
+            if self._probe_in_flight and lease_id == self._active_lease_id:
+                self._probe_in_flight = False
+                self._active_lease_id = None
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            now = self._monotonic()
+            remaining = (
+                round(self._open_until - now, 1)
+                if self._state == "open" and self._open_until > now
+                else 0.0
+            )
+            return {
+                "state": self._state,
+                "cooldown_seconds": self.cooldown_seconds,
+                "fail_threshold": self.fail_threshold,
+                "consecutive_failures": self._consecutive_failures,
+                "probe_in_flight": self._probe_in_flight,
+                "remaining_cooldown_seconds": remaining,
+                "last_failure_code": self._last_failure_code,
+                "last_failure_reason": self._last_failure_reason,
+                "last_failure_at": self._last_failure_at,
+                "last_recovery_at": self._last_recovery_at,
+                "trip_count": self._trip_count,
+                "fallback_count": self._fallback_count,
+                "recovery_count": self._recovery_count,
+            }
+
+    def reset(self) -> None:
+        with self._lock:
+            self._state = "closed"
+            self._consecutive_failures = 0
+            self._open_until = 0.0
+            self._probe_in_flight = False
+            self._active_lease_id = None
+            self._last_failure_code = ""
+            self._last_failure_reason = ""
+            self._last_failure_at = 0.0
+            self._last_recovery_at = 0.0
+            self._trip_count = 0
+            self._fallback_count = 0
+            self._recovery_count = 0
+
+
+_DEFAULT_OPENAI_CIRCUIT_BREAKER: OpenAICircuitBreaker | None = None
+_OPENAI_CIRCUIT_BREAKER_LOCK = threading.Lock()
+
+
+def openai_circuit_breaker() -> OpenAICircuitBreaker:
+    """Process-wide breaker shared by every turn of this bot process."""
+    global _DEFAULT_OPENAI_CIRCUIT_BREAKER
+    with _OPENAI_CIRCUIT_BREAKER_LOCK:
+        if _DEFAULT_OPENAI_CIRCUIT_BREAKER is None:
+            _DEFAULT_OPENAI_CIRCUIT_BREAKER = OpenAICircuitBreaker()
+        return _DEFAULT_OPENAI_CIRCUIT_BREAKER
 
 
 def resolve_guard_route(
