@@ -31,6 +31,7 @@ from .gen_win_matrix import gen_win_matrix, resolve_team_name
 from .simulate import simulate
 from .verify import parse_simulation_results, evaluate_combination
 from .playoff_homework import validate_playoff_bracket
+from . import chart as hw_chart
 from .virtual_users import (
     get_registry,
     register_virtual_user,
@@ -91,6 +92,25 @@ class DataManager:
     async def get_all_hw(self, stage: str) -> list[MajorHW]:
         async with async_session_factory() as session:
             stmt = select(MajorHW).where(MajorHW.stage == stage)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_stage_snapshots(self, stage: str) -> list[MajorHWSnapshot]:
+        """取某阶段全部作业概率快照，按 uid / 场次 / 创建时间升序排列。
+
+        同一 uid 同一 match_count 可能因「赛中改作业」（homework_text 属于复合主键）
+        而存在多条记录，去重交给 ``chart.build_series`` 按 created_at 取最新。
+        """
+        async with async_session_factory() as session:
+            stmt = (
+                select(MajorHWSnapshot)
+                .where(MajorHWSnapshot.stage == stage)
+                .order_by(
+                    MajorHWSnapshot.uid,
+                    MajorHWSnapshot.match_count,
+                    MajorHWSnapshot.created_at,
+                )
+            )
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
@@ -224,6 +244,7 @@ hwadd = on_command("做作业", priority=10, block=True)
 hwsee = on_command("查看作业", priority=10, block=True)
 hwrank = on_command("作业排名", priority=10, block=True)
 hwdetail = on_command("作业详情", priority=10, block=True)
+hwchart = on_command("作业走势", aliases={"作业折线图", "作业曲线"}, priority=10, block=True)
 allrank = on_command("赛事作业结果", priority=10, block=True)
 hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER)
 simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSER)
@@ -292,6 +313,8 @@ async def hwhelp_funtion():
 查看当前作业排名
 /作业详情 [@某人|主播名]
 查看自己、某人或虚拟主播的正确率变化截图
+/作业走势 [log]
+群里直接看全员通过率随每场结束的折线图（默认线性纵轴，log/对数切对数坐标）
 /赛事作业结果
 查看赛事整体结果
 /主播作业 <主播名或uid> <队伍1,队伍2,...>
@@ -455,6 +478,72 @@ async def hwdetail_function(bot: Bot, message: GroupMessageEvent, arg: Message =
     if screenshot:
         await hwdetail.finish(image_segment(screenshot))
     await hwdetail.finish("生成作业详情截图失败，请稍后重试")
+
+CHART_PLAYOFF_HINT = (
+    "当前为 {stage}（淘汰赛）阶段，暂不支持作业走势折线图；"
+    "可用 /作业排名 或 /作业详情 查看概率变化。"
+)
+CHART_EMPTY_HINT = "当前阶段暂无作业概率快照，等下一场比赛结束或重新提交作业后再试。"
+CHART_FAILED_HINT = "生成作业走势折线图失败，请稍后重试。"
+
+CHART_LOG_TOKENS = {"log", "对数", "对数坐标", "log10", "logscale"}
+CHART_LINEAR_TOKENS = {"linear", "线性", "线性坐标", "lin"}
+
+
+def parse_chart_scale(arg: Message | None) -> str:
+    """解析 ``/作业走势`` 的可选坐标模式参数，默认线性。"""
+
+    text = normalize("NFKC", arg.extract_plain_text()).strip() if arg else ""
+    for token in re.split(r"[\s,，、]+", text.casefold()):
+        if token in CHART_LOG_TOKENS:
+            return hw_chart.SCALE_LOG
+        if token in CHART_LINEAR_TOKENS:
+            return hw_chart.SCALE_LINEAR
+    return hw_chart.SCALE_LINEAR
+
+
+@hwchart.handle()
+async def hwchart_function(bot: Bot, message: GroupMessageEvent, arg: Message = CommandArg()):
+    if config.major_stage == "playoffs":
+        await hwchart.finish(CHART_PLAYOFF_HINT.format(stage=major_stage_name))
+
+    scale = parse_chart_scale(arg)
+    snapshots = await db.get_stage_snapshots(major_stage_name)
+    if not snapshots:
+        await hwchart.finish(CHART_EMPTY_HINT)
+
+    gid = message.get_session_id().split('_')[1]
+    uids = sorted({str(snapshot.uid) for snapshot in snapshots})
+    # 展示名统一走 _major_member_name（主播用配置昵称、群友用群名片/昵称）；
+    # 逐个 await 会有 14 次串行 RTT，这里并发取，任一失败只影响该玩家昵称。
+    resolved_names = await asyncio.gather(
+        *(_major_member_name(bot, gid, uid) for uid in uids), return_exceptions=True
+    )
+    names = {
+        uid: uid if isinstance(name, BaseException) or not name else str(name)
+        for uid, name in zip(uids, resolved_names)
+    }
+
+    series = hw_chart.build_series(snapshots, names)
+    if not series:
+        await hwchart.finish(CHART_EMPTY_HINT)
+
+    finished_matches = json.loads(
+        await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")
+    )
+    try:
+        png_bytes = await asyncio.to_thread(
+            hw_chart.render_homework_chart,
+            series,
+            finished_matches,
+            stage_name=major_stage_name,
+            scale=scale,
+            resolver=get_name,
+        )
+    except Exception:
+        logger.exception("failed to render major homework chart")
+        await hwchart.finish(CHART_FAILED_HINT)
+    await hwchart.finish(image_segment(png_bytes))
 
 @hwstreamer.handle()
 async def hwstreamer_function(message: MessageEvent, arg: Message = CommandArg()):
