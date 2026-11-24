@@ -29,7 +29,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
-from pyppeteer import launch
+from ai_runtime.screenshot_browser import close_screenshot_browser, screenshot_browser
 from ..major_hw.playoff_homework import (
     PLAYOFF_CATEGORIES,
     PLAYOFF_CATEGORY_SLOTS,
@@ -80,6 +80,9 @@ __plugin_meta__ = PluginMetadata(
 )
 
 security = HTTPBearer()
+
+# Route resident-browser diagnostics through NoneBot's logger.
+screenshot_browser.logger = logger
 
 config = get_plugin_config(Config)
 if not config.mute_api_token:
@@ -161,6 +164,12 @@ async def update_season_stats_cache():
     SEASON_STATS_CACHE[season_id] = await _calculate_global_stats(season_id)
 
 driver = get_driver()
+
+@driver.on_shutdown
+async def _shutdown_screenshot_browser():
+    """Stop the resident Chromium so no orphan Chrome survives a restart."""
+    await close_screenshot_browser()
+
 
 @driver.on_startup
 async def _():
@@ -295,13 +304,11 @@ async def get_user_name(uid: str, interval: int = config.user_name_cache_expirat
 LOCAL_URL = os.getenv("CS_SCREENSHOT_BASE_URL") or f"http://localhost:{os.getenv('PORT', '1234')}"
 
 async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | None:
-    browser = None
-    screenshot = None
-    try:
-        # 启动浏览器
-        browser = await launch(headless=True, args=['--no-sandbox'])
-        page = await browser.newPage()
-        
+    """Render a page through the shared resident browser in a private session."""
+
+    async def render(page) -> bytes | None:
+        screenshot = None
+
         # 使用 cookie 设置 token（替代 localStorage）
         await page.setCookie({'name': 'token', 'value': token, 'url': f'{LOCAL_URL}', 'path': '/', 'httpOnly': False, 'secure': False})
         await page.evaluateOnNewDocument('() => { window.__CSBOT_CAPTURE_METADATA__ = true; }')
@@ -377,12 +384,11 @@ async def get_screenshot(path: str, token: str, width:int = 1000) -> bytes | Non
                 screenshot = bytes(screenshot)
         else:
             screenshot = await page.screenshot({'fullPage': True})
-            
-    finally:
-        # 确保浏览器被关闭
-        if browser:
-            await browser.close()
-    return screenshot
+        return screenshot
+
+    # 常驻 Chromium 复用；incognito context 隔离 Cookie，断连自动重建并重试一次。
+    return await screenshot_browser.run(render)
+
 
 async def get_match_user_team(players: list[tuple[str, int]]) -> int | None:
     team1_users = False
