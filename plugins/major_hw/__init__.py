@@ -19,6 +19,7 @@ from ..utils import local_storage
 from ..utils import getcard
 
 from unicodedata import normalize
+from dataclasses import dataclass, field
 import json
 import re
 import asyncio
@@ -245,6 +246,7 @@ hwsee = on_command("查看作业", priority=10, block=True)
 hwrank = on_command("作业排名", priority=10, block=True)
 hwdetail = on_command("作业详情", priority=10, block=True)
 hwchart = on_command("作业走势", aliases={"作业折线图", "作业曲线"}, priority=10, block=True)
+hwmine = on_command("我的作业走势", aliases={"我的作业折线图", "我的作业曲线"}, priority=10, block=True)
 allrank = on_command("赛事作业结果", priority=10, block=True)
 hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER)
 simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSER)
@@ -313,8 +315,10 @@ async def hwhelp_funtion():
 查看当前作业排名
 /作业详情 [@某人|主播名]
 查看自己、某人或虚拟主播的正确率变化截图
-/作业走势 [log]
-群里直接看全员通过率随每场结束的折线图（默认线性纵轴，log/对数切对数坐标）
+/作业走势 [@某人|我|主播名] [log]
+看全员或指定玩家通过率随每场结束的折线图（可混用 @ / 我 / 主播名，log/对数切对数坐标）
+/我的作业走势 [@某人|主播名] [log]
+只看自己的走势；附带 @ 或主播名可一键对比
 /赛事作业结果
 查看赛事整体结果
 /主播作业 <主播名或uid> <队伍1,队伍2,...>
@@ -484,49 +488,179 @@ CHART_PLAYOFF_HINT = (
     "可用 /作业排名 或 /作业详情 查看概率变化。"
 )
 CHART_EMPTY_HINT = "当前阶段暂无作业概率快照，等下一场比赛结束或重新提交作业后再试。"
+CHART_SELF_EMPTY_HINT = "你当前阶段暂无作业概率快照，等下一场比赛结束或重新提交作业后再试。"
+CHART_TARGET_EMPTY_HINT = "指定玩家当前阶段暂无作业概率快照，等下一场比赛结束或重新提交作业后再试。"
 CHART_FAILED_HINT = "生成作业走势折线图失败，请稍后重试。"
+CHART_UNKNOWN_TARGET_HINT = "未识别目标：{targets}（支持 @群友、我、虚拟主播名或 log/线性）"
+CHART_PARTIAL_HINT = "未找到 {targets} 的作业概率快照，已跳过并继续出图。"
 
 CHART_LOG_TOKENS = {"log", "对数", "对数坐标", "log10", "logscale"}
 CHART_LINEAR_TOKENS = {"linear", "线性", "线性坐标", "lin"}
+CHART_SELF_TOKENS = {"我", "me", "self", "自己"}
+CHART_TOKEN_SPLIT = re.compile(r"[\s,，、]+")
+CHART_QQ_UID = re.compile(r"^\d{5,13}$")
+
+
+@dataclass
+class ChartRequest:
+    """``/作业走势`` 与 ``/我的作业走势`` 的统一参数解析结果。"""
+
+    scale: str = hw_chart.SCALE_LINEAR
+    uids: list[str] = field(default_factory=list)
+    unknown: list[str] = field(default_factory=list)
+
+
+def chart_text_tokens(arg: Message | None) -> list[str]:
+    """命令参数的纯文本 token（NFKC 规范化，按空白/中英文逗号/顿号切分）。"""
+
+    text = normalize("NFKC", arg.extract_plain_text()).strip() if arg else ""
+    return [token for token in CHART_TOKEN_SPLIT.split(text) if token]
 
 
 def parse_chart_scale(arg: Message | None) -> str:
     """解析 ``/作业走势`` 的可选坐标模式参数，默认线性。"""
 
-    text = normalize("NFKC", arg.extract_plain_text()).strip() if arg else ""
-    for token in re.split(r"[\s,，、]+", text.casefold()):
-        if token in CHART_LOG_TOKENS:
+    for token in chart_text_tokens(arg):
+        lowered = token.casefold()
+        if lowered in CHART_LOG_TOKENS:
             return hw_chart.SCALE_LOG
-        if token in CHART_LINEAR_TOKENS:
+        if lowered in CHART_LINEAR_TOKENS:
             return hw_chart.SCALE_LINEAR
     return hw_chart.SCALE_LINEAR
 
 
-@hwchart.handle()
-async def hwchart_function(bot: Bot, message: GroupMessageEvent, arg: Message = CommandArg()):
-    if config.major_stage == "playoffs":
-        await hwchart.finish(CHART_PLAYOFF_HINT.format(stage=major_stage_name))
+def chart_at_targets(arg: Message | None) -> list[str]:
+    """只从命令参数 ``arg`` 里取 ``@``，绝不读整条消息。
 
-    scale = parse_chart_scale(arg)
-    snapshots = await db.get_stage_snapshots(major_stage_name)
-    if not snapshots:
-        await hwchart.finish(CHART_EMPTY_HINT)
+    触发机器人的前置 ``@bot`` 不在 ``CommandArg()`` 里；若从
+    ``message.get_message()`` 取 ``at`` 会把它误当成要画图的玩家。
+    """
 
-    gid = message.get_session_id().split('_')[1]
-    uids = sorted({str(snapshot.uid) for snapshot in snapshots})
-    # 展示名统一走 _major_member_name（主播用配置昵称、群友用群名片/昵称）；
-    # 逐个 await 会有 14 次串行 RTT，这里并发取，任一失败只影响该玩家昵称。
-    resolved_names = await asyncio.gather(
-        *(_major_member_name(bot, gid, uid) for uid in uids), return_exceptions=True
+    targets: list[str] = []
+    for segment in arg or []:
+        if segment.type != "at":
+            continue
+        qq = str(segment.data.get("qq") or "").strip()
+        if not qq or qq == "all":
+            continue
+        targets.append(qq)
+    return targets
+
+
+async def parse_chart_request(arg: Message | None, sender_uid: str) -> ChartRequest:
+    """统一解析坐标参数与目标人（``@`` / 我 / 虚拟主播名 / 纯数字 uid）。"""
+
+    request = ChartRequest()
+    seen: set[str] = set()
+
+    def add(uid: str) -> None:
+        uid = str(uid).strip()
+        if not uid or uid in seen:
+            return
+        seen.add(uid)
+        request.uids.append(uid)
+
+    for qq in chart_at_targets(arg):
+        add(qq)
+
+    for token in chart_text_tokens(arg):
+        lowered = token.casefold()
+        if lowered in CHART_LOG_TOKENS:
+            request.scale = hw_chart.SCALE_LOG
+            continue
+        if lowered in CHART_LINEAR_TOKENS:
+            request.scale = hw_chart.SCALE_LINEAR
+            continue
+        if lowered in CHART_SELF_TOKENS:
+            add(sender_uid)
+            continue
+        virtual_user = await resolve_virtual_user(token)
+        if virtual_user is not None:
+            add(virtual_user.uid)
+            continue
+        if CHART_QQ_UID.match(token):
+            add(token)
+            continue
+        request.unknown.append(token)
+    return request
+
+
+async def _major_chart_names(bot: Bot, gid: str, uids: list[str]) -> dict[str, str]:
+    """并发解析展示名：主播用配置昵称、群友用群名片；单个失败只回退 uid。"""
+
+    unique = list(dict.fromkeys(str(uid) for uid in uids if str(uid)))
+    if not unique:
+        return {}
+    resolved = await asyncio.gather(
+        *(_major_member_name(bot, gid, uid) for uid in unique), return_exceptions=True
     )
-    names = {
+    return {
         uid: uid if isinstance(name, BaseException) or not name else str(name)
-        for uid, name in zip(uids, resolved_names)
+        for uid, name in zip(unique, resolved)
     }
 
-    series = hw_chart.build_series(snapshots, names)
+
+def chart_empty_hint(requested: list[str], sender_uid: str) -> str:
+    """按「全员 / 只看自己 / 指定他人」给出不同措辞，避免误导。"""
+
+    if not requested:
+        return CHART_EMPTY_HINT
+    if requested == [sender_uid]:
+        return CHART_SELF_EMPTY_HINT
+    return CHART_TARGET_EMPTY_HINT
+
+
+async def send_major_chart(
+    matcher,
+    bot: Bot,
+    message: GroupMessageEvent,
+    request: ChartRequest,
+    *,
+    include_self: bool = False,
+):
+    """``/作业走势`` / ``/我的作业走势`` 共用的筛选、渲染与发送逻辑。"""
+
+    if config.major_stage == "playoffs":
+        await matcher.finish(CHART_PLAYOFF_HINT.format(stage=major_stage_name))
+
+    sender_uid = str(message.get_user_id())
+    requested = list(request.uids)
+    if include_self and sender_uid not in requested:
+        requested.insert(0, sender_uid)
+
+    if request.unknown:
+        await matcher.finish(
+            CHART_UNKNOWN_TARGET_HINT.format(targets="、".join(request.unknown))
+        )
+
+    snapshots = await db.get_stage_snapshots(major_stage_name)
+    if not snapshots:
+        await matcher.finish(chart_empty_hint(requested, sender_uid))
+
+    gid = message.get_session_id().split('_')[1]
+    available = {str(snapshot.uid) for snapshot in snapshots}
+    selected = [uid for uid in requested if uid in available]
+    missing = [uid for uid in requested if uid not in available]
+    if requested and not selected:
+        await matcher.finish(chart_empty_hint(requested, sender_uid))
+
+    rows = (
+        [snapshot for snapshot in snapshots if str(snapshot.uid) in set(selected)]
+        if requested
+        else snapshots
+    )
+    names = await _major_chart_names(
+        bot, gid, [*selected, *missing] if requested else sorted(available)
+    )
+    # 部分目标没有快照：先提示跳过了谁，再照常给其余目标出图，不中断。
+    if missing:
+        await matcher.send(
+            CHART_PARTIAL_HINT.format(targets="、".join(names.get(uid, uid) for uid in missing))
+        )
+
+    series = hw_chart.build_series(rows, names)
     if not series:
-        await hwchart.finish(CHART_EMPTY_HINT)
+        await matcher.finish(chart_empty_hint(requested, sender_uid))
 
     finished_matches = json.loads(
         await local_storage.get(f"hltvresult{config.major_event_id}", default="[]")
@@ -537,13 +671,25 @@ async def hwchart_function(bot: Bot, message: GroupMessageEvent, arg: Message = 
             series,
             finished_matches,
             stage_name=major_stage_name,
-            scale=scale,
+            scale=request.scale,
             resolver=get_name,
         )
     except Exception:
         logger.exception("failed to render major homework chart")
-        await hwchart.finish(CHART_FAILED_HINT)
-    await hwchart.finish(image_segment(png_bytes))
+        await matcher.finish(CHART_FAILED_HINT)
+    await matcher.finish(image_segment(png_bytes))
+
+
+@hwchart.handle()
+async def hwchart_function(bot: Bot, message: GroupMessageEvent, arg: Message = CommandArg()):
+    request = await parse_chart_request(arg, str(message.get_user_id()))
+    await send_major_chart(hwchart, bot, message, request)
+
+
+@hwmine.handle()
+async def hwmine_function(bot: Bot, message: GroupMessageEvent, arg: Message = CommandArg()):
+    request = await parse_chart_request(arg, str(message.get_user_id()))
+    await send_major_chart(hwmine, bot, message, request, include_self=True)
 
 @hwstreamer.handle()
 async def hwstreamer_function(message: MessageEvent, arg: Message = CommandArg()):
