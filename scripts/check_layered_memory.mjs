@@ -36,3 +36,22 @@ test('failed Python output cannot be memory evidence',()=>{
   {seq:2,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'p',content:[{type:'text',text:JSON.stringify({exit_code:1,output:'unverified partial data'})}]}]}}}
  ]});assert.deepEqual(sources(),[]);
 });
+
+test('evidence may omit id but must still quote a real source verbatim',async()=>{
+ // The evidence index changes on every tool step, so the model no longer has to
+ // copy an id: a verbatim quote is matched against this turn's authoritative
+ // sources and the real source id is bound by the policy layer.
+ setup('阿岚是QQ 55555（岚岚）');
+ const quote={title:'阿岚',content:'阿岚是QQ 55555（岚岚）',tier:'foundation',category:'alias',subject:'55555',keys:['阿岚','岚岚'],evidence:[{quote:'阿岚是QQ 55555（岚岚）'}]};
+ const saved=await save.execute(quote,exec);
+ const stored=unpack(db.get(saved.id).content);
+ assert.equal(stored.evidence[0].id,'source');
+ assert.equal(stored.evidence[0].kind,'user');
+ assert.equal(stored.evidence[0].quote,'阿岚是QQ 55555（岚岚）');
+ // A quote nobody said in this turn is still refused.
+ await assert.rejects(save.execute({...quote,title:'编造的阿岚',content:'阿岚还叫阿岚岚',evidence:[{quote:'这句原文本轮不存在'}]},exec),/Evidence/);
+ // An explicit id must still name a real source; a fabricated id never passes.
+ await assert.rejects(save.execute({...quote,title:'伪造的阿岚',evidence:[{id:'fake',quote:'阿岚是QQ 55555（岚岚）'}]},exec),/Evidence/);
+ // An over-long or missing quote keeps the strict shape check.
+ await assert.rejects(save.execute({...quote,title:'缺引用的阿岚',evidence:[{id:'source'}]},exec),/Evidence/);
+});

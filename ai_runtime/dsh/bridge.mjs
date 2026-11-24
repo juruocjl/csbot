@@ -158,7 +158,11 @@ export function apply(ctx) {
       return JSON.parse(streamText(chunks).replace(/^```(?:json)?\s*|\s*```$/g,'')).approved===true;
     }
     ctx.on('system-prompt/assemble',async (assembly,context,next)=>{
-      if(memoryExec&&!req.memoryOnly){const foundation=await foundationalContext(memoryExec,req.text+' '+runtimeSupplement);assembly.contexts.push({name:'csbot-layered-memory',text:foundation+'\n本轮可引用证据：'+JSON.stringify(sources().map(({id,kind,text})=>({id,kind,preview:text.slice(0,80)})))+'\n索引preview可能截断，evidence.quote必须引用会话中实际可见的完整原文，不能补写。'});}
+      // Only the stable foundation is injected; the evidence table is read
+      // directly by turn-end distillation and verification. Appending it here
+      // re-projects a new user message on every tool step, which breaks the KV
+      // prompt cache and triggers compaction early.
+      if(memoryExec&&!req.memoryOnly){const foundation=await foundationalContext(memoryExec,req.text+' '+runtimeSupplement);assembly.contexts.push({name:'csbot-layered-memory',text:foundation});}
       if(fallbackActive&&fallbackEnabled&&!req.memoryOnly)assembly.contexts.push({
         name:'csbot-fallback-status',
         text:`本轮 OpenAI 主通道已临时故障，当前已切换到国内直连的纯文本模型 ${fallbackModel}。请如实说明模型已降级，不要自称原模型；本轮没有生图/改图能力，也没有看过本轮之前对话中的原图，不要假装看过或已经生成图片。机器人数据截图可改用 csdata.image(id) 读取文本 metadata，统计图表仍可用 execute_python + matplotlib；不要调用 generate_image 或 read_image。`,

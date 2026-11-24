@@ -89,6 +89,42 @@ const intEnv = (name, fallback, min, max) => {
   return Math.min(max, Math.max(min, Math.trunc(raw)));
 };
 
+// Defence in depth for the error-visibility fix: the Python supervisor logs a
+// sanitized summary, and the resident host never forwards a raw provider or
+// lock error into the control plane or stderr. Pure, so the acceptance script
+// can assert the redaction without a daemon.
+const SECRET_SCRUBBERS = [
+  [/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]'],
+  [/([?&](?:token|api_key|apikey|key|secret|password|auth)=)[^&\s"'<>]+/gi, '$1[REDACTED]'],
+  [/(https?:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[REDACTED]:[REDACTED]@'],
+  [/\b(?:sk|ds)-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]'],
+];
+export function scrubErrorText(raw, limit = 500) {
+  let text = '';
+  if (typeof raw === 'string') text = raw;
+  else if (raw !== undefined && raw !== null) {
+    // An Error's message is the useful part; a plain payload is serialized.
+    if (typeof raw === 'object' && typeof raw.message === 'string' && raw.message) text = raw.message;
+    else if (typeof raw === 'object') {
+      try { text = JSON.stringify(raw); } catch { text = String(raw); }
+    } else text = String(raw);
+  }
+  for (const [pattern, replacement] of SECRET_SCRUBBERS) text = text.replace(pattern, replacement);
+  return text.replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+// A WebUI `SessionController.promote()` and a managed turn may race for the same
+// JSONL write handle; both shapes below are that transient conflict, not a
+// permanent failure.
+const isAgentConflictError = error => {
+  const name = String(error?.name || '');
+  const code = String(error?.code || '');
+  const msg = String(error?.message || error || '');
+  return name === 'SessionAlreadyOwnedError'
+    || code === 'SESSION_ALREADY_OWNED'
+    || /already registered|already owned/i.test(msg);
+};
+
 /** One live conversation turn: all mutable state is scoped to this object. */
 class TurnState {
   constructor(request) {
@@ -371,13 +407,14 @@ export function apply(ctx) {
       assembly.sections.unshift({name: 'csbot-persona', order: -1000, text: turn.systemPrompt});
     }
     if (turn.liveAgent) {
+      // Only the stable foundation goes into the per-step assembly: the agent
+      // loop re-projects `contexts` before EVERY model step, so appending the
+      // ever-growing evidence table would rewrite the session projection and
+      // re-inject a full user message each tool call (cache break + early
+      // compaction). Turn-end distillation and `verifyMemory` call `sources()`
+      // directly, so they keep the complete evidence list.
       const foundation = await foundationalContext(turn.exec(), turn.text + ' ' + turn.runtimeSupplement);
-      assembly.contexts.push({
-        name: 'csbot-layered-memory',
-        text: foundation + '\n本轮可引用证据：'
-          + JSON.stringify(sources(turn.exec()).map(({id, kind, text}) => ({id, kind, preview: text.slice(0, 80)})))
-          + '\n索引preview可能截断，evidence.quote必须引用会话中实际可见的完整原文，不能补写。',
-      });
+      assembly.contexts.push({name: 'csbot-layered-memory', text: foundation});
     }
     if (turn.fallbackActive && turn.fallbackEnabled) {
       assembly.contexts.push({
@@ -636,7 +673,65 @@ export function apply(ctx) {
     },
   });
 
+  // Every single-turn policy is registered as an unloadable Cordis effect, so a
+  // reused WebUI agent can never inherit the previous turn's tool downgrade,
+  // model route or retry closure.
+  function attachTurnHooks(agentCtx, turn) {
+    // Restriction also removes unused tools from the model schema. Several
+    // `restrict` layers intersect, which is why the previous turn's layer must
+    // be unloaded instead of shadowed.
+    const available = ctx.tools.schemas().map(tool => tool.name).filter(toolName => turn.allow.has(toolName));
+    turn.disposers.push(agentCtx.tools.restrict({allow: available}));
+    // `prepend` keeps this listener outermost: whatever the SessionController's
+    // own model selection resolves, this turn's route wins deterministically.
+    turn.disposers.push(agentCtx.on('agent/request', async (payload, nextConfig) => {
+      const config = await nextConfig();
+      if (turn.fallbackActive && turn.fallbackEnabled) {
+        return {...config, provider: turn.fallbackProvider, model: turn.fallbackModel, maxTokens: 8192,
+          reasoningEffort: turn.thinking ? 'high' : 'off'};
+      }
+      return {...config, provider: turn.provider, model: turn.model,
+        maxTokens: turn.provider === 'openai' ? 16384 : 8192,
+        reasoningEffort: turn.provider === 'openai'
+          ? (turn.thinking ? 'medium' : 'low')
+          : (turn.thinking ? 'high' : 'off')};
+    }, {prepend: true}));
+    turn.disposers.push(agentCtx.on('agent/request-error', async (payload, nextError) => {
+      if (!turn.fallbackEnabled || turn.fallbackActive || payload.provider !== 'openai'
+          || payload.signal?.aborted || !isFallbackEligibleFailure(payload.failure)) return nextError();
+      // Give any downstream native retry policy its say first, then take over
+      // with one seamless retry.
+      const downstream = await nextError();
+      if (downstream?.kind === 'retry') return downstream;
+      activateFallback(turn, payload.failure);
+      return {kind: 'retry'};
+    }, {prepend: true}));
+  }
+
+  const dropTurnHooks = turn => {
+    for (const dispose of turn.disposers.splice(0).reverse()) {
+      try { dispose(); } catch {}
+    }
+  };
+
+  async function reuseLiveAgent(agent, turn) {
+    // A WebUI follower may still be draining its own read-only frames; never
+    // inject a managed turn into a busy loop.
+    await agent.whenIdle();
+    attachTurnHooks(agent.ctx, turn);
+    // `owned: false` keeps the agent (and its event stream) alive; the caller
+    // unloads only the turn hooks.
+    return {agent, exists: true, owned: false, dispose: async () => {}};
+  }
+
   async function openAgent(turn) {
+    // A WebUI cold-session `session/follow` promotes the session into a resident
+    // agent and never disposes that handle, so the id is already live here. It
+    // must be reused, not resumed again: a second resume throws
+    // `agent "<id>" is already registered` / `SessionAlreadyOwnedError` and
+    // every later turn for the group would fail in 0.5s.
+    const existing = ctx.agents.get(turn.sessionId);
+    if (existing !== undefined) return reuseLiveAgent(existing, turn);
     const provider = turn.provider;
     const model = turn.model;
     const options = {
@@ -646,34 +741,33 @@ export function apply(ctx) {
         ? (turn.thinking ? 'medium' : 'low')
         : (turn.thinking ? 'high' : 'off'),
     };
-    const setup = agentCtx => {
-      // Restriction also removes unused tools from the model schema.
-      const available = ctx.tools.schemas().map(tool => tool.name).filter(toolName => turn.allow.has(toolName));
-      agentCtx.tools.restrict({allow: available});
-      // Step-level seamless fallback: rewrite the request config, keep the live
-      // process, the turn and every completed tool side effect intact.
-      agentCtx.on('agent/request', async (payload, nextConfig) => {
-        const config = await nextConfig();
-        if (!turn.fallbackActive || !turn.fallbackEnabled) return config;
-        return {...config, provider: turn.fallbackProvider, model: turn.fallbackModel, maxTokens: 8192,
-          reasoningEffort: turn.thinking ? 'high' : 'off'};
-      });
-      agentCtx.on('agent/request-error', async (payload, nextError) => {
-        if (!turn.fallbackEnabled || turn.fallbackActive || payload.provider !== 'openai'
-            || payload.signal?.aborted || !isFallbackEligibleFailure(payload.failure)) return nextError();
-        // Give any downstream native retry policy its say first, then take over
-        // with one seamless retry.
-        const downstream = await nextError();
-        if (downstream?.kind === 'retry') return downstream;
-        activateFallback(turn, payload.failure);
-        return {kind: 'retry'};
-      });
-    };
+    const setup = agentCtx => attachTurnHooks(agentCtx, turn);
     const exists = await ctx.sessionPersistence.stat(turn.sessionId);
-    const handle = exists
-      ? await ctx.agents.resume({resumeSessionId: turn.sessionId, agentOptions: options, setup})
-      : await ctx.agents.create({sessionId: turn.sessionId, meta: {cwd: turn.sessionWorkspace}, agentOptions: options, setup});
-    return {handle, exists: Boolean(exists)};
+    try {
+      const handle = exists
+        ? await ctx.agents.resume({resumeSessionId: turn.sessionId, agentOptions: options, setup})
+        : await ctx.agents.create({sessionId: turn.sessionId, meta: {cwd: turn.sessionWorkspace}, agentOptions: options, setup});
+      return {agent: handle.agent, exists: Boolean(exists), owned: true, dispose: () => handle.dispose()};
+    } catch (error) {
+      if (!isAgentConflictError(error)) throw error;
+      // `promote()` may have taken the JSONL write handle milliseconds ago and
+      // published (or be about to publish) the agent. Join it instead of
+      // double-owning the session.
+      dropTurnHooks(turn);
+      let live = ctx.agents.get(turn.sessionId);
+      if (live === undefined) {
+        const controller = ctx.get('sessionController');
+        const resolver = typeof controller?.resolveAgent === 'function'
+          ? controller
+          : (typeof controller?.agents?.resolveAgent === 'function' ? controller.agents : null);
+        if (resolver) {
+          const resolved = await resolver.resolveAgent(turn.sessionId).catch(() => null);
+          live = resolved?.agent ?? ctx.agents.get(turn.sessionId);
+        }
+      }
+      if (live === undefined) throw error;
+      return reuseLiveAgent(live, turn);
+    }
   }
 
   async function registerWorkspace(turn) {
@@ -695,105 +789,124 @@ export function apply(ctx) {
 
   async function runTurn(turn) {
     turn.emit({type: 'started'});
-    const {handle, exists} = await openAgent(turn);
-    turn.liveAgent = handle.agent;
+    const {agent, exists, owned, dispose} = await openAgent(turn);
+    turn.liveAgent = agent;
     turn.accepting = true;
-    await registerWorkspace(turn);
-    const beforeMemory = handle.agent.session.snapshotEvents().length;
-    configureMemory(turn.sessionId, {
-      inputSources: () => turn.inputEvidence,
-      trusted: false,
-      events: () => handle.agent.session.snapshotEvents().slice(beforeMemory),
-      verify: data => verifyMemory(turn, data),
-      readOnly: turn.readOnlyMemory,
-      memoryScopeWorkspace: turn.memoryScopeWorkspace,
-      remember: turn.remember,
-    });
-    const before = handle.agent.session.snapshotEvents().length;
-    if (turn.context) {
-      handle.agent.inject(createUserMessage({content: [{type: 'text', text: turn.context}], source: {kind: 'plugin', plugin: 'csbot-context'}}));
+    try {
+      await registerWorkspace(turn);
+      const beforeMemory = agent.session.snapshotEvents().length;
+      configureMemory(turn.sessionId, {
+        inputSources: () => turn.inputEvidence,
+        trusted: false,
+        events: () => agent.session.snapshotEvents().slice(beforeMemory),
+        verify: data => verifyMemory(turn, data),
+        readOnly: turn.readOnlyMemory,
+        memoryScopeWorkspace: turn.memoryScopeWorkspace,
+        remember: turn.remember,
+      });
+      const before = agent.session.snapshotEvents().length;
+      if (turn.context) {
+        agent.inject(createUserMessage({content: [{type: 'text', text: turn.context}], source: {kind: 'plugin', plugin: 'csbot-context'}}));
+      }
+      agent.followup(createUserMessage({
+        content: [{type: 'text', text: turn.text}],
+        source: turn.remember ? {kind: 'user'} : {kind: 'plugin', plugin: 'csbot-report'},
+      }));
+      await agent.whenIdle();
+      turn.accepting = false;
+      await flushMemory();
+      const compaction = turn.compact ? await ctx.compaction.compactNow(agent, new AbortController().signal) : null;
+      await ctx.sessionPersistence.flush();
+      const events = agent.session.snapshotEvents().slice(before);
+      const end = events.filter(event => event.type === 'turn/end').at(-1);
+      const messages = events
+        .filter(event => event.type === 'assistant/message' && !event.data.message.content.some(block => block.type === 'tool-call'))
+        .slice(turn.hadSteer ? 0 : -1)
+        .map(event => ({
+          role: 'assistant',
+          content: event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('\n'),
+        }))
+        .filter(message => message.content);
+      const toolEvents = events
+        .filter(event => event.type === 'tool/call' || event.type === 'tool/result')
+        .map(event => ({type: event.type, data: event.data}));
+      turn.flushTrace();
+      turn.emit({
+        type: 'complete', reason: end?.data.reason, messages, tools: toolEvents,
+        resumed: exists, compacted: Boolean(compaction),
+      });
+    } finally {
+      turn.accepting = false;
+      turn.liveAgent = null;
+      // A handle this turn opened is always released, even when the turn threw.
+      // A reused WebUI agent stays live: the browser's follower stream, its
+      // projections and its event flow must not be interrupted, while every
+      // turn-scoped hook is unloaded by `turn.dispose()`.
+      if (owned) await dispose().catch(() => {});
     }
-    handle.agent.followup(createUserMessage({
-      content: [{type: 'text', text: turn.text}],
-      source: turn.remember ? {kind: 'user'} : {kind: 'plugin', plugin: 'csbot-report'},
-    }));
-    await handle.agent.whenIdle();
-    turn.accepting = false;
-    await flushMemory();
-    const compaction = turn.compact ? await ctx.compaction.compactNow(handle.agent, new AbortController().signal) : null;
-    await ctx.sessionPersistence.flush();
-    const events = handle.agent.session.snapshotEvents().slice(before);
-    const end = events.filter(event => event.type === 'turn/end').at(-1);
-    const messages = events
-      .filter(event => event.type === 'assistant/message' && !event.data.message.content.some(block => block.type === 'tool-call'))
-      .slice(turn.hadSteer ? 0 : -1)
-      .map(event => ({
-        role: 'assistant',
-        content: event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('\n'),
-      }))
-      .filter(message => message.content);
-    const toolEvents = events
-      .filter(event => event.type === 'tool/call' || event.type === 'tool/result')
-      .map(event => ({type: event.type, data: event.data}));
-    turn.flushTrace();
-    turn.emit({
-      type: 'complete', reason: end?.data.reason, messages, tools: toolEvents,
-      resumed: exists, compacted: Boolean(compaction),
-    });
-    await handle.dispose();
-    turn.liveAgent = null;
   }
 
   async function runMemoryActions(body) {
     const sessionId = String(body.sessionId || '');
     const workspace = resolve(String(body.workspace || ''));
     if (!sessionId || !body.workspace) throw new Error('sessionId and workspace are required');
+    // One live turn per session: a managed turn and an offline maintenance turn
+    // must not share the same agent concurrently.
+    if (turns.has(sessionId)) throw Object.assign(new Error('a turn is already active for this session'), {status: 409});
     const turn = new TurnState({
       runId: 'memory-' + randomUUID(), scope: String(body.scope || sessionId), sessionId,
       workspace, title: String(body.title || ''), text: '', remember: false,
       provider: String(body.provider || process.env.CSBOT_PROVIDER || 'deepseek-official'),
       model: String(body.model || process.env.CSBOT_MODEL || ''),
     });
-    const {handle} = await openAgent(turn);
-    turn.liveAgent = handle.agent;
-    // Register the maintenance turn so the global guard, system-prompt and
-    // stream observers resolve it like any other managed turn.
+    // Reserve the session before queueing so a managed turn cannot race in and
+    // attach a second set of turn hooks to the same agent.
     turns.set(turn.sessionId, turn);
+    let owned = false;
+    let dispose = async () => {};
     try {
-      configureMemory(turn.sessionId, {
-        inputSources: () => [], trusted: true,
-        events: () => handle.agent.session.snapshotEvents().slice(0, 0),
-        verify: async () => true, readOnly: false, memoryScopeWorkspace: '', remember: false,
+      return await enqueueScope(turn.scope, async () => {
+        const opened = await openAgent(turn);
+        owned = opened.owned;
+        dispose = opened.dispose;
+        turn.liveAgent = opened.agent;
+        // Register the maintenance turn so the global guard, system-prompt and
+        // stream observers resolve it like any other managed turn.
+        configureMemory(turn.sessionId, {
+          inputSources: () => [], trusted: true,
+          events: () => opened.agent.session.snapshotEvents().slice(0, 0),
+          verify: async () => true, readOnly: false, memoryScopeWorkspace: '', remember: false,
+        });
+        const repaired = [];
+        for (const action of body.actions ?? []) {
+          if (!['memory_save', 'memory_forget'].includes(action?.name)) throw new Error('Unsupported offline memory action');
+          const result = await ctx.tools.execute({
+            callId: randomUUID(), name: action.name, arguments: action.arguments,
+            agent: opened.agent, signal: new AbortController().signal,
+          });
+          if (result.isError) throw new Error('Offline memory action failed: '
+            + String(result.value?.message ?? JSON.stringify(result.value ?? '')).slice(0, 300));
+          repaired.push({name: action.name, value: result.value});
+        }
+        let verified = 0;
+        for (const title of body.checkTitles ?? []) {
+          const result = await ctx.tools.execute({
+            callId: randomUUID(), name: 'memory_search',
+            arguments: {query: title, mode: 'keyword', limit: 100},
+            agent: opened.agent, signal: new AbortController().signal,
+          });
+          if (result.isError || !result.value?.items?.some(item => item.title === title)) throw new Error('Imported memory is not searchable');
+          verified++;
+        }
+        await flushMemory();
+        await ctx.sessionPersistence.flush();
+        return {ok: true, repaired: repaired.length, verified};
       });
-      const repaired = [];
-      for (const action of body.actions ?? []) {
-        if (!['memory_save', 'memory_forget'].includes(action?.name)) throw new Error('Unsupported offline memory action');
-        const result = await ctx.tools.execute({
-          callId: randomUUID(), name: action.name, arguments: action.arguments,
-          agent: handle.agent, signal: new AbortController().signal,
-        });
-        if (result.isError) throw new Error('Offline memory action failed: '
-          + String(result.value?.message ?? JSON.stringify(result.value ?? '')).slice(0, 300));
-        repaired.push({name: action.name, value: result.value});
-      }
-      let verified = 0;
-      for (const title of body.checkTitles ?? []) {
-        const result = await ctx.tools.execute({
-          callId: randomUUID(), name: 'memory_search',
-          arguments: {query: title, mode: 'keyword', limit: 100},
-          agent: handle.agent, signal: new AbortController().signal,
-        });
-        if (result.isError || !result.value?.items?.some(item => item.title === title)) throw new Error('Imported memory is not searchable');
-        verified++;
-      }
-      await flushMemory();
-      await ctx.sessionPersistence.flush();
-      return {ok: true, repaired: repaired.length, verified};
     } finally {
       turns.delete(turn.sessionId);
-      await handle.dispose().catch(() => {});
       turn.liveAgent = null;
-      releaseMemory(turn.sessionId);
+      if (owned) await dispose().catch(() => {});
+      turn.dispose();
     }
   }
 
@@ -846,6 +959,9 @@ export function apply(ctx) {
           return sendJson(res, 200, {
             ok: true, mode: 'daemon', active_turns: activeTurns,
             scopes: turns.size, web_interactive: WEB_INTERACTIVE,
+            // Read-only liveness fact: when a WebUI cold-session `follow`
+            // activates a session, its promoted agent stays resident here.
+            live_agents: ctx.agents.list().length,
           });
         }
         const steerMatch = /^\/turns\/([^/]+)\/steer$/.exec(url.pathname);
@@ -863,8 +979,11 @@ export function apply(ctx) {
         }
         if (req.method === 'POST' && url.pathname === '/memory/actions') {
           const body = await readBody(req);
-          const result = await runMemoryActions(body);
-          return sendJson(res, 200, result);
+          try {
+            return sendJson(res, 200, await runMemoryActions(body));
+          } catch (error) {
+            return sendJson(res, Number(error?.status) || 500, {error: scrubErrorText(error, 300)});
+          }
         }
         if (req.method === 'POST' && url.pathname === '/turns') {
           const body = await readBody(req);
@@ -895,7 +1014,9 @@ export function apply(ctx) {
               finally { releaseSlot(); }
             });
           } catch (error) {
-            turn.emit({type: 'error', error: String(error?.message || error).slice(0, 500)});
+            // The supervisor logs a sanitized summary; the wire payload keeps the
+            // real reason but never a credential.
+            turn.emit({type: 'error', error: scrubErrorText(error)});
           } finally {
             runs.delete(runId);
             turns.delete(sessionId);
@@ -906,7 +1027,7 @@ export function apply(ctx) {
         }
         return sendJson(res, 404, {error: 'not_found'});
       } catch (error) {
-        return sendJson(res, 500, {error: String(error?.message || error).slice(0, 300)});
+        return sendJson(res, 500, {error: scrubErrorText(error, 300)});
       }
     })();
   });
@@ -953,7 +1074,7 @@ export function apply(ctx) {
     });
     process.stdout.write(`csbot-daemon-bridge: listening on 127.0.0.1:${bridgePort}\n`);
   })().catch(error => {
-    process.stderr.write(`csbot-daemon-bridge: failed to start: ${String(error?.message || error)}\n`);
+    process.stderr.write(`csbot-daemon-bridge: failed to start: ${scrubErrorText(error)}\n`);
   });
 
   ctx.effect(() => () => {

@@ -15,7 +15,10 @@ Covers the spec's acceptance matrix:
   6. cross-scope memory isolation and read-only birthday borrowing
   7. WebUI default read-only protection (gateway write classifier)
   8. `web_fetch_browser` rendering/SSRF/disabled-capability via the per-turn RPC
-  9. session JSONL persistence in the unified directory
+  9. a multi-step turn keeps ONE memory context (no per-step evidence re-injection)
+ 10. a WebUI `session/follow` promoted live session is reused by managed turns
+ 11. session JSONL persistence in the unified directory
+ 12. daemon/subprocess failure details are sanitized into logs and diagnostics
 
 The exit code is non-zero on the first failed assertion.
 """
@@ -23,8 +26,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.cookiejar
 import json
+import logging
 import os
 from pathlib import Path
 import socket
@@ -223,6 +229,257 @@ def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+# ── WebUI follower: a real browser tab's `session/follow` over the WS mux ────
+FOLLOWER_JS = r"""
+const {default: WebSocket} = await import(process.env.CSBOT_TEST_WS_MODULE);
+const socket = new WebSocket(process.env.CSBOT_TEST_WS_URL, {
+  headers: {cookie: process.env.CSBOT_TEST_COOKIE},
+});
+socket.on('open', () => {
+  socket.send(JSON.stringify({
+    type: 'open',
+    streamId: 'follow-1',
+    endpoint: 'session/follow',
+    payload: {
+      args: {
+        request: {
+          address: {kind: 'session', sessionId: process.env.CSBOT_TEST_SESSION},
+          maxMessages: 20,
+        },
+      },
+    },
+  }));
+});
+socket.on('message', data => process.stdout.write(String(data) + '\n'));
+socket.on('error', error => {
+  process.stderr.write('follower-error: ' + String((error && error.message) || error) + '\n');
+  process.exit(3);
+});
+socket.on('close', (code, reason) => process.exit(0));
+setInterval(() => {}, 1 << 30);
+"""
+
+
+class MuxFollower:
+    """One authenticated `session/follow` stream, mirroring an open WebUI tab.
+
+    The host promotes a cold session into a resident agent as soon as the
+    initial snapshot is delivered, which is exactly the state a managed turn has
+    to survive (it used to throw `agent "…" is already registered`).
+    """
+
+    def __init__(self, web_port: int, cookie: str, session_id: str):
+        self.frames: list[dict] = []
+        self.errors: list[str] = []
+        self.lock = threading.Lock()
+        env = dict(os.environ)
+        env.update({
+            "CSBOT_TEST_WS_MODULE": (REPO / "ai_runtime/dsh/node_modules/ws/index.js").as_uri(),
+            "CSBOT_TEST_WS_URL": f"ws://127.0.0.1:{web_port}/api/remote.mux",
+            "CSBOT_TEST_COOKIE": cookie,
+            "CSBOT_TEST_SESSION": session_id,
+        })
+        self.process = subprocess.Popen(
+            ["node", "--input-type=module", "-e", FOLLOWER_JS],
+            cwd=str(REPO), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            # Frames carry the session's Chinese text; the Windows default code
+            # page would raise inside the reader thread and silently swallow them.
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+        )
+        threading.Thread(target=self._pump_out, daemon=True).start()
+        threading.Thread(target=self._pump_err, daemon=True).start()
+
+    def _pump_out(self) -> None:
+        stream = self.process.stdout
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    frame = json.loads(line)
+                except ValueError:
+                    with self.lock:
+                        self.errors.append(f"unparsed follower output: {line[:200]}")
+                    continue
+                with self.lock:
+                    self.frames.append(frame)
+        except (OSError, ValueError) as error:
+            with self.lock:
+                self.errors.append(f"follower reader failed: {error}")
+
+    def _pump_err(self) -> None:
+        stream = self.process.stderr
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                with self.lock:
+                    self.errors.append(line.strip())
+        except (OSError, ValueError) as error:
+            with self.lock:
+                self.errors.append(f"follower stderr reader failed: {error}")
+
+    def count_events(self) -> int:
+        with self.lock:
+            return sum(1 for frame in self.frames
+                       if frame.get("type") == "item" and frame.get("value", {}).get("type") == "event")
+
+    def wait_frame(self, predicate, timeout: float = 60.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self.lock:
+                for frame in self.frames:
+                    if predicate(frame):
+                        return frame
+            if self.process.poll() is not None:
+                raise AssertionError(f"WebUI follower exited early: {self.errors}")
+            time.sleep(0.1)
+        with self.lock:
+            tail = self.frames[-6:]
+            errors = self.errors[-6:]
+        raise AssertionError(f"WebUI follower delivered no matching frame; frames={tail} stderr={errors}")
+
+    def wait_event_after(self, count: int, timeout: float = 60.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.count_events() > count:
+                return
+            if self.process.poll() is not None:
+                raise AssertionError(f"WebUI follower exited early: {self.errors}")
+            time.sleep(0.1)
+        raise AssertionError("the WebUI follower stopped receiving live session events")
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(20)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+
+def _login_cookie(login_url: str) -> str:
+    """Exchange the launcher's one-time token for the browser session cookie."""
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    with opener.open(login_url, timeout=10) as page:
+        page.read(1024)
+    cookie = "; ".join(f"{item.name}={item.value}" for item in jar)
+    assert cookie, "the login URL did not create a browser session cookie"
+    return cookie
+
+
+def _health(bridge_port: int, token_file: Path) -> dict:
+    token = token_file.read_text(encoding="utf-8").strip()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{bridge_port}/health",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.loads(response.read())
+
+
+def _wait_live_agents(bridge_port: int, token_file: Path, minimum: int, timeout: float = 60.0) -> dict:
+    deadline = time.monotonic() + timeout
+    health: dict = {}
+    while time.monotonic() < deadline:
+        try:
+            health = _health(bridge_port, token_file)
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+            health = {}
+        if int(health.get("live_agents") or 0) >= minimum:
+            return health
+        time.sleep(0.2)
+    raise AssertionError(f"waiting for live_agents >= {minimum} timed out: {health}")
+
+
+class DaemonErrorProvider(_Base):
+    """Minimal control plane that only produces a failure for `_run_daemon_turn`."""
+
+    def __init__(self, *args, mode: str = "stream", message: str = "", **kwargs):
+        self.mode = mode
+        self.message = message
+        super().__init__(*args, **kwargs)
+
+    def do_POST(self):
+        self._body()
+        if self.mode == "stream":
+            payload = json.dumps({"type": "error", "error": self.message}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            self.close_connection = True
+            return
+        self._json_error(409, self.message)
+
+
+class _LogCapture(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lines: list[str] = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+async def _daemon_failure(port: int) -> tuple[str, list[str], list[dict]]:
+    """Drive `_run_daemon_turn` against a failing control plane."""
+    from ai_runtime.runner import _run_daemon_turn
+
+    async def _unexpected_rpc(request):
+        raise AssertionError(f"unexpected host RPC: {request.get('method')}")
+
+    async def _usage(item):
+        return None
+
+    diagnostics: list[dict] = []
+    capture = _LogCapture()
+    capture.setLevel(logging.ERROR)
+    logger = logging.getLogger("ai_runtime.runner")
+    previous_level = logger.level
+    logger.setLevel(logging.ERROR)
+    logger.addHandler(capture)
+    previous_url = os.environ.get("CS_AI_DSH_DAEMON_URL")
+    os.environ["CS_AI_DSH_DAEMON_URL"] = f"http://127.0.0.1:{port}"
+    message = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix="csbot-daemon-error-") as directory:
+            workspace = Path(directory)
+            (workspace / "artifacts").mkdir()
+            try:
+                await _run_daemon_turn(
+                    scope="f" * 64, text="诊断", context="", remember=False, guard=False, compact=False,
+                    run_id="daemon-error-run", on_event=None, on_started=None, session_title="",
+                    usage_scene="", thinking=False, vision=False, provider="openai", model=PRIMARY_MODEL,
+                    system_prompt="", fallback_enabled=False, fallback_provider="", fallback_model="",
+                    aux_provider="", aux_model="", image_gen_enabled=False, workspace=workspace,
+                    paths=set(), authorized_image_paths=set(), image_views=[],
+                    dispatch_rpc=_unexpected_rpc, report_usage=_usage, usage_events=[],
+                    fallback_state={"event": None, "active": False}, breaker=None,
+                    route_mode="primary", route_decision=None, probe_lease=None,
+                    memory_scope_workspace="", read_only_memory=False,
+                    diagnostics=diagnostics.append, api_key=OPENAI_KEY,
+                    effective_api_key=OPENAI_KEY, original_model=PRIMARY_MODEL,
+                    model_endpoint=f"http://127.0.0.1:{port}",
+                )
+                raise AssertionError("a failing control plane must raise RuntimeError")
+            except RuntimeError as error:
+                message = str(error)
+    finally:
+        logger.removeHandler(capture)
+        logger.setLevel(previous_level)
+        if previous_url is None:
+            os.environ.pop("CS_AI_DSH_DAEMON_URL", None)
+        else:
+            os.environ["CS_AI_DSH_DAEMON_URL"] = previous_url
+    return message, capture.lines, diagnostics
 
 
 def _tool_calls(result: dict, name: str | None = None) -> list[dict]:
@@ -686,7 +943,109 @@ async def main() -> None:
             assert "web_fetch_browser" not in first_body, first_body[:1200]
             passed("web_fetch_browser stays out of the tool list when the turn disables it")
 
-            # 8) Sessions were persisted into the unified JSONL directory. The
+            # 9) A multi-step tool turn must assemble the same memory context on
+            # every step. Re-projecting a growing evidence table used to append a
+            # fresh persistent user message per tool call (KV cache break, early
+            # compaction); only the stable foundation may be injected now.
+            SANDBOX_CODES.clear()
+            OPENAI.reset([
+                ("tool", "read", {"file_path": "DATA.md"}),
+                ("tool", "execute_python", {"code": "print('step-2')"}),
+                ("tool", "execute_python", {"code": "print('step-3')"}),
+                ("text", "多步检查完成"),
+            ])
+            DEEPSEEK.reset([])
+            result = await run("9" * 64, "多步工具检查", remember=True)
+            assert result["reason"]["kind"] == "completed", result["reason"]
+            assert SANDBOX_CODES == ["print('step-2')", "print('step-3')"], SANDBOX_CODES
+            bodies = [json.dumps(call["body"], ensure_ascii=False) for call in OPENAI.calls]
+            assert len(bodies) >= 4, len(bodies)
+            foundation_counts = [body.count("群聊基础知识（资料") for body in bodies]
+            assert max(foundation_counts) <= 1, foundation_counts
+            runtime_counts = [body.count("Current runtime context.") for body in bodies]
+            assert max(runtime_counts) <= 1, runtime_counts
+            assert all("本轮可引用证据：" not in body for body in bodies), bodies[-1][-1200:]
+            passed("a multi-step turn keeps one memory context and never re-injects the evidence index")
+
+            # The strict evidence rule still accepts a verbatim quote without the
+            # (per-step unstable) evidence id, and binds the real source.
+            OPENAI.reset([
+                ("tool", "memory_save", {
+                    "title": "别名逐字证据", "content": "小茶是QQ 22222（茶茶）",
+                    "tier": "foundation", "category": "alias", "subject": "22222",
+                    "keys": ["小茶", "茶茶"], "evidence": [{"quote": "小茶是QQ 22222（茶茶）"}],
+                }),
+                ("text", "已记住"),
+            ])
+            DEEPSEEK.reset([("text", '{"approved":true}')])
+            result = await run("9" * 64, "记住：小茶是QQ 22222（茶茶）", remember=True)
+            assert result["reason"]["kind"] == "completed", result["reason"]
+            saved_text = _tool_result_text(result)
+            assert "memory created" in saved_text or "memory merged" in saved_text, saved_text[:1200]
+            assert '"isError": true' not in saved_text, saved_text[:1200]
+            connection = sqlite3.connect(home / "memory" / "memory.db")
+            try:
+                saved_rows = connection.execute(
+                    "SELECT content FROM memories WHERE content LIKE '%小茶是QQ 22222%'").fetchall()
+            finally:
+                connection.close()
+            assert saved_rows, "a quote-only evidence reference was not persisted"
+            assert any('"id":"request:' in row[0] for row in saved_rows), saved_rows[0][0][:800]
+            passed("memory_save accepts a quote-only evidence reference and binds the real turn source")
+
+            # 10) A WebUI tab browsing the group session promotes that session into
+            # a resident agent. The managed turn must reuse the live agent instead
+            # of resuming it again (which threw `agent "…" is already registered`
+            # and killed every later group turn).
+            health = _health(bridge_port, token_file)
+            resident_before = int(health.get("live_agents") or 0)
+            follower = MuxFollower(web_port, _login_cookie(login_file.read_text(encoding="utf-8").strip()),
+                                   f"csbot-{scope_a}")
+            try:
+                snapshot = follower.wait_frame(
+                    lambda frame: frame.get("type") == "item"
+                    and frame.get("value", {}).get("type") == "snapshot")
+                assert snapshot["value"]["header"]["id"] == f"csbot-{scope_a}", snapshot["value"]["header"]
+                promoted = _wait_live_agents(bridge_port, token_file, resident_before + 1)
+                assert int(promoted.get("live_agents") or 0) >= resident_before + 1, promoted
+                events_before = follower.count_events()
+
+                # Turn A: OpenAI 503 mid-turn fallback on the promoted live agent.
+                breaker = OpenAICircuitBreaker(cooldown_seconds=240.0)
+                OPENAI.reset([("error", 503, "upstream unavailable")])
+                DEEPSEEK.reset([("text", "兜底回复：WebUI 浏览期间仍能回答。")])
+                result = await run(scope_a, "浏览期间还能回答吗", remember=True, breaker=breaker)
+                assert result["reason"]["kind"] == "completed", result["reason"]
+                assert result["fallback"]["mode"] == "mid_turn_fallback", result["fallback"]
+                assert ("deepseek", FALLBACK_MODEL, "chat") in _usage_by(result), _usage_by(result)
+                follower.wait_event_after(events_before)
+                events_after = follower.count_events()
+
+                # Turn B: main channel restored. The fallback turn's tool
+                # restriction must be fully unloaded, not stacked.
+                SANDBOX_CODES.clear()
+                reuse_outside = root / "reuse-outside.txt"
+                reuse_outside.write_text("forbidden\n", encoding="utf-8")
+                OPENAI.reset([
+                    ("tool", "execute_python", {"code": "print('reuse-ok')"}),
+                    ("tool", "read", {"file_path": str(reuse_outside)}),
+                    ("text", "复用轮次完成"),
+                ])
+                DEEPSEEK.reset([])
+                result = await run(scope_a, "再来一轮", remember=True)
+                assert result["reason"]["kind"] == "completed", result["reason"]
+                assert SANDBOX_CODES == ["print('reuse-ok')"], SANDBOX_CODES
+                reuse_tools = json.dumps(OPENAI.calls[0]["body"].get("tools") or [], ensure_ascii=False)
+                assert "read_image" in reuse_tools and "generate_image" in reuse_tools, reuse_tools[:1500]
+                reuse_request = json.dumps([call["body"] for call in OPENAI.calls], ensure_ascii=False)
+                assert "outside the authorized read-only workspace" in reuse_request, reuse_request[-1500:]
+                follower.wait_event_after(events_after)
+                assert follower.errors == [], follower.errors
+            finally:
+                follower.close()
+            passed("a WebUI-promoted live session is reused across fallback and restored turns")
+
+            # 11) Sessions were persisted into the unified JSONL directory. The
             # backend drains its writers on graceful shutdown, so stop the host
             # first and then assert the durable tree.
             process.terminate()
@@ -700,6 +1059,49 @@ async def main() -> None:
             login_password = token_file.read_text(encoding="utf-8").strip()
             assert login_password not in json.dumps(PASSED), "token leaked into output"
             assert OPENAI_KEY not in json.dumps(PASSED) and DEEPSEEK_KEY not in json.dumps(PASSED)
+
+            # 12) Daemon/subprocess failures keep the actionable cause while every
+            # credential shape is redacted in the log, `diagnostics` and the raised
+            # message (the group chat only ever sees a generic notice).
+            from ai_runtime.runner import _sanitize_daemon_error
+
+            failure_text = ('agent "csbot-x" is already registered; Bearer tok-secret-999 '
+                            'sk-leak12345678 https://u:p@example.com/?token=abc')
+            sanitized = _sanitize_daemon_error(
+                failure_text, secrets=("sk-openai-fixture",), endpoints=("https://api.deepseek.com",))
+            assert "already registered" in sanitized, sanitized
+            for leak in ("tok-secret-999", "sk-leak12345678", "u:p@", "?token=abc"):
+                assert leak not in sanitized, sanitized
+            assert "[REDACTED]" in sanitized and len(sanitized) <= 300, sanitized
+            endpoint_detail = _sanitize_daemon_error(
+                "POST https://api.deepseek.com/chat/completions failed",
+                endpoints=("https://api.deepseek.com",))
+            assert "[MODEL_ENDPOINT]" in endpoint_detail, endpoint_detail
+            passed("_sanitize_daemon_error keeps the cause and drops every credential shape")
+
+            for mode in ("stream", "http"):
+                handler = partial(DaemonErrorProvider, mode=mode, message=failure_text)
+                server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                try:
+                    message, error_logs, error_diagnostics = await _daemon_failure(
+                        server.server_address[1])
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                assert "already registered" in message, message
+                assert "DSH daemon" in message, message
+                for leak in ("tok-secret-999", "sk-leak12345678", "u:p@", "?token=abc", OPENAI_KEY):
+                    assert leak not in message, message
+                    assert all(leak not in line for line in error_logs), error_logs
+                    assert all(leak not in json.dumps(item, ensure_ascii=False)
+                               for item in error_diagnostics), error_diagnostics
+                assert error_logs and "already registered" in error_logs[-1], error_logs
+                assert error_diagnostics, "diagnostics were not reported"
+                assert "already registered" in json.dumps(error_diagnostics[-1], ensure_ascii=False), \
+                    error_diagnostics
+                passed(f"a daemon {mode} failure keeps its cause and redacts credentials everywhere")
+
             print(f"ALL PASS: {len(PASSED)} resident-daemon acceptance groups")
         finally:
             if process.poll() is None:

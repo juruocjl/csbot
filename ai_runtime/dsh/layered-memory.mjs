@@ -112,8 +112,19 @@ export function normalize(args, evidence = sources()) {
   if (args.evidence !== undefined) {
     if (!Array.isArray(args.evidence) || args.evidence.length > 4) throw new MemoryPolicyError('Invalid evidence references');
     for (const ref of args.evidence) {
-      const source = evidence.find(item => item.id === ref.id);
-      if (!source || typeof ref.quote !== 'string' || ref.quote.length < 4 || ref.quote.length > 1500 || !source.text.includes(ref.quote)) {
+      // The quote is the authority: a complete, verbatim span of this turn's
+      // user text or a successful non-memory tool result. `id` is optional —
+      // the model no longer has to copy an unstable evidence index — but when it
+      // IS supplied it must name a real source (no fabrication through an id).
+      if (typeof ref?.quote !== 'string' || ref.quote.length < 4 || ref.quote.length > 1500) {
+        throw new MemoryPolicyError('Evidence must quote a complete available source exactly');
+      }
+      const hasId = ref.id !== undefined && ref.id !== null && ref.id !== '';
+      if (hasId && typeof ref.id !== 'string') throw new MemoryPolicyError('Invalid evidence references');
+      const source = hasId
+        ? evidence.find(item => item.id === ref.id)
+        : evidence.find(item => typeof item.text === 'string' && item.text.includes(ref.quote));
+      if (!source || typeof source.text !== 'string' || !source.text.includes(ref.quote)) {
         throw new MemoryPolicyError('Evidence must quote a complete available source exactly');
       }
       data.evidence.push({id: source.id, kind: source.kind, quote: ref.quote,
@@ -178,7 +189,10 @@ export async function foundationalContext(exec, query) {
   const selected = active.filter(({meta}) => ['style', 'agreement', 'imported'].includes(meta.category)
     || [meta.subject, ...meta.keys].some(key => key && normalized.includes(key.normalize('NFKC').toLowerCase())));
   selected.sort((a, b) => Number(['style', 'agreement'].includes(b.meta.category)) - Number(['style', 'agreement'].includes(a.meta.category))
-    || b.item.updated_at.localeCompare(a.item.updated_at));
+    || b.item.updated_at.localeCompare(a.item.updated_at)
+    // A stable tie-break keeps the rendered foundation byte-identical between
+    // steps and turns; a reordered context would re-project a new user message.
+    || String(a.item.id).localeCompare(String(b.item.id)));
   const budgets = {style: 1200, agreement: 800, lookup: 2000, imported: 4000};
   const lines = [];
   for (const {item, meta} of selected) {
@@ -279,7 +293,7 @@ export async function saveSummary(entries, exec) {
 export function wrapMemoryTool(tool) {
   native.set(tool.name, tool);
   if (tool.name === 'memory_save') {
-    return {...tool, description: '保存分层记忆。foundation仅用于已确认人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)，需明确subject、keys、原文evidence。topic保存专题背景/偏好；episode保存有依据的临时统计/资料/明确待查问题。所有层都须准确反映表达性质；反话、玩笑、假设不能按字面存成经历或计划，意思不明先不保存。省略tier默认episode。基础层纠正用supersedes列出已检索的旧ID。不要把提问者当被讨论者。', parameters: {type: 'object', properties: {type: {type: 'string'}, importance: {type: 'integer'}, source: {type: 'string'}, tags: {type: 'array', items: {type: 'string'}}, title: {type: 'string'}, content: {type: 'string'}, tier: {type: 'string', enum: TIERS}, category: {type: 'string', enum: CATEGORIES}, subject: {type: 'string', description: 'alias类别必须填纯数字QQ，例如22222；其他类别填写适用对象。不能填提问者QQ代替被讨论者。'}, keys: {type: 'array', items: {type: 'string'}, description: '具体昵称、外号、黑话、约定名称；不要用称呼/昵称等泛词'}, evidence: {type: 'array', items: {type: 'object', properties: {id: {type: 'string'}, quote: {type: 'string'}}, required: ['id', 'quote'], additionalProperties: false}}, supersedes: {type: 'array', items: {type: 'string'}}}, required: ['title', 'content'], additionalProperties: false}, execute: save};
+    return {...tool, description: '保存分层记忆。foundation仅用于已确认人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)，需明确subject、keys、原文evidence。topic保存专题背景/偏好；episode保存有依据的临时统计/资料/明确待查问题。所有层都须准确反映表达性质；反话、玩笑、假设不能按字面存成经历或计划，意思不明先不保存。省略tier默认episode。基础层纠正用supersedes列出已检索的旧ID。不要把提问者当被讨论者。', parameters: {type: 'object', properties: {type: {type: 'string'}, importance: {type: 'integer'}, source: {type: 'string'}, tags: {type: 'array', items: {type: 'string'}}, title: {type: 'string'}, content: {type: 'string'}, tier: {type: 'string', enum: TIERS}, category: {type: 'string', enum: CATEGORIES}, subject: {type: 'string', description: 'alias类别必须填纯数字QQ，例如22222；其他类别填写适用对象。不能填提问者QQ代替被讨论者。'}, keys: {type: 'array', items: {type: 'string'}, description: '具体昵称、外号、黑话、约定名称；不要用称呼/昵称等泛词'}, evidence: {type: 'array', items: {type: 'object', properties: {id: {type: 'string', description: '可省略：由系统按逐字quote自动关联本轮用户原话或成功工具输出；若填写则必须严格匹配有效证据id。'}, quote: {type: 'string', description: '逐字引用本轮用户原话或成功工具输出的完整片段（4-1500字符），不可改写或拼接。'}}, required: ['quote'], additionalProperties: false}}, supersedes: {type: 'array', items: {type: 'string'}}}, required: ['title', 'content'], additionalProperties: false}, execute: save};
   }
   if (tool.name === 'memory_search') {
     return {...tool, description: tool.description + ' Results carry tier/category/evidence. Foundation comes first; legacy and episode material is not confirmed current knowledge.', output: {schema: {type: 'object'}, render: (_, value) => [{type: 'text', text: JSON.stringify(value)}]}, async execute(args, exec) {

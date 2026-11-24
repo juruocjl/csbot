@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import sqlite3
@@ -91,7 +92,7 @@ DATA.md 说明数据源、SQL模板和安全边界。优先用 csdata.call 常�
 不要保存密钥、令牌、密码；不能把玩笑、反话、假设、引用或助手自己的推断记成当事人的经历、计划、偏好。意思未弄清就暂不提炼；写“自称/未证实”不能修复错误的字面理解。明确提出的待查线索可保留其疑问性质。用户要求忘记自己的信息时使用 memory_forget。
 群友称呼、外号、人物指代或以前约定的问题，先看已提供的基础知识；缺失或冲突时用 memory_search 检索称呼和关联昵称；不能把聊天搜索当成记忆搜索。记忆与直接证据冲突时查证，不能盲信旧记忆。
 多人群聊中，发言者不是问题里提到的人。“你”对应本轮发言者，“他/波特等称呼”须单独关联；不能把提问者的 QQ、SteamID、时长或偏好安到被讨论的人身上。
-记忆分为foundation基础知识、topic专题、episode资料。只有明确确认的人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)进入基础层。memory_save的subject填写被讨论对象、keys填写检索词、evidence引用本轮证据目录的id和逐字quote。称呼映射subject为QQ号；明确纠正时先检索旧条目，再用supersedes列出旧ID，由系统保存成功后停用旧条目。不要先忘记再保存。低层统计/资料可留存，标明时间及不确定性；基础知识优先使用，未提供的称呼用memory_search。没有充分证据就询问，不能把“应该是/就是某某吧”写成确定事实；有依据的查询结论也不等于本人偏好。
+记忆分为foundation基础知识、topic专题、episode资料。只有明确确认的人物称呼(alias)、黑话(glossary)、交流习惯(style)、长期约定(agreement)进入基础层。memory_save的subject填写被讨论对象、keys填写检索词、evidence填写逐字quote（可省略id，由系统按本轮原文或工具输出自动校验关联）。称呼映射subject为QQ号；明确纠正时先检索旧条目，再用supersedes列出旧ID，由系统保存成功后停用旧条目。不要先忘记再保存。低层统计/资料可留存，标明时间及不确定性；基础知识优先使用，未提供的称呼用memory_search。没有充分证据就询问，不能把“应该是/就是某某吧”写成确定事实；有依据的查询结论也不等于本人偏好。
 当用户要求画插画、表情包、场景图、头像二创或改图合成且工具列表中有 generate_image 时，直接调用 generate_image：纯文生图不传 image_paths；改群聊图片先用 csdata.image(id) 取本轮授权的 full_path（原图已淘汰时可用 thumbnail_path）传入 image_paths；改本群成员QQ头像或做多头像融合先用 csdata.call('member_avatar', uid='该成员QQ号') 取 full_path（切勿传 avatar_url 网址）传入 image_paths；用户要求继续修改刚生成的图时直接传入上一轮或上一步 generate_image 返回的 file_path（若已淘汰不可读则如实说明）。返回 delivered: true 即已随本轮回复自动发往群聊与网页，无需在正文贴本地路径，只需简短自然回应一句；统计图表仍用 execute_python + matplotlib。
 
 """
@@ -338,6 +339,54 @@ def _daemon_token():
     return token
 
 
+# Error-detail redaction for daemon/subprocess failures. The real cause has to
+# survive (a bare "execution failed" makes lock and provider faults unreadable),
+# while no credential, token or provider endpoint may ever reach a log line,
+# `diagnostics`, or the exception text the service layer records.
+_DAEMON_BEARER_RE = re.compile(r"Bearer\s+\S+", re.IGNORECASE)
+_DAEMON_QUERY_SECRET_RE = re.compile(
+    r"([?&](?:token|api_key|apikey|key|secret|password|auth)=)[^&\s\"'<>]+", re.IGNORECASE)
+_DAEMON_USERINFO_RE = re.compile(r"(https?://)([^/\s:@]+):([^/\s@]+)@", re.IGNORECASE)
+_DAEMON_PROVIDER_KEY_RE = re.compile(r"\b(?:sk|ds)-[A-Za-z0-9_-]{8,}\b")
+_DAEMON_ERROR_LIMIT = 300
+_DAEMON_SECRET_ENV = (
+    "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "CSBOT_SEARCH_API_KEY", "CS_AI_SEARCH_API_KEY",
+    "CS_AI_AUX_API_KEY", "CS_AI_FALLBACK_API_KEY", "CS_AI_API_KEY", "CS_AI_DSH_DAEMON_TOKEN",
+)
+
+
+def _sanitize_daemon_error(raw, *, secrets=(), endpoints=()) -> str:
+    """Return a bounded, credential-free summary of one DSH failure payload.
+
+    `raw` may be a string, an exception, or a decoded JSON object. Known
+    credentials and endpoints are replaced first (they are unambiguous), then
+    defence-in-depth patterns catch a credential that only existed inside the
+    message: `Bearer …`, `?token=…`, URL `user:pass@`, `sk-…`/`ds-…`.
+    """
+    if isinstance(raw, str):
+        text = raw
+    elif raw is None:
+        text = ""
+    else:
+        try:
+            text = json.dumps(raw, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = str(raw)
+    for secret in (*secrets, *(os.getenv(name, "") for name in _DAEMON_SECRET_ENV)):
+        # A value shorter than four characters cannot be a real credential and
+        # replacing it would erase the cause we are trying to preserve.
+        if isinstance(secret, str) and len(secret.strip()) >= 4:
+            text = text.replace(secret.strip(), "[REDACTED]")
+    text = _DAEMON_BEARER_RE.sub("Bearer [REDACTED]", text)
+    text = _DAEMON_QUERY_SECRET_RE.sub(r"\1[REDACTED]", text)
+    text = _DAEMON_USERINFO_RE.sub(r"\1[REDACTED]:[REDACTED]@", text)
+    text = _DAEMON_PROVIDER_KEY_RE.sub("[REDACTED]", text)
+    for endpoint in endpoints:
+        if isinstance(endpoint, str) and endpoint.strip():
+            text = text.replace(endpoint.strip(), "[MODEL_ENDPOINT]")
+    return " ".join(text.split())[:_DAEMON_ERROR_LIMIT]
+
+
 class _LocalRpcHost:
     """Loopback HTTP RPC endpoint carrying one daemon turn's host callbacks.
 
@@ -434,7 +483,14 @@ async def _run_daemon_turn(*, scope, text, context, remember, guard, compact, ru
             or parsed.username or parsed.password or parsed.path not in ("","/")
             or parsed.query or parsed.fragment):
         raise ValueError("CS_AI_DSH_DAEMON_URL must be a loopback HTTP endpoint without credentials or a path")
-    headers={"Authorization":f"Bearer {_daemon_token()}"}
+    daemon_token=_daemon_token()
+    headers={"Authorization":f"Bearer {daemon_token}"}
+
+    def _detail(raw):
+        """One sanitized, bounded failure summary for logs/diagnostics/exceptions."""
+        return _sanitize_daemon_error(raw,secrets=(api_key,effective_api_key,daemon_token),
+                                      endpoints=(model_endpoint,))
+
     rpc_host=_LocalRpcHost(dispatch_rpc).start()
     started_reported=[False]
 
@@ -512,8 +568,24 @@ async def _run_daemon_turn(*, scope, text, context, remember, guard, compact, ru
                 ) as client:
                     async with client.stream("POST",f"{base}/turns",json=request,headers=headers) as response:
                         if response.status_code!=200:
-                            await response.aread()
-                            raise RuntimeError(f"DSH daemon rejected the turn (HTTP {response.status_code})")
+                            # The daemon's rejection body carries the real cause
+                            # (lock conflict, bad payload); it is sanitized, logged
+                            # and forwarded to diagnostics instead of being dropped.
+                            body=await response.aread()
+                            try:
+                                decoded=json.loads(body or b"{}")
+                            except ValueError:
+                                decoded=body.decode(errors="replace")
+                            if isinstance(decoded,dict):
+                                detail=_detail(decoded.get("error",decoded))
+                            else:
+                                detail=_detail(decoded)
+                            logger.error("DSH daemon rejected the turn (HTTP %s, run_id=%s, session=%s): %s",
+                                         response.status_code,request["runId"],request["sessionId"],detail or "no detail")
+                            if diagnostics:
+                                diagnostics({"http_status":response.status_code,"error":detail,
+                                             "run_id":request["runId"],"session_id":request["sessionId"]})
+                            raise RuntimeError(f"DSH daemon rejected the turn (HTTP {response.status_code}): {detail}" if detail else f"DSH daemon rejected the turn (HTTP {response.status_code})")
                         async for line in response.aiter_lines():
                             line=line.strip()
                             if not line:
@@ -551,12 +623,21 @@ async def _run_daemon_turn(*, scope, text, context, remember, guard, compact, ru
                             elif kind=="complete":
                                 result=event
                             elif kind=="error":
-                                raise RuntimeError("DSH daemon execution failed")
+                                detail=_detail(event.get("error"))
+                                logger.error("DSH daemon execution failed (run_id=%s, session=%s): %s",
+                                             request["runId"],request["sessionId"],detail or "unknown error")
+                                if diagnostics:
+                                    diagnostics({"error":detail or "unknown error",
+                                                 "run_id":request["runId"],"session_id":request["sessionId"]})
+                                raise RuntimeError(f"DSH daemon execution failed: {detail}" if detail else "DSH daemon execution failed")
             if result is None:
                 raise RuntimeError("DSH daemon returned no durable result")
             if result.get("reason",{}).get("kind")!="completed":
+                reason_detail=_detail(json.dumps(result.get("reason",{}),ensure_ascii=False))
+                logger.error("DSH daemon turn did not complete (run_id=%s, session=%s): %s",
+                             request["runId"],request["sessionId"],reason_detail or "no reason")
                 if diagnostics:
-                    diagnostics({"reason":result.get("reason",{})})
+                    diagnostics({"reason":reason_detail})
                 raise RuntimeError("DSH turn did not complete")
             result["usage"]=usage_events
             if breaker is not None and route_mode in ("primary","probe") and fallback_state["event"] is None:
@@ -973,9 +1054,19 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                                                bool(summary and summary.get("tripped")))
                             elif event["type"]=="complete": result=event
                             elif event["type"]=="error":
-                                # Configuration/runtime details are available through
-                                # explicit preflight, never echoed into a group chat.
-                                raise RuntimeError("DSH execution failed")
+                                # Configuration/runtime details stay out of the group
+                                # chat, but the sanitized cause must reach the log and
+                                # diagnostics: `type(exc).__name__` alone cannot be
+                                # debugged.
+                                detail=_sanitize_daemon_error(event.get("error"),
+                                                              secrets=(api_key,effective_api_key),
+                                                              endpoints=(endpoint,effective_endpoint))
+                                logger.error("DSH execution failed (run_id=%s, scope=%s): %s",
+                                             run_id or "-",scope,detail or "unknown error")
+                                if diagnostics:
+                                    diagnostics({"error":detail or "unknown error","run_id":run_id,
+                                                 "session_id":"csbot-"+scope})
+                                raise RuntimeError(f"DSH execution failed: {detail}" if detail else "DSH execution failed")
                         await process.wait()
                         if process.returncode or not result:
                             raise RuntimeError("DSH process exited without a durable result")
