@@ -14,7 +14,8 @@ Covers the spec's acceptance matrix:
   5. OpenAI 503 -> seamless `deepseek-flash` fallback inside the same turn
   6. cross-scope memory isolation and read-only birthday borrowing
   7. WebUI default read-only protection (gateway write classifier)
-  8. session JSONL persistence in the unified directory
+  8. `web_fetch_browser` rendering/SSRF/disabled-capability via the per-turn RPC
+  9. session JSONL persistence in the unified directory
 
 The exit code is non-zero on the first failed assertion.
 """
@@ -614,7 +615,78 @@ async def main() -> None:
             assert "gateway-classifier-ok" in completed.stdout
             passed("WebUI write methods are blocked while read/subscribe methods pass")
 
-            # 7) Sessions were persisted into the unified JSONL directory. The
+            # 7) web_fetch_browser: the resident daemon relays the rendered text
+            # through the per-turn RPC while the host refuses SSRF targets. The
+            # browser itself is mocked here so the acceptance run stays offline.
+            from unittest.mock import patch as _patch
+            from ai_runtime.browser_fetch import BrowserFetchError
+            rendered = {
+                "url": "https://example.com/article", "requested_url": "https://example.com/article",
+                "status_code": 200, "title": "示例标题", "content_type": "text/html",
+                "text": "渲染后的正文 RENDERED-FIXTURE", "truncated": True, "blocked_subresources": 2,
+            }
+            fetched: list[str] = []
+
+            async def fake_browser_fetch(url):
+                fetched.append(url)
+                if "169.254.169.254" in url:
+                    raise BrowserFetchError("Blocked URL resolving to non-public IP: 169.254.169.254")
+                return dict(rendered)
+
+            web_env = {
+                "CSBOT_WEB_ENABLED": "1",
+                "CSBOT_SEARCH_URL": f"http://127.0.0.1:{deepseek_port}",
+                "CSBOT_SEARCH_API_KEY": DEEPSEEK_KEY,
+                "CSBOT_SEARCH_MODEL": FALLBACK_MODEL,
+                "CSBOT_BROWSER_FETCH_ENABLED": "1",
+            }
+            disabled_env = dict(web_env, CSBOT_BROWSER_FETCH_ENABLED="0")
+
+            def env_patch(value):
+                return _patch("ai_runtime.runner.web_environment", lambda *args, **kwargs: dict(value))
+
+            OPENAI.reset([
+                ("tool", "web_fetch_browser", {"url": "https://example.com/article"}),
+                ("text", "正文抓取完成"),
+            ])
+            with env_patch(web_env), _patch("ai_runtime.runner.fetch_page_with_browser", fake_browser_fetch):
+                result = await run("f" * 64, "抓一下这个JS页面")
+            assert result["reason"]["kind"] == "completed", result["reason"]
+            assert fetched == ["https://example.com/article"], fetched
+            tool_text = _tool_result_text(result)
+            request_text = json.dumps([call["body"] for call in OPENAI.calls], ensure_ascii=False)
+            assert "External web content follows" in tool_text, tool_text[:1200]
+            assert "RENDERED-FIXTURE" in tool_text, tool_text[:1200]
+            assert "Content truncated" in tool_text, tool_text[:1200]
+            assert "External web content follows" in request_text
+            passed("web_fetch_browser renders text through the resident daemon RPC")
+
+            OPENAI.reset([
+                ("tool", "web_fetch_browser", {"url": "http://169.254.169.254/latest/meta-data/"}),
+                ("text", "已告知无法读取内网地址"),
+            ])
+            with env_patch(web_env), _patch("ai_runtime.runner.fetch_page_with_browser", fake_browser_fetch):
+                result = await run("f" * 64, "读一下这个内部地址")
+            assert result["reason"]["kind"] == "completed", result["reason"]
+            assert fetched[-1] == "http://169.254.169.254/latest/meta-data/", fetched
+            request_text = json.dumps([call["body"] for call in OPENAI.calls], ensure_ascii=False)
+            assert "Blocked URL resolving to non-public IP" in request_text, request_text[-1500:]
+            passed("a cloud-metadata URL is refused and the clear error reaches the model")
+
+            fetched.clear()
+            OPENAI.reset([
+                ("tool", "web_fetch_browser", {"url": "https://example.com/disabled"}),
+                ("text", "本轮未启用浏览器抓取"),
+            ])
+            with env_patch(disabled_env), _patch("ai_runtime.runner.fetch_page_with_browser", fake_browser_fetch):
+                result = await run("f" * 64, "关闭浏览器抓取时调用")
+            assert result["reason"]["kind"] == "completed", result["reason"]
+            assert fetched == [], fetched
+            first_body = json.dumps(OPENAI.calls[0]["body"].get("tools") or [], ensure_ascii=False)
+            assert "web_fetch_browser" not in first_body, first_body[:1200]
+            passed("web_fetch_browser stays out of the tool list when the turn disables it")
+
+            # 8) Sessions were persisted into the unified JSONL directory. The
             # backend drains its writers on graceful shutdown, so stop the host
             # first and then assert the durable tree.
             process.terminate()
@@ -624,7 +696,7 @@ async def main() -> None:
             assert any(log.stat().st_size > 0 for log in logs), logs
             passed("sessions persist as JSONL in the unified CSBOT_DSH_SESSIONS tree")
 
-            # 8) Control-plane turn errors surface without leaking credentials.
+            # 9) Control-plane turn errors surface without leaking credentials.
             login_password = token_file.read_text(encoding="utf-8").strip()
             assert login_password not in json.dumps(PASSED), "token leaked into output"
             assert OPENAI_KEY not in json.dumps(PASSED) and DEEPSEEK_KEY not in json.dumps(PASSED)

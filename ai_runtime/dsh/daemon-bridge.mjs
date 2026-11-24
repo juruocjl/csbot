@@ -21,6 +21,7 @@ import {
   configureMemory, releaseMemory, sources, saveSummary, foundationalContext,
 } from './layered-memory.mjs';
 import {registerProxyFetch} from './proxy-fetch.mjs';
+import {BROWSER_FETCH_TOOL_DEFINITION, validateBrowserFetchArgs, formatBrowserFetchOutput} from './browser-fetch.mjs';
 import {Agent, Pool, ProxyAgent, setGlobalDispatcher} from 'undici';
 
 export const name = 'csbot-daemon-bridge';
@@ -137,6 +138,12 @@ class TurnState {
       this.allow.add('web_fetch');
       if (process.env.CSBOT_FETCH_PROXY_URL) this.allow.add('web_fetch_proxy');
     }
+    // The browser fallback is a per-turn capability: the backend decides it and
+    // passes `browserFetchEnabled`, so a plain WebUI session never gains it.
+    this.browserFetchEnabled = request.browserFetchEnabled !== undefined
+      ? Boolean(request.browserFetchEnabled)
+      : (process.env.CSBOT_WEB_ENABLED === '1' && process.env.CSBOT_BROWSER_FETCH_ENABLED !== '0');
+    if (this.browserFetchEnabled) this.allow.add('web_fetch_browser');
     if (this.imageGenEnabled && !this.fallbackActive) this.allow.add('generate_image');
     if (this.fallbackActive) this.allow.delete('read_image');
     this.allowedFiles = new Set((request.readPaths ?? []).map(path => {
@@ -545,7 +552,7 @@ export function apply(ctx) {
     }
     if (++turn.toolCount > 40) return 'Tool budget exhausted. Answer with available evidence.';
     if (exec.name === 'web_search' && ++turn.searchCount > 3) return 'Search budget exhausted. Use the sources already returned or acknowledge uncertainty.';
-    if (['web_search', 'web_fetch', 'web_fetch_proxy'].includes(exec.name) && ++turn.webCount > 8) return 'Web budget exhausted.';
+    if (['web_search', 'web_fetch', 'web_fetch_proxy', 'web_fetch_browser'].includes(exec.name) && ++turn.webCount > 8) return 'Web budget exhausted.';
     if (exec.name === 'web_search' && (!Array.isArray(exec.arguments.queries) || exec.arguments.queries.some(query => typeof query !== 'string' || query.length > 300))) {
       return 'Use short public terms, at most 300 characters per query; never send private chat.';
     }
@@ -611,6 +618,20 @@ export function apply(ctx) {
       for (const path of reply.imageReadPaths ?? []) {
         try { turn.allowedImages.add(realpathSync(path)); } catch {}
       }
+      return reply.result;
+    },
+  });
+
+  // JS-rendering fallback for `web_fetch`. Registered once here, but only a
+  // managed turn whose `allow` set contains it can ever see or call it.
+  ctx.tools.register({
+    ...BROWSER_FETCH_TOOL_DEFINITION,
+    output: {schema: {type: 'object'}, render: (_, value) => [{type: 'text', text: formatBrowserFetchOutput(value)}]},
+    async execute(args, exec) {
+      const turn = turnForAgent(exec.agent);
+      if (!turn) throw new Error('web_fetch_browser is only available to a managed CSBot turn.');
+      const {url} = validateBrowserFetchArgs(args);
+      const reply = await rpc(turn, 'web_fetch_browser', {url});
       return reply.result;
     },
   });

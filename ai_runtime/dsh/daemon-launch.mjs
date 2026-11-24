@@ -229,6 +229,7 @@ export function resolveDaemonConfig(env = process.env) {
     fallbackApiKey: fallback?.apiKey || '',
     fallbackBaseUrl: fallback?.baseUrl || '',
     webEnabled,
+    browserFetchEnabled: webEnabled && get(env, 'CSBOT_BROWSER_FETCH_ENABLED') !== '0' && get(env, 'CS_AI_BROWSER_FETCH_ENABLE') !== '0',
     searchUrl: webEnabled ? (rawSearchUrl || DEFAULT_SEARCH_URL) : '',
     searchApiKey: webEnabled ? searchKey : '',
     searchModel: get(env, 'CSBOT_SEARCH_MODEL') || get(env, 'CS_AI_SEARCH_MODEL') || 'deepseek-v4-flash',
@@ -474,7 +475,7 @@ function main() {
     'PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TZ',
     'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
     'CSBOT_OPENAI_CONNECT_TIMEOUT_MS', 'CSBOT_OPENAI_PROBE',
-    'CSBOT_FETCH_PROXY_URL',
+    'CSBOT_FETCH_PROXY_URL', 'CSBOT_BROWSER_FETCH_ENABLED',
     'CSBOT_AUX_CONTEXT_WINDOW', 'CSBOT_FALLBACK_CONTEXT_WINDOW',
     'CSBOT_DSH_MAX_CONCURRENCY', 'CSBOT_DSH_WEB_ALLOW_INTERACTIVE',
     'CSBOT_DSH_TRUSTED_HOSTS', 'CSBOT_DSH_BRIDGE_PORT', 'CSBOT_DSH_BRIDGE_TOKEN_FILE',
@@ -518,6 +519,7 @@ function main() {
           CSBOT_SEARCH_API_KEY: config.searchApiKey,
           CSBOT_SEARCH_MODEL: config.searchModel,
           ...(config.fetchProxyUrl ? {CSBOT_FETCH_PROXY_URL: config.fetchProxyUrl} : {}),
+          CSBOT_BROWSER_FETCH_ENABLED: config.browserFetchEnabled ? '1' : '0',
         }
       : {}),
     ...(get(process.env, 'CSBOT_OPENAI_CONNECT_TIMEOUT_MS') || get(process.env, 'CS_AI_OPENAI_CONNECT_TIMEOUT_MS')

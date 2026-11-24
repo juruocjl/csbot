@@ -85,6 +85,8 @@ def is_disconnect_error(exc):
     """
     if isinstance(exc, asyncio.CancelledError):
         return False
+    if getattr(exc, 'retryable_browser_disconnect', True) is False:
+        return False
     if isinstance(exc, PageError):
         return False
     if isinstance(exc, (BrowserError, NetworkError, ConnectionError)):

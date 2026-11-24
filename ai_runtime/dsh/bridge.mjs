@@ -7,6 +7,7 @@ import {flushMemory} from './mneme.mjs';
 import {prepareMemorySummary} from './memory-policy.mjs';
 import {configureMemory,sources,saveSummary,foundationalContext} from './layered-memory.mjs';
 import {registerProxyFetch} from './proxy-fetch.mjs';
+import {BROWSER_FETCH_TOOL_DEFINITION, validateBrowserFetchArgs, formatBrowserFetchOutput} from './browser-fetch.mjs';
 import {Agent, Pool, ProxyAgent, setGlobalDispatcher} from 'undici';
 
 export const name = 'csbot-bridge';
@@ -269,6 +270,8 @@ export function apply(ctx) {
     if(process.env.CSBOT_MEMORY_READONLY==='1'){allow.delete('memory_save');allow.delete('memory_forget');}
     if(process.env.CSBOT_WEB_ENABLED==='1'){allow.add('web_search');allow.add('web_fetch');}
     if(process.env.CSBOT_WEB_ENABLED==='1' && process.env.CSBOT_FETCH_PROXY_URL)allow.add('web_fetch_proxy');
+    // JS-rendering fallback is enabled by the backend, never by a stray shell.
+    if(process.env.CSBOT_WEB_ENABLED==='1' && process.env.CSBOT_BROWSER_FETCH_ENABLED!=='0')allow.add('web_fetch_browser');
     if(process.env.CSBOT_IMAGE_GEN_ENABLED==='1' && !fallbackActive)allow.add('generate_image');
     // Text-only degradation: the host already refuses read_image for a turn
     // launched straight into fallback, and mid-turn steps are caught by the
@@ -305,7 +308,7 @@ export function apply(ctx) {
       }
       if (++toolCount > 40) return 'Tool budget exhausted. Answer with available evidence.';
       if(exec.name==='web_search' && ++searchCount>3)return 'Search budget exhausted. Use the sources already returned or acknowledge uncertainty.';
-      if(['web_search','web_fetch','web_fetch_proxy'].includes(exec.name) && ++webCount>8)return 'Web budget exhausted.';
+      if(['web_search','web_fetch','web_fetch_proxy','web_fetch_browser'].includes(exec.name) && ++webCount>8)return 'Web budget exhausted.';
       if(exec.name==='web_search' && (!Array.isArray(exec.arguments.queries)||exec.arguments.queries.some(q=>typeof q!=='string'||q.length>300)))return 'Use short public terms, at most 300 characters per query; never send private chat.';
       if (exec.name === 'read' || exec.name === 'read_image') {
         if(exec.name==='read_image' && /^https?:\/\//i.test(String(exec.arguments.file_path ?? '')))
@@ -355,6 +358,15 @@ export function apply(ctx) {
           const resolved=safeRealpath(path);
           if(resolved)allowedImages.add(resolved);
         }
+        return reply.result;
+      },
+    });
+    if(allow.has('web_fetch_browser')) ctx.tools.register({
+      ...BROWSER_FETCH_TOOL_DEFINITION,
+      output:{schema:{type:'object'},render:(_,value)=>[{type:'text',text:formatBrowserFetchOutput(value)}]},
+      async execute(args) {
+        const {url}=validateBrowserFetchArgs(args);
+        const reply=await rpc('web_fetch_browser',{url});
         return reply.result;
       },
     });
