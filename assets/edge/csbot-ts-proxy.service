@@ -1,0 +1,53 @@
+[Unit]
+# CSBot TeamSpeak query proxy (cgserver). Tailnet-only HTTP front for the local
+# TeamSpeak server query port 127.0.0.1:10011, so the NoneBot host on gcp needs
+# exactly one async HTTP round trip per /getts or /poke instead of a chain of
+# cross-ocean Telnet commands.
+Description=CSBot TeamSpeak query proxy
+Documentation=https://github.com/juruocjl/csbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/csbot
+# Bind only the host's Tailnet IPv4 (never 0.0.0.0 / [::]). The process also
+# refuses wildcard addresses by itself; keep this explicit for audits.
+Environment=TS_PROXY_BIND_HOST=100.101.30.74
+Environment=TS_PROXY_PORT=18011
+# Local TeamSpeak query endpoint (TeamSpeak stays on cgserver).
+Environment=TS_IP=127.0.0.1
+Environment=TS_PORT=10011
+Environment=TS_USER=serveradmin
+Environment=TS_SID=1
+# Secrets only: TS_PSWD and TS_PROXY_TOKEN (or TS_PROXY_TOKEN_FILE). Install the
+# file root-owned 0600 (or ubuntu-readable 0600) and never commit it. Values are
+# never logged by the proxy.
+EnvironmentFile=/etc/csbot/ts-proxy.env
+# The interpreter must be able to import the existing `ts3` package; the repo
+# venv already provides it. Swap in /usr/bin/python3 (+ PYTHONPATH) if needed.
+ExecStart=/home/ubuntu/csbot/.venv/bin/python /home/ubuntu/csbot/scripts/ts_query_proxy.py
+Restart=on-failure
+RestartSec=5
+# Exit code 2 means unsafe/invalid configuration (e.g. missing token); restarting
+# cannot fix that, so surface it instead of looping.
+RestartPreventExitStatus=2
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=256M
+LimitNOFILE=8192
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
