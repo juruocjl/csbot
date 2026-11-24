@@ -910,8 +910,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                     finally:acks.pop(key,None)
                 rpc_tasks=[]
                 async def handle_rpc(event):
-                    async with rpc_slots:
-                        await send(await dispatch_rpc(event))
+                    await send(await dispatch_rpc(event))
                 try:
                     async with asyncio.timeout(600):
                         while line:=await process.stdout.readline():

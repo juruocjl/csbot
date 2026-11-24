@@ -464,9 +464,11 @@ async def main() -> None:
             passed("execute_python runs through the per-turn RPC and output_guard rewrites the reply")
 
             # 2) Authorized read vs. path escape, and the image URL boundary.
+            outside_file = root / "host-outside.txt"
+            outside_file.write_text("forbidden host file\n", encoding="utf-8")
             OPENAI.reset([
                 ("tool", "read", {"file_path": "DATA.md"}),
-                ("tool", "read", {"file_path": str(Path("C:/Windows/win.ini"))}),
+                ("tool", "read", {"file_path": str(outside_file)}),
                 ("text", "边界检查完成"),
             ])
             result = await run(scope_a, "读文件", remember=True)
