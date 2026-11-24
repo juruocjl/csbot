@@ -34,6 +34,8 @@ import random
 import json
 import asyncio
 import base64
+import math
+import os
 from io import BytesIO
 from datetime import date, datetime, timedelta
 import matplotlib
@@ -249,12 +251,24 @@ async def get_image(file: str, url: str) -> bytes:
                 raise ValueError("image exceeds download limit")
         return bytes(content)
 
+def _lookup_timeout() -> float:
+    """OneBot member lookup timeout; a cross-ocean RTT needs headroom over 2s."""
+    raw = os.getenv("CS_ONEBOT_LOOKUP_TIMEOUT", "").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 4.0
+    if math.isnan(value):
+        return 4.0
+    return min(10.0, max(1.0, value))
+
+
 async def _at_names(bot: Bot, group_id: str, uids: set[str]) -> dict[str, str | None]:
     """Capture group display names now; a later lookup is not historical data."""
     async def lookup(uid: str):
         try:
             info = await asyncio.wait_for(bot.get_group_member_info(
-                group_id=int(group_id), user_id=int(uid), no_cache=True), timeout=2)
+                group_id=int(group_id), user_id=int(uid), no_cache=True), timeout=_lookup_timeout())
             return at_display_name(info.get("card") or info.get("nickname"))
         except Exception:
             return None

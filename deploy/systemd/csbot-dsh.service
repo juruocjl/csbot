@@ -1,0 +1,38 @@
+[Unit]
+# CSBot resident DSH web host (GCP). Loopback-only WebUI + control plane.
+Description=CSBot resident DSH web host (loopback only)
+Documentation=https://github.com/csbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/csbot
+EnvironmentFile=-/home/ubuntu/csbot/.env.prod
+# Loaded after .env.prod: GCP dials out directly, so any inherited :7890 is void.
+EnvironmentFile=-/home/ubuntu/csbot/deploy/gcp-direct.env
+# Production Node comes from scripts/install_ai_runtime.sh (22.23.4 with node:sqlite).
+Environment=PATH=/home/ubuntu/csbot/.tools/node/bin:/usr/local/bin:/usr/bin:/bin
+# DSH_HOME holds the web profile, login-url and the bridge token (0700).
+Environment=DSH_HOME=/var/lib/csbot-dsh
+Environment=CSBOT_DSH_WEB_PORT=32150
+Environment=CSBOT_DSH_BRIDGE_PORT=32151
+Environment=CSBOT_DSH_SESSIONS=/home/ubuntu/csbot/data/ai/web-sessions
+Environment=CSBOT_DSH_MEMORY_DIR=/home/ubuntu/csbot/data/ai/web-memory
+StateDirectory=csbot-dsh
+StateDirectoryMode=0700
+ExecStart=/home/ubuntu/csbot/.tools/node/bin/node /home/ubuntu/csbot/ai_runtime/dsh/daemon-launch.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Only DSH state and the AI workspace tree are writable under ProtectSystem=strict.
+ReadWritePaths=/var/lib/csbot-dsh /home/ubuntu/csbot/data/ai
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

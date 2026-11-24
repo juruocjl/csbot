@@ -28,6 +28,19 @@ from .events import publish
 LOCKS=weakref.WeakValueDictionary()
 
 
+def session_title(channel,gid,uid):
+    """Readable DSH WebUI sidebar label for this conversation's workspace."""
+    if channel=="qq":
+        return f"QQ群 {gid}"
+    if channel=="birthday":
+        return f"生日祝福 {gid}"
+    if channel=="report":
+        return f"群报告 {gid}"
+    if channel=="web":
+        return f"网页 {gid}/{uid}"
+    return ""
+
+
 def recent_scope_image_paths(store, scope, leases, *, cache=None, limit=8):
     """Authorize only this scope's own recent images, so "改一下刚画的图" works.
 
@@ -204,6 +217,7 @@ async def ask(*,chat_id,gid,uid,prompt,persona,channel,conversation,model,endpoi
                     memory_source_dir=memory_source_dir,
                     read_only_memory=bool(memory_source_dir is not None),
                     usage_scene=effective_usage_scene,enable_image_gen=effective_image_gen,
+                    session_title=session_title(channel,gid,uid),
                     on_usage=lambda item: record_usage_for_run(store,run_id=chat_id,channel=channel,group_id=gid,item=item,publish_fn=publish))
                 output="\n\n".join(item["content"] for item in result["messages"])
                 if not output.strip():

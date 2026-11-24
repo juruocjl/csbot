@@ -134,13 +134,17 @@ def normalize_openai_base_url(endpoint: str) -> str:
 def resolve_openai_proxy(endpoint: str, configured_proxy: str | None = None) -> str:
     if not is_openai_endpoint(endpoint):
         return ""
+    # GCP has direct egress: a deployment may hard-disable every loopback proxy
+    # so a stale :7890 left in .env.prod can never resurface.
+    if os.getenv("CSBOT_DIRECT_EGRESS", "").strip() == "1":
+        return ""
     raw = (
         configured_proxy
         if configured_proxy is not None
         else os.getenv("CS_AI_OPENAI_PROXY_URL", DEFAULT_OPENAI_PROXY)
     )
     raw = str(raw or "").strip()
-    if not raw:
+    if raw.lower() in {"", "none", "direct", "off", "false"}:
         return ""
     hostname = (urlsplit(str(endpoint or "").strip()).hostname or "").lower()
     if hostname in {"127.0.0.1", "localhost", "::1"} and os.getenv(

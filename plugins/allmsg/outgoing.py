@@ -10,6 +10,7 @@ import asyncio
 import base64
 import contextvars
 import json
+import os
 import time
 from pathlib import Path
 
@@ -56,6 +57,29 @@ def freeze_message(value) -> list:
     return frozen
 
 
+def local_library_file(marker) -> str:
+    """Map a validated pic/mgz descriptor to an on-host file:// URL, or "".
+
+    Only active when CS_NAPCAT_LOCAL_IMGS_ROOT points at the same read-only
+    image tree as NapCat, so the platform reads the file locally instead of a
+    cross-ocean base64 upload. Anything unvalidated keeps the original bytes.
+    """
+    root = os.getenv('CS_NAPCAT_LOCAL_IMGS_ROOT', '').strip().rstrip('/')
+    if not root:
+        return ''
+    item = validate_metadata(marker)
+    if item.get('mode') != 'resource':
+        return ''
+    source = item.get('source') or {}
+    library = source.get('library')
+    filename = source.get('filename')
+    if library not in {'pic', 'mgz'} or not isinstance(filename, str) or not filename:
+        return ''
+    if Path(filename).name != filename or filename in {'.', '..'}:
+        return ''
+    return f'file://{root}/{library}/{filename}'
+
+
 def wire_message(value):
     """Keep private archive descriptors out of platform requests, including nodes."""
     if isinstance(value, str):
@@ -65,6 +89,14 @@ def wire_message(value):
     for raw in message:
         kind = raw.type if hasattr(raw, 'type') else raw['type']
         data = dict(raw.data if hasattr(raw, 'data') else raw['data'])
+        marker = data.get(MARKER)
+        if kind == 'image' and isinstance(marker, dict) and marker.get('mode') == 'resource':
+            try:
+                local_file = local_library_file(marker)
+            except ValueError:
+                local_file = ''
+            if local_file:
+                data['file'] = local_file
         data.pop(MARKER, None)
         if kind == 'node' and 'content' in data:
             data['content'] = wire_message(data['content'])

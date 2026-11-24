@@ -1,0 +1,27 @@
+[Unit]
+# CSBot Matrix push allowlist proxy (GCP). Reachable only over loopback/Tailnet.
+Description=CSBot Matrix push allowlist proxy
+Documentation=https://github.com/csbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/csbot
+# Loopback is the default. For the encrypted Tailnet, change the bind address to
+# the host's Tailnet IPv4, e.g. --host 100.x.y.z, and point cgserver's Tuwunel
+# push sync at http://100.x.y.z:18080. Never bind 0.0.0.0 or [::].
+ExecStart=/usr/bin/python3 /home/ubuntu/csbot/scripts/matrix_push_proxy.py --host 127.0.0.1 --port 18080
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The proxy only needs sockets and stdout logging; no writable paths.
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

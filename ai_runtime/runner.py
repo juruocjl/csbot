@@ -2,13 +2,16 @@
 import asyncio
 from contextlib import nullcontext
 import hashlib
+import hmac
 import inspect
 import json
 import logging
 import os
 from pathlib import Path
+import secrets
 import shutil
 import sqlite3
+import threading
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -296,7 +299,9 @@ def web_environment(endpoint, api_key, *, search_url="", search_api_key=""):
     if not key:raise ValueError("Search endpoint requires CS_AI_SEARCH_API_KEY")
     env={"CSBOT_WEB_ENABLED":"1","CSBOT_SEARCH_URL":search_url.rstrip('/'),
          "CSBOT_SEARCH_API_KEY":key,"CSBOT_SEARCH_MODEL":os.getenv("CS_AI_SEARCH_MODEL","deepseek-v4-flash")}
-    proxy=os.getenv("CS_AI_FETCH_PROXY_URL","http://127.0.0.1:7890").strip()
+    # GCP dials directly; CSBOT_DIRECT_EGRESS hard-disables the cross-border
+    # loopback proxy even if .env.prod still carries it.
+    proxy="" if os.getenv("CSBOT_DIRECT_EGRESS","").strip()=="1" else os.getenv("CS_AI_FETCH_PROXY_URL","http://127.0.0.1:7890").strip()
     if proxy:
         parsed=urlsplit(proxy)
         try: parsed.port
@@ -309,6 +314,275 @@ def web_environment(endpoint, api_key, *, search_url="", search_api_key=""):
 
 
 
+def resolve_dsh_mode():
+    """Read the DSH transport mode; the default keeps the one-shot subprocess."""
+    mode=os.getenv("CS_AI_DSH_MODE","subprocess").strip().lower()
+    if mode not in ("subprocess","daemon"):
+        raise ValueError("CS_AI_DSH_MODE must be 'subprocess' or 'daemon'")
+    return mode
+
+
+def _daemon_token():
+    """Read the control-plane credential without ever echoing it."""
+    path=os.getenv("CS_AI_DSH_DAEMON_TOKEN_FILE","").strip()
+    if path:
+        try:
+            return Path(path).read_text(encoding="utf-8").strip()
+        except OSError:
+            raise ValueError("DSH daemon token file is unreadable") from None
+    token=os.getenv("CS_AI_DSH_DAEMON_TOKEN","").strip()
+    if not token:
+        raise ValueError("daemon mode requires CS_AI_DSH_DAEMON_TOKEN_FILE or CS_AI_DSH_DAEMON_TOKEN")
+    return token
+
+
+class _LocalRpcHost:
+    """Loopback HTTP RPC endpoint carrying one daemon turn's host callbacks.
+
+    The resident DSH host cannot pipe RPC over stdin, so each turn opens its own
+    random-port server protected by an unguessable per-turn bearer token. The
+    handler body is the same `dispatch_rpc` the subprocess transport uses.
+    """
+    def __init__(self, dispatch):
+        self._dispatch=dispatch
+        self._token=secrets.token_urlsafe(32)
+        self._server=None
+        self._thread=None
+        self.url=""
+
+    @property
+    def token(self):
+        return self._token
+
+    def start(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        loop=asyncio.get_running_loop()
+        dispatch=self._dispatch
+        token=self._token
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version="HTTP/1.1"
+            def log_message(self,*args):
+                return
+            def _reply(self,status,payload):
+                body=json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type","application/json")
+                self.send_header("Content-Length",str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def do_POST(self):
+                if self.path!="/rpc":
+                    return self._reply(404,{"error":"not_found"})
+                if not hmac.compare_digest(self.headers.get("Authorization",""),f"Bearer {token}"):
+                    return self._reply(401,{"error":"unauthorized"})
+                try:
+                    length=int(self.headers.get("Content-Length") or 0)
+                    if length<0 or length>1_000_000:
+                        return self._reply(413,{"error":"too_large"})
+                    body=json.loads(self.rfile.read(length) or b"{}")
+                except (ValueError,OSError):
+                    return self._reply(400,{"error":"invalid_json"})
+                future=asyncio.run_coroutine_threadsafe(dispatch(body),loop)
+                try:
+                    reply=future.result(timeout=300)
+                except Exception as exc:
+                    reply={"id":body.get("id") if isinstance(body,dict) else None,
+                           "error":type(exc).__name__}
+                return self._reply(200,reply)
+
+        server=ThreadingHTTPServer(("127.0.0.1",0),Handler)
+        server.daemon_threads=True
+        self._server=server
+        self._thread=threading.Thread(target=server.serve_forever,name="csbot-dsh-rpc",daemon=True)
+        self._thread.start()
+        self.url=f"http://127.0.0.1:{server.server_address[1]}/rpc"
+        return self
+
+    def stop(self):
+        server,self._server=self._server,None
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+
+
+async def _run_daemon_turn(*, scope, text, context, remember, guard, compact, run_id,
+                           on_event, on_started, session_title, usage_scene, thinking, vision,
+                           provider, model, system_prompt, fallback_enabled, fallback_provider,
+                           fallback_model, aux_provider, aux_model, image_gen_enabled, workspace,
+                           paths, authorized_image_paths, image_views, dispatch_rpc, report_usage,
+                           usage_events, fallback_state, breaker, route_mode, route_decision, probe_lease,
+                           memory_scope_workspace, read_only_memory, diagnostics,
+                           api_key, effective_api_key, original_model, model_endpoint):
+    """Drive one turn against the resident DSH Web host over loopback HTTP.
+
+    All host-side capabilities (Python sandbox, image generation, output guard)
+    are executed by this process through the per-turn RPC server, so the daemon
+    never gains database, filesystem or network reach beyond the request.
+    """
+    try:
+        import httpx
+    except ImportError:
+        raise ValueError("daemon mode requires the httpx dependency") from None
+    base=(os.getenv("CS_AI_DSH_DAEMON_URL","http://127.0.0.1:32151").strip()
+          or "http://127.0.0.1:32151").rstrip("/")
+    parsed=urlsplit(base)
+    if (parsed.scheme!="http" or parsed.hostname not in ("127.0.0.1","::1","localhost")
+            or parsed.username or parsed.password or parsed.path not in ("","/")
+            or parsed.query or parsed.fragment):
+        raise ValueError("CS_AI_DSH_DAEMON_URL must be a loopback HTTP endpoint without credentials or a path")
+    headers={"Authorization":f"Bearer {_daemon_token()}"}
+    rpc_host=_LocalRpcHost(dispatch_rpc).start()
+    started_reported=[False]
+
+    if read_only_memory and memory_scope_workspace:
+        # The birthday turn runs with the group workspace as its session cwd, so
+        # DATA.md/SOURCE.md must be readable there. Only fill gaps: an existing
+        # main-group SOURCE.md is never overwritten, and the next normal group
+        # turn rebuilds its own snapshot as usual.
+        borrow=Path(memory_scope_workspace)
+        borrow.mkdir(parents=True,exist_ok=True)
+        os.chmod(borrow,0o700)
+        for name in ("DATA.md","SOURCE.md"):
+            source=(RUNTIME/"DATA.md") if name=="DATA.md" else (workspace/name)
+            target=borrow/name
+            if source.is_file() and not target.exists():
+                shutil.copyfile(source,target)
+                try: os.chmod(target,0o600)
+                except OSError: pass
+        # Keep this turn's own freshly written docs explicitly authorized too;
+        # `read("SOURCE.md")` resolves against the session cwd, but an absolute
+        # path to the turn's snapshot must still pass the guard.
+        for name in ("DATA.md","SOURCE.md"):
+            own=workspace/name
+            if own.is_file():
+                paths.add(str(own))
+
+    async def mark_started():
+        if started_reported[0]:
+            return
+        started_reported[0]=True
+        if on_started:
+            await on_started()
+
+    request={
+        "runId": run_id or str(uuid4()), "scope": scope, "sessionId": f"csbot-{scope}",
+        "workspace": str(workspace), "title": session_title, "text": text, "context": context,
+        "systemPrompt": system_prompt, "remember": remember,
+        "readOnlyMemory": read_only_memory, "memoryScopeWorkspace": memory_scope_workspace,
+        "guard": guard, "readPaths": list(paths), "imageReadPaths": list(authorized_image_paths),
+        "provider": provider, "model": model, "thinking": thinking, "vision": vision,
+        "imageGenEnabled": image_gen_enabled, "fallbackEnabled": fallback_enabled,
+        "fallbackActive": bool(fallback_state["active"]),
+        "fallbackProvider": fallback_provider, "fallbackModel": fallback_model,
+        "auxProvider": aux_provider, "auxModel": aux_model,
+        "usageScene": usage_scene, "compact": compact,
+        "rpcUrl": rpc_host.url, "rpcToken": rpc_host.token,
+    }
+
+    async def steer(value):
+        try:
+            async with httpx.AsyncClient(timeout=15.0,trust_env=False) as client:
+                response=await client.post(f"{base}/turns/{request['runId']}/steer",
+                                           json={"text":value},headers=headers)
+                if response.status_code!=200:
+                    raise ValueError
+                return bool(response.json().get("accepted"))
+        except (httpx.HTTPError,ValueError):
+            raise ValueError('补充的投递状态尚未确认，请查看当前回复；未自动重复提交') from None
+
+    result=None
+    async with LIVE_SLOTS:
+        artifacts=workspace/"artifacts"
+        if artifacts.is_dir():
+            for path in artifacts.iterdir():
+                if path.is_file() and not path.is_symlink():
+                    path.unlink()
+        if run_id:
+            ACTIVE[run_id]=steer
+        try:
+            async with asyncio.timeout(660):
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=10.0,read=660.0,write=30.0,pool=10.0),
+                    trust_env=False,
+                ) as client:
+                    async with client.stream("POST",f"{base}/turns",json=request,headers=headers) as response:
+                        if response.status_code!=200:
+                            await response.aread()
+                            raise RuntimeError(f"DSH daemon rejected the turn (HTTP {response.status_code})")
+                        async for line in response.aiter_lines():
+                            line=line.strip()
+                            if not line:
+                                continue
+                            try:
+                                event=json.loads(line)
+                            except ValueError:
+                                continue
+                            kind=event.get("type")
+                            if kind=="started":
+                                await mark_started()
+                            elif kind=="trace":
+                                if on_event:
+                                    for item in event.get("events") or []:
+                                        on_event(item)
+                            elif kind=="usage":
+                                await report_usage(normalize_dsh_usage(event))
+                            elif kind=="fallback":
+                                # A mid-turn switch trips the shared breaker at once
+                                # so the next turn skips the dead proxy.
+                                fallback_state["event"]=event
+                                summary=None
+                                if breaker is not None:
+                                    summary=breaker.record_failure(
+                                        code=str(event.get("code") or "UNKNOWN"),
+                                        reason=str(event.get("reason") or ""),
+                                        lease_id=probe_lease,
+                                        secrets=(api_key,effective_api_key,
+                                                 os.getenv("DEEPSEEK_API_KEY",""),
+                                                 os.getenv("CSBOT_SEARCH_API_KEY","")))
+                                logger.warning("DSH 轮内已切换纯文本兜底（code=%s, to=%s, tripped=%s）",
+                                               str(event.get("code") or "UNKNOWN"),
+                                               str(event.get("toModel") or model),
+                                               bool(summary and summary.get("tripped")))
+                            elif kind=="complete":
+                                result=event
+                            elif kind=="error":
+                                raise RuntimeError("DSH daemon execution failed")
+            if result is None:
+                raise RuntimeError("DSH daemon returned no durable result")
+            if result.get("reason",{}).get("kind")!="completed":
+                if diagnostics:
+                    diagnostics({"reason":result.get("reason",{})})
+                raise RuntimeError("DSH turn did not complete")
+            result["usage"]=usage_events
+            if breaker is not None and route_mode in ("primary","probe") and fallback_state["event"] is None:
+                transition=breaker.record_success(lease_id=probe_lease)
+                if transition.get("recovered"):
+                    logger.info("OpenAI 半开探测成功，熔断器已恢复 CLOSED")
+            if fallback_state["active"]:
+                result["fallback"]={"used":True,"mode":"circuit_open_fallback",
+                                    "from_provider":"openai","from_model":original_model,
+                                    "provider":provider,"model":model,
+                                    "code":(route_decision or {}).get("reason_code") or "CIRCUIT_OPEN"}
+            elif fallback_state["event"] is not None:
+                result["fallback"]={"used":True,"mode":"mid_turn_fallback",
+                                    "from_provider":"openai","from_model":original_model,
+                                    "provider":str(fallback_state["event"].get("toProvider") or provider),
+                                    "model":str(fallback_state["event"].get("toModel") or model),
+                                    "code":str(fallback_state["event"].get("code") or "")}
+            else:
+                result["fallback"]={"used":False,
+                                    "mode":"primary" if provider=="openai" else "native",
+                                    "provider":provider,"model":model}
+            return result
+        finally:
+            if run_id:
+                ACTIVE.pop(run_id,None)
+            rpc_host.stop()
+            for view in image_views:
+                view.unlink(missing_ok=True)
+
+
 async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: str,
                   api_key: str, dispatch, read_paths=(), remember=True,
                   vision=False, thinking=False, state_root: Path | None=None, diagnostics=None, guard=None, legacy_memory="", compact=False,
@@ -318,8 +592,9 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                   aux_url: str="", aux_api_key: str="", aux_model: str="",
                   on_usage=None, memory_source_dir: Path | None=None,
                   read_only_memory: bool=False, usage_scene: str="",
-                  circuit_breaker: OpenAICircuitBreaker | None=None):
+                  circuit_breaker: OpenAICircuitBreaker | None=None, session_title: str=""):
     from .sandbox import ScriptSandbox
+    dsh_mode=resolve_dsh_mode()
     use_openai=is_openai_endpoint(endpoint)
     effective_image_model=(image_model if image_model is not None
                            else os.getenv("CS_AI_IMAGE_MODEL", DEFAULT_IMAGE_MODEL)).strip()
@@ -376,10 +651,14 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
             for filename in ("DATA.md",):
                 source=RUNTIME/filename
                 if source.is_file(): shutil.copyfile(source,workspace/filename)
-            (workspace/"SOURCE.md").write_text(code_snapshot.guide if code_snapshot else "本次离线记忆维护未开放源码。\n")
-            if memory_source_dir is not None:
+            # Explicit UTF-8: DSH's read tool rejects non-UTF-8 text, and the
+            # Windows default code page is not UTF-8.
+            (workspace/"SOURCE.md").write_text(code_snapshot.guide if code_snapshot else "本次离线记忆维护未开放源码。\n", encoding="utf-8")
+            if memory_source_dir is not None and dsh_mode!="daemon":
                 # Mount a point-in-time copy of the source group's Mneme database;
                 # the live group memory is never opened for writing by this turn.
+                # In daemon mode the read-only borrow is served by Mneme's own
+                # `workspace_scope` filter instead of a per-turn database copy.
                 _snapshot_memory_dir(Path(memory_source_dir), root/"memory")
             executable=RUNTIME/"dsh/node_modules/.bin/dsh"
             if not executable.is_file():
@@ -496,6 +775,103 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                             _register_image_path(result[field])
                 return result
             sandbox=ScriptSandbox(gateway,workspace/"artifacts",source_root=code_snapshot.root if code_snapshot else None)
+            # One host-side RPC dispatcher serves both transports: stdin/stdout for
+            # the one-shot subprocess, and a loopback HTTP server for the resident
+            # daemon. Tool execution, image generation and output guarding exist
+            # exactly once, regardless of which transport drives the turn.
+            rpc_slots=asyncio.Semaphore(1)
+            submitted_images=0
+            usage_events=[]
+            fallback_state={"event":None,"active":fallback_active}
+            async def report_usage(item):
+                if not item: return
+                usage_events.append(item)
+                if on_usage is None: return
+                try:
+                    pending=on_usage(item)
+                    if inspect.isawaitable(pending): await pending
+                except Exception: pass
+            async def dispatch_rpc(event):
+                nonlocal submitted_images
+                async with rpc_slots:
+                    try:
+                        if event['method']=='guard_output' and guard is not None:
+                            value=await guard(event['text'])
+                        elif event['method']=='execute_python':
+                            value=await sandbox.run(event['code'])
+                            paths.update(value.get('artifacts',[]))
+                            for artifact in value.get('artifacts',[]): _register_image_path(artifact)
+                            if on_images and value.get('deliver_images') and value['exit_code']==0:
+                                await on_images(value['deliver_images'])
+                                submitted_images+=len(value['deliver_images'])
+                        elif event['method']=='generate_image':
+                            if fallback_state["event"] is not None or fallback_state["active"]:
+                                # A step retried on deepseek-flash may still hold
+                                # the old OpenAI tool schema: never spend a request
+                                # after the turn already moved channels.
+                                raise ValueError('OpenAI 主通道本轮已临时故障并切换到纯文本兜底，当前无法生成或修改图片；请如实告知用户，不要重复调用。')
+                            if not image_gen_enabled:
+                                raise ValueError('image generation is not enabled')
+                            if submitted_images>=4:
+                                raise ValueError('每轮最多提交 4 张图片')
+                            value=await generate_openai_image(
+                                prompt=event.get('prompt',''),api_key=api_key,endpoint=endpoint,
+                                artifacts_dir=workspace/'artifacts',model=effective_image_model,
+                                proxy_url=openai_proxy_url,
+                                size=str(event.get('size') or '1024x1024'),
+                                quality=str(event.get('quality') or 'medium'),
+                                background=str(event.get('background') or 'auto'),
+                                caption=str(event.get('caption') or ''),
+                                image_paths=event.get('image_paths'),
+                                allowed_image_paths=authorized_image_paths,
+                                workspace=workspace)
+                            artifact_file=value['file_path']
+                            paths.add(artifact_file)
+                            _register_image_path(artifact_file)
+                            if on_images:
+                                persisted=await on_images([{'path':artifact_file,'caption':value['caption']}])
+                                if persisted and persisted[0]:
+                                    # Keep the persisted path authorized too, so the
+                                    # file_path stored in history stays editable next turn.
+                                    value['file_path']=str(persisted[0])
+                                    paths.add(value['file_path'])
+                                    _register_image_path(value['file_path'])
+                            submitted_images+=1
+                            # Keep the normalized usage out of the model-visible
+                            # reply while still recording it for this turn.
+                            await report_usage(value.pop('usage', None))
+                        else:raise ValueError('unknown bridge method')
+                        return {'type':'rpc_result','id':event['id'],'result':value,
+                                'readPaths':list(paths),'imageReadPaths':list(authorized_image_paths)}
+                    except Exception as exc:
+                        return {'type':'rpc_result','id':event['id'],
+                                'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
+            if dsh_mode=="daemon" and not memory_only:
+                # Offline memory maintenance deliberately keeps the one-shot
+                # subprocess: it must not append to a live group session and
+                # reuses its dedicated import profile.
+                return await _run_daemon_turn(
+                    scope=scope,text=text,context=context,remember=remember,
+                    guard=guard is not None,compact=compact,run_id=run_id,
+                    on_event=on_event,on_started=on_started,session_title=session_title,
+                    usage_scene=usage_scene,thinking=thinking,vision=vision,
+                    provider=effective_provider,model=effective_model,system_prompt=system_prompt,
+                    fallback_enabled=bool(fallback_route is not None and not fallback_active),
+                    fallback_provider=(fallback_route or {}).get("provider",""),
+                    fallback_model=(fallback_route or {}).get("model",""),
+                    aux_provider=env.get("CSBOT_AUX_PROVIDER",""),
+                    aux_model=env.get("CSBOT_AUX_MODEL",""),
+                    image_gen_enabled=image_gen_enabled,workspace=workspace,paths=paths,
+                    authorized_image_paths=authorized_image_paths,image_views=image_views,
+                    dispatch_rpc=dispatch_rpc,report_usage=report_usage,
+                    usage_events=usage_events,
+                    fallback_state=fallback_state,breaker=breaker,route_mode=route_mode,
+                    route_decision=route_decision,probe_lease=probe_lease,
+                    memory_scope_workspace=(str(Path(memory_source_dir).parent/"workspace")
+                                            if memory_source_dir is not None and read_only_memory else ""),
+                    read_only_memory=read_only_memory,diagnostics=diagnostics,
+                    api_key=api_key,effective_api_key=effective_api_key,
+                    original_model=model,model_endpoint=endpoint)
             profile=root/("memory-import-profile.json" if memory_only else "profile.json")
             profile.write_text(json.dumps(render_profile(env)))
             async with LIVE_SLOTS:
@@ -533,74 +909,9 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                         raise ValueError('补充的投递状态尚未确认，请查看当前回复；未自动重复提交') from None
                     finally:acks.pop(key,None)
                 rpc_tasks=[]
-                rpc_slots=asyncio.Semaphore(1)
-                submitted_images=0
-                # Billing telemetry is collected per turn and never blocks the reply:
-                # a ledger failure must not turn a delivered answer into an error.
-                usage_events=[]
-                async def report_usage(item):
-                    if not item: return
-                    usage_events.append(item)
-                    if on_usage is None: return
-                    try:
-                        pending=on_usage(item)
-                        if inspect.isawaitable(pending): await pending
-                    except Exception: pass
                 async def handle_rpc(event):
-                    nonlocal submitted_images
                     async with rpc_slots:
-                        try:
-                            if event['method']=='guard_output' and guard is not None:
-                                value=await guard(event['text'])
-                            elif event['method']=='execute_python':
-                                value=await sandbox.run(event['code'])
-                                paths.update(value.get('artifacts',[]))
-                                for artifact in value.get('artifacts',[]): _register_image_path(artifact)
-                                if on_images and value.get('deliver_images') and value['exit_code']==0:
-                                    await on_images(value['deliver_images'])
-                                    submitted_images+=len(value['deliver_images'])
-                            elif event['method']=='generate_image':
-                                if fallback_event is not None or fallback_active:
-                                    # A step retried on deepseek-flash may still hold
-                                    # the old OpenAI tool schema: never spend a
-                                    # request after the turn already moved channels.
-                                    raise ValueError('OpenAI 主通道本轮已临时故障并切换到纯文本兜底，当前无法生成或修改图片；请如实告知用户，不要重复调用。')
-                                if not image_gen_enabled:
-                                    raise ValueError('image generation is not enabled')
-                                if submitted_images>=4:
-                                    raise ValueError('每轮最多提交 4 张图片')
-                                value=await generate_openai_image(
-                                    prompt=event.get('prompt',''),api_key=api_key,endpoint=endpoint,
-                                    artifacts_dir=workspace/'artifacts',model=effective_image_model,
-                                    proxy_url=openai_proxy_url,
-                                    size=str(event.get('size') or '1024x1024'),
-                                    quality=str(event.get('quality') or 'medium'),
-                                    background=str(event.get('background') or 'auto'),
-                                    caption=str(event.get('caption') or ''),
-                                    image_paths=event.get('image_paths'),
-                                    allowed_image_paths=authorized_image_paths,
-                                    workspace=workspace)
-                                artifact_file=value['file_path']
-                                paths.add(artifact_file)
-                                _register_image_path(artifact_file)
-                                if on_images:
-                                    persisted=await on_images([{'path':artifact_file,'caption':value['caption']}])
-                                    if persisted and persisted[0]:
-                                        # Keep the persisted path authorized too, so the
-                                        # file_path stored in history stays editable next turn.
-                                        value['file_path']=str(persisted[0])
-                                        paths.add(value['file_path'])
-                                        _register_image_path(value['file_path'])
-                                submitted_images+=1
-                                # Keep the normalized usage out of the model-visible
-                                # reply while still recording it for this turn.
-                                await report_usage(value.pop('usage', None))
-                            else:raise ValueError('unknown bridge method')
-                            reply={'type':'rpc_result','id':event['id'],'result':value,'readPaths':list(paths),
-                                   'imageReadPaths':list(authorized_image_paths)}
-                        except Exception as exc:
-                            reply={'type':'rpc_result','id':event['id'],'error':str(exc)[:500] if isinstance(exc,ValueError) else type(exc).__name__}
-                        await send(reply)
+                        await send(await dispatch_rpc(event))
                 try:
                     async with asyncio.timeout(600):
                         while line:=await process.stdout.readline():
@@ -628,6 +939,7 @@ async def run_dsh(*, scope: str, text: str, context: str, model: str, endpoint: 
                                 # shared breaker immediately so the next turn skips
                                 # the dead proxy instead of waiting out a timeout.
                                 fallback_event=event
+                                fallback_state["event"]=event
                                 summary=None
                                 if breaker is not None:
                                     summary=breaker.record_failure(

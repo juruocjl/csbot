@@ -19,6 +19,51 @@ def cleanup():
     print(f'Cleaned {len(ids)} abandoned CSBot script containers')
 
 
+def _daemon_token(values):
+    """Read the control-plane token locally; it is never printed or logged."""
+    token = str(values.get('CS_AI_DSH_DAEMON_TOKEN') or '').strip()
+    if token:
+        return token
+    path = str(values.get('CS_AI_DSH_DAEMON_TOKEN_FILE') or '').strip()
+    if not path:
+        return ''
+    try:
+        return Path(path).read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+
+
+def check_dsh_daemon(values):
+    """Loopback-only /health probe of the resident DSH daemon (stdlib only)."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    url = str(values.get('CS_AI_DSH_DAEMON_URL') or '').strip().rstrip('/')
+    parsed = urllib.parse.urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if (parsed.scheme != 'http'
+            or (parsed.hostname or '') not in {'127.0.0.1', '::1', 'localhost'}
+            or not port):
+        raise ValueError('CS_AI_DSH_DAEMON_URL must be a loopback HTTP endpoint with a port')
+    request = urllib.request.Request(url + '/health', method='GET',
+                                     headers={'Accept': 'application/json'})
+    token = _daemon_token(values)
+    if token:
+        request.add_header('Authorization', 'Bearer ' + token)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=5) as response:
+            payload = json.loads(response.read(1024 * 1024))
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise ValueError('DSH daemon health endpoint rejected the probe')
+    if not isinstance(payload, dict) or payload.get('ok') is not True:
+        raise ValueError('DSH daemon health check is not ok')
+
+
 async def check(args):
     from dotenv import dotenv_values
     values={}
@@ -41,6 +86,9 @@ async def check(args):
     from ai_runtime.source import reviewed_files
     reviewed_files()
     print('PASS: reviewed business source manifest matches deployed files')
+    if str(values.get('CS_AI_DSH_MODE', 'subprocess')).strip().lower() == 'daemon':
+        check_dsh_daemon(values)
+        print('PASS: resident DSH daemon health endpoint is ok')
     subprocess.run(['docker','image','inspect','csbot-ai-python:1','--format','{{.Id}}'],check=True,capture_output=True,timeout=10)
     from ai_runtime.sandbox import ScriptSandbox
     async def deny(_): raise ValueError('preflight has no script data access')

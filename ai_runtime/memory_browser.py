@@ -37,15 +37,57 @@ def authorize(store, gid, uid, scope):
         raise PermissionError('unknown scope')
 
 
+def _unified_memory_db():
+    """Resident-daemon Mneme database, or None to keep the per-scope layout.
+
+    `CS_AI_DSH_MEMORY_DB` wins when set; otherwise daemon mode checks the
+    documented unified location. A missing file keeps the legacy path, so the
+    browser never loses access during the migration window.
+    """
+    configured = os.getenv('CS_AI_DSH_MEMORY_DB', '').strip()
+    if configured:
+        return Path(configured)
+    if os.getenv('CS_AI_DSH_MODE', 'subprocess').strip().lower() == 'daemon':
+        return Path(os.getenv('CS_AI_STATE_DIR', 'data/ai')).resolve() / 'web-memory' / 'memory.db'
+    return None
+
+
+def workspace_scope(base, scope):
+    """Canonical workspace path Mneme stamps into `workspace_scope`.
+
+    Mneme resolves the workspace through its registry (a realpath); the browser
+    derives the same value from the state layout so a unified database can be
+    filtered without ever trusting a caller-supplied path.
+    """
+    return str((Path(base) / 'scopes' / scope / 'workspace').resolve())
+
+
 @contextmanager
 def database(scope, root=None):
     base = Path(root or os.getenv('CS_AI_STATE_DIR', 'data/ai')).resolve()
+    unified = _unified_memory_db()
+    if unified is not None and unified.is_file() and not unified.is_symlink():
+        db = None
+        try:
+            db = sqlite3.connect(unified.as_uri()+'?mode=ro', uri=True, timeout=1)
+            db.row_factory = sqlite3.Row
+            db.execute('PRAGMA query_only=ON')
+            db.execute('PRAGMA trusted_schema=OFF')
+            deadline = time.monotonic()+2
+            db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+            yield db, workspace_scope(base, scope)
+        except sqlite3.Error as exc:
+            raise MemoryUnavailable('memory read unavailable') from exc
+        finally:
+            if db is not None:
+                db.close()
+        return
     path = base / 'scopes' / scope / 'memory' / 'memory.db'
     # The caller has authorized an opaque scope, never a user-supplied path.
     if any(p.is_symlink() for p in (base/'scopes', path.parent.parent, path.parent, path)):
         raise MemoryUnavailable('unsafe memory path')
     if not path.is_file():
-        yield None
+        yield None, None
         return
     db = None
     try:
@@ -55,7 +97,7 @@ def database(scope, root=None):
         db.execute('PRAGMA trusted_schema=OFF')
         deadline = time.monotonic()+2
         db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
-        yield db
+        yield db, None
     except sqlite3.Error as exc:
         raise MemoryUnavailable('memory read unavailable') from exc
     finally:
@@ -109,10 +151,14 @@ def browse(store, gid, uid, scope, query='', kind='', archived=False, cursor=Non
                 raise ValueError()
         except (ValueError, UnicodeError):
             raise ValueError('invalid cursor') from None
-    with database(scope, root) as db:
+    with database(scope, root) as (db, workspace):
         if db is None:
             return {'items': [], 'types': [], 'nextCursor': None, 'total': 0}
         filters = ['forgotten=0', 'archived=?']; args = [int(archived)]
+        if workspace:
+            # A unified daemon database holds every scope; the canonical
+            # workspace path is the only authorized boundary.
+            filters.append('workspace_scope=?'); args.append(workspace)
         if tier:
             filters.append('('+TIER_SQL+')=?'); args.append(tier)
         if category:
@@ -126,7 +172,9 @@ def browse(store, gid, uid, scope, query='', kind='', archived=False, cursor=Non
         where = ' AND '.join(filters)
         db.execute('BEGIN')
         total = db.execute('SELECT count(*) FROM memories WHERE '+where,args).fetchone()[0]
-        types = [r[0] for r in db.execute('SELECT DISTINCT type FROM memories WHERE forgotten=0 AND archived=? ORDER BY type LIMIT 100',(int(archived),))]
+        type_filter = 'forgotten=0 AND archived=?' + (' AND workspace_scope=?' if workspace else '')
+        type_args = (int(archived), workspace) if workspace else (int(archived),)
+        types = [r[0] for r in db.execute('SELECT DISTINCT type FROM memories WHERE '+type_filter+' ORDER BY type LIMIT 100',type_args)]
         if position:
             where += ' AND (updated_at<? OR (updated_at=? AND id<?))'
             args.extend([position[0],position[0],position[1]])
@@ -144,11 +192,15 @@ def detail(store, gid, uid, scope, memory_id, root=None):
     authorize(store, gid, uid, scope)
     if not memory_id or len(memory_id)>128:
         raise ValueError('invalid memory id')
-    with database(scope, root) as db:
-        row = db.execute('''SELECT id,type,source,substr(title,1,300) AS title,
-            substr(content,1,131072) AS content,length(content)>131072 AS truncated,
-            substr(tags,1,8192) AS tags,importance,archived,created_at,updated_at
-            FROM memories WHERE id=? AND forgotten=0''',(memory_id,)).fetchone() if db else None
+    with database(scope, root) as (db, workspace):
+        row = None
+        if db is not None:
+            clause = 'id=? AND forgotten=0' + (' AND workspace_scope=?' if workspace else '')
+            params = (memory_id, workspace) if workspace else (memory_id,)
+            row = db.execute('''SELECT id,type,source,substr(title,1,300) AS title,
+                substr(content,1,131072) AS content,length(content)>131072 AS truncated,
+                substr(tags,1,8192) AS tags,importance,archived,created_at,updated_at
+                FROM memories WHERE '''+clause,params).fetchone()
         if row is None:
             raise PermissionError('unknown memory')
         result = dict(row)

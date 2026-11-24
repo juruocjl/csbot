@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import html
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,36 @@ MATRIX_VERSIONS_URL = "https://matrix.org/_matrix/client/versions"
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
 SERVICES = ("csbot.service", "mihomo.service", "docker.service", "csbot-memory-guard.timer")
 CONTAINERS = ("csbot-database", "csbot-napcat", "steam_monitor", "csbot-homepage", "csbot-nginx")
+EGRESS_WARN_GIB = 18.0
+EGRESS_CRIT_GIB = 24.0
+TAILNET_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+PROFILE_FULL = "full"
+PROFILE_EDGE = "edge"
+PROFILE_GCP = "gcp"
+PROFILE_SERVICES = {
+    PROFILE_FULL: SERVICES,
+    PROFILE_EDGE: ("tuwunel.service", "tuwunel-push-sync.service", "derper.service", "docker.service"),
+    PROFILE_GCP: ("csbot.service", "csbot-dsh.service", "docker.service"),
+}
+PROFILE_CONTAINERS = {
+    PROFILE_FULL: CONTAINERS,
+    PROFILE_EDGE: ("csbot-napcat", "csbot-homepage", "teamspeak_server"),
+    PROFILE_GCP: ("csbot-database", "steam_monitor", "csbot-nginx"),
+}
+PROFILE_PROBES = {
+    PROFILE_FULL: (
+        "host_resources", "systemd", "containers", "postgresql", "backend_http",
+        "steam_api", "napcat_qq", "matrix_egress", "openai_egress", "logs", "outbox",
+    ),
+    PROFILE_EDGE: (
+        "host_resources", "systemd", "containers", "napcat_qq", "matrix_egress",
+        "remote_backend_http",
+    ),
+    PROFILE_GCP: (
+        "host_resources", "systemd", "containers", "postgresql", "backend_http",
+        "dsh_daemon", "steam_api", "openai_egress", "logs", "outbox", "vnstat_egress",
+    ),
+}
 
 EventItem = tuple[str, str, str, bool]
 
@@ -91,6 +122,180 @@ def request_json(opener, url: str, payload=None, headers=None, method: str | Non
         return json.loads(response.read(1024 * 1024))
 
 
+def homeserver_allowed(homeserver: str) -> bool:
+    """Loopback HTTP, any HTTPS, or plain HTTP strictly on the Tailnet 100.64/10."""
+    if homeserver.startswith("https://"):
+        return True
+    if homeserver.startswith("http://127.0.0.1:"):
+        return True
+    if not homeserver.startswith("http://"):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(homeserver)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return False
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+    except ValueError:
+        return False
+    return (
+        address.version == 4
+        and address in TAILNET_NETWORK
+        and port is not None
+        and 1 <= port <= 65535
+        and parsed.path in ("", "/")
+    )
+
+
+def normalize_proxy(proxy_url: str) -> str:
+    """An explicit empty/direct marker disables the proxy (GCP direct egress)."""
+    raw = str(proxy_url or "").strip()
+    if raw.lower() in {"", "none", "direct", "off", "false"}:
+        return ""
+    return raw
+
+
+def proxy_opener(proxy_url: str):
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else {}
+    return build_opener(ProxyHandler(proxies))
+
+
+def profile_plan(profile: str = PROFILE_FULL) -> dict:
+    """Resolve one profile into the exact probe/service/container matrix to run."""
+    name = str(profile or PROFILE_FULL).strip().lower()
+    if name not in PROFILE_PROBES:
+        raise ValueError("unknown health alert profile")
+    return {
+        "profile": name,
+        "probes": PROFILE_PROBES[name],
+        "services": PROFILE_SERVICES[name],
+        "containers": PROFILE_CONTAINERS[name],
+    }
+
+
+def parse_vnstat_monthly_tx(raw_json: str, *, now: float | None = None, iface: str = "") -> int:
+    """Current-month TX bytes from `vnstat --json m` (v2 schema), or 0 if absent.
+
+    Only outbound bytes count against the 28 GiB GCP egress allowance, so RX is
+    deliberately ignored. A malformed dump or an unknown interface is an error
+    rather than a silent zero.
+    """
+    try:
+        payload = json.loads(raw_json)
+    except (TypeError, ValueError):
+        raise ValueError("invalid vnstat JSON") from None
+    if not isinstance(payload, dict):
+        raise ValueError("invalid vnstat JSON")
+    interfaces = payload.get("interfaces")
+    if not isinstance(interfaces, list) or not interfaces:
+        raise ValueError("vnstat JSON has no interfaces")
+    stamp = time.localtime(time.time() if now is None else float(now))
+    wanted = (stamp.tm_year, stamp.tm_mon)
+    wanted_iface = str(iface or "").strip()
+    matched = False
+    total = 0
+    for entry in interfaces:
+        if not isinstance(entry, dict):
+            continue
+        if wanted_iface and str(entry.get("name") or "").strip() != wanted_iface:
+            continue
+        matched = True
+        traffic = entry.get("traffic")
+        months = traffic.get("months") if isinstance(traffic, dict) else None
+        if not isinstance(months, list):
+            continue
+        for month in months:
+            if not isinstance(month, dict):
+                continue
+            date = month.get("date")
+            if not isinstance(date, dict):
+                continue
+            try:
+                year, number = int(date.get("year")), int(date.get("month"))
+            except (TypeError, ValueError):
+                continue
+            if (year, number) != wanted:
+                continue
+            tx = month.get("tx")
+            if isinstance(tx, bool) or not isinstance(tx, (int, float)):
+                continue
+            total += int(tx)
+    if not matched:
+        raise ValueError("vnstat interface not found")
+    return total
+
+
+def egress_issues(
+    tx_bytes: int,
+    *,
+    warn_gib: float = EGRESS_WARN_GIB,
+    crit_gib: float = EGRESS_CRIT_GIB,
+) -> dict[str, Issue]:
+    """Grade the current-month GCP egress against the 18/24 GiB thresholds."""
+    try:
+        total = max(0, int(tx_bytes))
+    except (TypeError, ValueError):
+        total = 0
+    gib = total / GIB
+    if total >= float(crit_gib) * GIB:
+        return {"egress": Issue(
+            CRITICAL,
+            f"GCP 本月出站流量 {gib:.2f} GiB，已达严重阈值 {crit_gib:.0f} GiB（28 GiB 上限）",
+            1,
+        )}
+    if total >= float(warn_gib) * GIB:
+        return {"egress": Issue(
+            WARNING,
+            f"GCP 本月出站流量 {gib:.2f} GiB，超过预警阈值 {warn_gib:.0f} GiB",
+        )}
+    return {}
+
+
+def read_secret(path) -> str:
+    """Read a local token file without ever echoing its contents."""
+    if not path:
+        return ""
+    file = Path(path)
+    try:
+        if not file.is_file():
+            return ""
+        return file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def dsh_daemon_ok(base_url: str, token_file: str = "", timeout: int = 5) -> bool:
+    """Loopback HTTP probe of the resident DSH control plane; token stays local."""
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        raise ValueError("DSH daemon URL is not configured")
+    parsed = urllib.parse.urlsplit(base)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if (
+        parsed.scheme != "http"
+        or (parsed.hostname or "") not in {"127.0.0.1", "::1", "localhost"}
+        or not port
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        # A non-loopback URL would ship the control-plane token off-host.
+        raise ValueError("DSH daemon URL must be a loopback HTTP endpoint")
+    headers = {"Accept": "application/json", "User-Agent": "csbot-health-alert/1.0"}
+    token = read_secret(token_file)
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    opener = build_opener(ProxyHandler({}))
+    result = request_json(opener, base + "/health", headers=headers, timeout=timeout)
+    return isinstance(result, dict) and result.get("ok") is True
+
+
 def load_config(path: Path) -> MatrixConfig:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -102,7 +307,7 @@ def load_config(path: Path) -> MatrixConfig:
     if not access_token:
         raise ValueError("missing Matrix access_token")
     homeserver = str(data.get("homeserver") or DEFAULT_HOMESERVER).strip().rstrip("/")
-    if not (homeserver.startswith("http://127.0.0.1:") or homeserver.startswith("https://")):
+    if not homeserver_allowed(homeserver):
         raise ValueError("invalid Matrix homeserver URL")
     mention_user_id = str(data.get("mention_user_id") or DEFAULT_MENTION_USER_ID).strip()
     if not mention_user_id.startswith("@") or ":" not in mention_user_id:
@@ -153,7 +358,7 @@ def matrix_egress_ok(
     timeout: int = 8,
 ) -> bool:
     """Read-only probe of Mihomo HTTP proxy (:7890) -> matrix.org for Tuwunel push health."""
-    opener = build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+    opener = proxy_opener(proxy_url)
     result = request_json(
         opener,
         target_url,
@@ -173,7 +378,7 @@ def openai_egress_ok(
     A TLS reset, timeout, 5xx or a 2xx means the exit node is not usable for the
     CSBot OpenAI calls. Never reads a key file and never sends Authorization.
     """
-    opener = build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+    opener = proxy_opener(proxy_url)
     request = Request(
         target_url,
         headers={"Accept": "application/json", "User-Agent": "csbot-health-alert/1.0"},
@@ -249,7 +454,22 @@ def resource_issues(disk: dict, memory: dict) -> dict[str, Issue]:
     return issues
 
 
-def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], dict]:
+def collect(
+    root: Path,
+    previous: dict,
+    now: float,
+    *,
+    profile: str = PROFILE_FULL,
+    matrix_proxy: str = DEFAULT_EGRESS_PROXY,
+    openai_proxy: str = DEFAULT_EGRESS_PROXY,
+    dsh_daemon_url: str = "",
+    dsh_token_file: str = "",
+    remote_backend_url: str = "",
+    vnstat_iface: str = "",
+    egress_warn_gib: float = EGRESS_WARN_GIB,
+    egress_crit_gib: float = EGRESS_CRIT_GIB,
+) -> tuple[dict[str, Issue], dict]:
+    plan = profile_plan(profile)
     issues: dict[str, Issue] = {}
     metrics: dict = {"at": now}
 
@@ -271,10 +491,9 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
              "inode_ratio": disk.f_favail / max(1, disk.f_files)},
             {"available": metrics["memory_available"]},
         ))
-    probe("host_resources", resources)
 
     def services():
-        output = command(["systemctl", "show", *SERVICES,
+        output = command(["systemctl", "show", *plan["services"],
                           "--property=Id,ActiveState,MemoryCurrent,NRestarts"])
         for block in output.strip().split("\n\n"):
             props = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
@@ -293,14 +512,13 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
                 if restarts - previous.get("backend_restarts", restarts) >= 2:
                     issues["backend_restarts"] = Issue(CRITICAL, "后端在一次采样间隔内自动重启至少两次", 1)
                 metrics["backend_restarts"] = restarts
-    probe("systemd", services)
 
     def containers():
         format_ = '{{json .Name}} {{.State.Running}} {{.State.Restarting}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
-        lines = command(["docker", "inspect", "--format", format_, *CONTAINERS]).splitlines()
-        if len(lines) != len(CONTAINERS):
+        lines = command(["docker", "inspect", "--format", format_, *plan["containers"]]).splitlines()
+        if len(lines) != len(plan["containers"]):
             raise ValueError("missing container state")
-        for name, line in zip(CONTAINERS, lines):
+        for name, line in zip(plan["containers"], lines):
             _, running, restarting, health = line.split()
             if name == "steam_monitor":
                 # steam_api inspects /api/health directly with rich state & 503 grading.
@@ -308,12 +526,10 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
                     issues["container:" + name] = Issue(CRITICAL, f"容器 {name} 未运行（running={running}, restarting={restarting}）")
             elif running != "true" or restarting == "true" or health == "unhealthy":
                 issues["container:" + name] = Issue(CRITICAL, f"容器 {name} 异常（running={running}, health={health}）")
-    probe("containers", containers)
 
     def database():
         command(["docker", "exec", "csbot-database", "sh", "-c",
                  'exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t 2'])
-    probe("postgresql", database)
 
     def backend_http():
         opener = build_opener(ProxyHandler({}))
@@ -325,7 +541,20 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
             exc.close()
         if not 200 <= status < 500:
             raise RuntimeError("backend HTTP unavailable")
-    probe("backend_http", backend_http)
+
+    def remote_backend_http():
+        url = str(remote_backend_url or "").strip()
+        if not url:
+            raise ValueError("remote backend URL is not configured")
+        opener = build_opener(ProxyHandler({}))
+        try:
+            with opener.open(url, timeout=5) as response:
+                status = response.status
+        except HTTPError as exc:
+            status = exc.code
+            exc.close()
+        if not 200 <= status < 500:
+            raise RuntimeError("remote backend HTTP unavailable")
 
     def steam():
         opener = build_opener(ProxyHandler({}))
@@ -351,44 +580,46 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
             issues["steam_ready"] = Issue(CRITICAL, f"Steam Monitor 连续重连未恢复（attempt={attempt}, failures={failures}, error={err}）", 2)
         else:
             issues["steam_ready"] = Issue(WARNING, f"Steam Monitor 自动重连中（attempt={attempt}, error={err}）", 2)
-    probe("steam_api", steam)
 
     def napcat_qq():
         if not napcat_online(root):
             issues["qq_online"] = Issue(CRITICAL, "NapCat QQ 客户端离线")
-    probe("napcat_qq", napcat_qq)
 
     def matrix_egress():
+        label = "Mihomo :7890" if matrix_proxy == DEFAULT_EGRESS_PROXY else (matrix_proxy or "直连")
         try:
-            ok = matrix_egress_ok()
+            ok = matrix_egress_ok(matrix_proxy)
         except Exception as exc:
             issues["matrix_egress"] = Issue(
                 CRITICAL,
-                f"Mihomo :7890 -> matrix.org 出口不通（{type(exc).__name__}，影响 Tuwunel 推送）",
+                f"{label} -> matrix.org 出口不通（{type(exc).__name__}，影响 Tuwunel 推送）",
             )
             return
         if not ok:
             issues["matrix_egress"] = Issue(
                 CRITICAL,
-                "Mihomo :7890 -> matrix.org 响应格式异常（影响 Tuwunel 推送）",
+                f"{label} -> matrix.org 响应格式异常（影响 Tuwunel 推送）",
             )
-    probe("matrix_egress", matrix_egress)
 
     def openai_egress():
+        label = "Mihomo :7890" if openai_proxy == DEFAULT_EGRESS_PROXY else (openai_proxy or "直连")
         try:
-            ok = openai_egress_ok()
+            ok = openai_egress_ok(openai_proxy)
         except Exception as exc:
             issues["openai_egress"] = Issue(
                 CRITICAL,
-                f"Mihomo :7890 -> api.openai.com 出口不通（{type(exc).__name__}，影响 CSBot OpenAI 调用）",
+                f"{label} -> api.openai.com 出口不通（{type(exc).__name__}，影响 CSBot OpenAI 调用）",
             )
             return
         if not ok:
             issues["openai_egress"] = Issue(
                 CRITICAL,
-                "Mihomo :7890 -> api.openai.com 响应异常（非预期 401 JSON，影响 CSBot OpenAI 调用）",
+                f"{label} -> api.openai.com 响应异常（非预期 401 JSON，影响 CSBot OpenAI 调用）",
             )
-    probe("openai_egress", openai_egress)
+
+    def dsh_daemon():
+        if not dsh_daemon_ok(dsh_daemon_url, dsh_token_file):
+            issues["dsh_daemon"] = Issue(CRITICAL, "CSBot DSH 常驻控制面 /health 未返回 ok")
 
     def logs():
         current = {}
@@ -411,7 +642,6 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
         if elapsed >= 30 and growth * 60 / elapsed >= 5 * MIB:
             issues["log_growth"] = Issue(WARNING, f"两个运行日志合计增长 {growth * 60 / elapsed / MIB:.1f} MiB/分钟")
         metrics["logs"] = current
-    probe("logs", logs)
 
     def outbox():
         path = root / "data/ai/state.sqlite3"
@@ -422,7 +652,34 @@ def collect(root: Path, previous: dict, now: float) -> tuple[dict[str, Issue], d
             age = (now - oldest) / 3600
             issues["outgoing_index"] = Issue(CRITICAL if age >= 2 else WARNING,
                 f"已发消息的归档重试积压 {count} 条，最老 {age:.1f} 小时；不会重发群消息")
-    probe("outbox", outbox)
+
+    def vnstat_egress():
+        output = command(["vnstat", "--json", "m"], timeout=10)
+        total = parse_vnstat_monthly_tx(output, now=now, iface=vnstat_iface)
+        metrics["egress_tx_bytes"] = total
+        issues.update(egress_issues(total, warn_gib=egress_warn_gib, crit_gib=egress_crit_gib))
+
+    probes = {
+        "host_resources": resources,
+        "systemd": services,
+        "containers": containers,
+        "postgresql": database,
+        "backend_http": backend_http,
+        "remote_backend_http": remote_backend_http,
+        "steam_api": steam,
+        "napcat_qq": napcat_qq,
+        "matrix_egress": matrix_egress,
+        "openai_egress": openai_egress,
+        "dsh_daemon": dsh_daemon,
+        "logs": logs,
+        "outbox": outbox,
+        "vnstat_egress": vnstat_egress,
+    }
+    for name in plan["probes"]:
+        # The cross-host backend probe is optional; never alert when unconfigured.
+        if name == "remote_backend_http" and not str(remote_backend_url or "").strip():
+            continue
+        probe(name, probes[name])
     return issues, metrics
 
 
@@ -580,9 +837,10 @@ def save_state(path: Path, state: dict) -> None:
     temporary.replace(path)
 
 
-def run(root: Path, config: MatrixConfig | None, state: dict, dry_run: bool) -> None:
+def run(root: Path, config: MatrixConfig | None, state: dict, dry_run: bool, *,
+        probe_options: dict | None = None) -> None:
     now = time.time()
-    issues, metrics = collect(root, state.get("metrics", {}), now)
+    issues, metrics = collect(root, state.get("metrics", {}), now, **(probe_options or {}))
     emit("sample", at=datetime.fromtimestamp(now, _shanghai_tz()).isoformat(),
          issues={key: {"level": issue.level, "message": issue.message} for key, issue in issues.items()},
          disk_available_mib=round(metrics.get("disk_available", 0) / MIB),
@@ -623,7 +881,35 @@ def main() -> int:
     parser.add_argument("--state-dir", type=Path, default=Path("/run/csbot-health-alert"))
     parser.add_argument("--dry-run", action="store_true", help="read-only probes; no notifications or state writes")
     parser.add_argument("--send-test", action="store_true", help="send one non-mention Matrix test message")
+    parser.add_argument("--profile", choices=(PROFILE_FULL, PROFILE_EDGE, PROFILE_GCP), default=PROFILE_FULL,
+                        help="probe matrix: full host, edge cgserver, or gcp backend")
+    parser.add_argument("--matrix-proxy", default=DEFAULT_EGRESS_PROXY,
+                        help="HTTP proxy for the Matrix egress probe; empty/direct disables it")
+    parser.add_argument("--openai-proxy", default=None,
+                        help="HTTP proxy for the OpenAI egress probe; empty/direct probes directly "
+                             f"(default {DEFAULT_EGRESS_PROXY}, direct for --profile {PROFILE_GCP})")
+    parser.add_argument("--dsh-daemon-url", default="", help="resident DSH control plane URL (gcp)")
+    parser.add_argument("--dsh-token-file", default="", help="read-only control plane token file (gcp)")
+    parser.add_argument("--remote-backend-url", default="", help="Tailnet GCP backend probe URL (edge)")
+    parser.add_argument("--vnstat-iface", default="", help="vnstat interface to grade (gcp, e.g. ens4)")
+    parser.add_argument("--egress-warn-gib", type=float, default=EGRESS_WARN_GIB)
+    parser.add_argument("--egress-crit-gib", type=float, default=EGRESS_CRIT_GIB)
     args = parser.parse_args()
+    # GCP has direct international egress; cgserver still needs the local Mihomo hop.
+    default_openai_proxy = "" if args.profile == PROFILE_GCP else DEFAULT_EGRESS_PROXY
+    probe_options = {
+        "profile": args.profile,
+        "matrix_proxy": normalize_proxy(args.matrix_proxy),
+        "openai_proxy": normalize_proxy(
+            default_openai_proxy if args.openai_proxy is None else args.openai_proxy),
+        "dsh_daemon_url": args.dsh_daemon_url or (
+            "http://127.0.0.1:32151" if args.profile == PROFILE_GCP else ""),
+        "dsh_token_file": args.dsh_token_file,
+        "remote_backend_url": args.remote_backend_url,
+        "vnstat_iface": args.vnstat_iface,
+        "egress_warn_gib": args.egress_warn_gib,
+        "egress_crit_gib": args.egress_crit_gib,
+    }
     try:
         if args.send_test:
             config = load_config(args.config)
@@ -632,7 +918,7 @@ def main() -> int:
             return 0
         if args.dry_run:
             config = load_config(args.config) if args.config.exists() else None
-            run(args.root.resolve(), config, {}, True)
+            run(args.root.resolve(), config, {}, True, probe_options=probe_options)
             return 0
         config = load_config(args.config)
         args.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -649,7 +935,7 @@ def main() -> int:
             except (ValueError, OSError):
                 state = {"version": STATE_VERSION}
                 emit("state_reset", reason="previous_state_unreadable")
-            run(args.root.resolve(), config, state, False)
+            run(args.root.resolve(), config, state, False, probe_options=probe_options)
             save_state(path, state)
     except Exception as exc:
         emit("monitor_failed", error_type=type(exc).__name__)
