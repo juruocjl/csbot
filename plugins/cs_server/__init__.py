@@ -63,6 +63,7 @@ from ..major_hw import config as major_hw_config
 from ..major_hw import db as db_major_hw
 from ..major_hw import get_name as get_major_team_name
 from ..major_hw import major_teams, major_stage_name
+from ..major_hw.virtual_users import virtual_avatar, virtual_display_name
 
 require("allmsg")
 from ..allmsg import get_msg_status
@@ -2585,6 +2586,7 @@ class MajorHomeworkPick(BaseModel):
 class MajorHomeworkRankItem(BaseModel):
     uid: str = Field(..., description="QQ user id")
     avatar: str = Field(..., description="QQ avatar URL")
+    displayName: str | None = Field(None, description="Virtual user display name")
     probability: float | None = Field(None, description="Probability of passing the homework")
     expected: float | None = Field(None, description="Expected correct picks")
     score: float | None = Field(None, description="Current deterministic score")
@@ -2609,6 +2611,7 @@ class MajorHomeworkHistoryPoint(BaseModel):
 class MajorHomeworkHistoryItem(BaseModel):
     uid: str = Field(..., description="QQ user id")
     avatar: str = Field(..., description="QQ avatar URL")
+    displayName: str | None = Field(None, description="Virtual user display name")
     points: list[MajorHomeworkHistoryPoint] = Field(..., description="History points")
 
 class MajorHomeworkHistoryResponse(BaseModel):
@@ -2634,6 +2637,7 @@ class MajorHomeworkPersonalResponse(BaseModel):
     stage: str = Field(..., description="Major stage")
     uid: str = Field(..., description="QQ user id")
     avatar: str = Field(..., description="QQ avatar URL")
+    displayName: str | None = Field(None, description="Virtual user display name")
     categories: list[str] = Field(..., description="Pick categories")
     rows: list[MajorHomeworkPersonalRow] = Field(..., description="Personal homework history")
 
@@ -3012,7 +3016,8 @@ async def _major_playoff_homework_members(state: dict[str, object]) -> list[Majo
         ]
         players.append(MajorHomeworkRankItem(
             uid=uid,
-            avatar=f"https://q1.qlogo.cn/g?b=qq&nk={uid}&s=100",
+            avatar=await virtual_avatar(uid),
+            displayName=await virtual_display_name(uid),
             probability=None,
             expected=float(score),
             score=float(score),
@@ -3187,7 +3192,8 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
         }
         players.append(MajorHomeworkRankItem(
             uid=member.uid,
-            avatar=f"https://q1.qlogo.cn/g?b=qq&nk={member.uid}&s=100",
+            avatar=await virtual_avatar(member.uid),
+            displayName=await virtual_display_name(member.uid),
             probability=_major_safe_float(member.winrate),
             expected=_major_safe_float(member.expval),
             picks=grouped,
@@ -3233,7 +3239,8 @@ async def get_major_homework_history(_ = Depends(get_current_user)):
         players=[
             MajorHomeworkHistoryItem(
                 uid=uid,
-                avatar=f"https://q1.qlogo.cn/g?b=qq&nk={uid}&s=100",
+                avatar=await virtual_avatar(uid),
+                displayName=await virtual_display_name(uid),
                 points=points,
             )
             for uid, points in grouped.items()
@@ -3311,7 +3318,8 @@ async def get_major_homework_personal(
     return MajorHomeworkPersonalResponse(
         stage=major_stage_name,
         uid=target_uid,
-        avatar=f"https://q1.qlogo.cn/g?b=qq&nk={target_uid}&s=100",
+        avatar=await virtual_avatar(target_uid),
+        displayName=await virtual_display_name(target_uid),
         categories=MAJOR_HOMEWORK_CATEGORIES,
         rows=rows,
     )

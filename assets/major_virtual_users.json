@@ -1,0 +1,14 @@
+[
+  {
+    "uid": "v_advent",
+    "name": "CS-advent",
+    "aliases": ["advent", "259", "cs-advent", "csadvent", "advent259", "CS-ADVENT"],
+    "avatar": "/major-avatars/advent.jpg"
+  },
+  {
+    "uid": "v_wanjiqi",
+    "name": "玩机器",
+    "aliases": ["wanjiqi", "wjq", "玩机器", "玩机器CSGO", "玩机器csgo", "WANJIQI"],
+    "avatar": "/major-avatars/wanjiqi.jpg"
+  }
+]

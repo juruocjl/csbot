@@ -20,6 +20,7 @@ from ..utils import getcard
 
 from unicodedata import normalize
 import json
+import re
 import asyncio
 import gzip
 import time
@@ -30,6 +31,12 @@ from .gen_win_matrix import gen_win_matrix, resolve_team_name
 from .simulate import simulate
 from .verify import parse_simulation_results, evaluate_combination
 from .playoff_homework import validate_playoff_bracket
+from .virtual_users import (
+    get_registry,
+    register_virtual_user,
+    resolve_virtual_user,
+    virtual_display_name,
+)
 
 from .config import Config
 
@@ -221,6 +228,37 @@ allrank = on_command("赛事作业结果", priority=10, block=True)
 hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER)
 simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSER)
 hwout = on_command("作业导出", priority=10, block=True, permission=SUPERUSER)
+hwstreamer = on_command("主播作业", priority=10, block=True, permission=SUPERUSER)
+
+HWSTREAMER_USAGE = """/主播作业 <主播名或uid> <队伍1,队伍2,...>
+录入或更新当前阶段的主播作业（复用模糊匹配与合法性校验）
+/主播作业 列表
+查看已登记的虚拟主播
+/主播作业 添加 <uid> <名称> <头像URL> [别名1,别名2]
+热注册新主播（写入 local_storage，不改默认配置）"""
+
+
+async def _major_member_name(bot: Bot, gid: str, uid: str) -> str:
+    """排行/导出显示名：虚拟主播优先用配置昵称，普通用户回退群名片。"""
+    virtual_name = await virtual_display_name(uid)
+    if virtual_name:
+        return virtual_name
+    try:
+        return await getcard(bot, gid, uid)
+    except Exception:
+        logger.info(f"fail to get {uid}")
+        return str(uid)
+
+
+async def _major_text_target(arg: Message) -> str | None:
+    """命令文本参数解析为虚拟 uid；非虚拟用户返回 None。"""
+    text = normalize("NFKC", arg.extract_plain_text()).strip() if arg else ""
+    if not text:
+        return None
+    user = await resolve_virtual_user(text)
+    return user.uid if user else None
+
+
 
 def to_emoji(val):
     if val == 1.0:
@@ -248,14 +286,16 @@ async def hwhelp_funtion():
         await hwhelp.finish(f"""当前状态 {major_stage_name}
 /做作业 team30,team30,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team03,team03
 添加作业，可用队伍 {major_teams}
-/查看作业 [@某人]
-查看自己或某人作业概率
+/查看作业 [@某人|主播名]
+查看自己、某人或虚拟主播的作业概率
 /作业排名
 查看当前作业排名
-/作业详情 [@某人]
-查看自己或某人的正确率变化截图
+/作业详情 [@某人|主播名]
+查看自己、某人或虚拟主播的正确率变化截图
 /赛事作业结果
-查看赛事整体结果""")
+查看赛事整体结果
+/主播作业 <主播名或uid> <队伍1,队伍2,...>
+（管理员）录入或更新虚拟主播作业""")
 
 async def calc_val(uid: str) -> tuple[float, float] | None:
     if config.major_stage == "playoffs":
@@ -352,11 +392,17 @@ async def hwadd_function(message: MessageEvent, arg: Message = CommandArg()):
         await hwadd.finish(f">= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}")
 
 @hwsee.handle()
-async def hwsee_function(message: MessageEvent):
+async def hwsee_function(message: MessageEvent, arg: Message = CommandArg()):
     uid = message.get_user_id()
     for seg in message.get_message():
         if seg.type == "at" and seg.data['qq'] != 'all':
             uid = seg.data['qq']
+    text = normalize('NFKC', arg.extract_plain_text()).strip() if arg else ""
+    if text:
+        target_uid = await _major_text_target(arg)
+        if target_uid is None:
+            await hwsee.finish(f"未找到虚拟主播 {text}，可用 /主播作业 列表 查看")
+        uid = target_uid
     if config.major_stage == "playoffs":
         if quad := await db.get_uid_hw(uid, major_stage_name + "-quad"):
             if semi := await db.get_uid_hw(uid, major_stage_name + "-semi"):
@@ -387,26 +433,103 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
     res = sorted(res, key=lambda x: x.winrate, reverse=True)
     text = f"{major_stage_name} 作业排行"
     for member in res:
-        try:
-            uid = member.uid
-            name = await getcard(bot, gid, uid)
-            text+= f"\n{name} 通过率 {member.winrate}"
-        except:
-            logger.info(f"fail to get {member.uid}")
+        name = await _major_member_name(bot, gid, member.uid)
+        text += f"\n{name} 通过率 {member.winrate}"
     await hwrank.finish(text)
 
 @hwdetail.handle()
-async def hwdetail_function(bot: Bot, message: GroupMessageEvent):
+async def hwdetail_function(bot: Bot, message: GroupMessageEvent, arg: Message = CommandArg()):
     gid = message.get_session_id().split('_')[1]
     uid = message.get_user_id()
     for seg in message.get_message():
         if seg.type == "at" and seg.data['qq'] != 'all':
             uid = seg.data['qq']
+    text = normalize('NFKC', arg.extract_plain_text()).strip() if arg else ""
+    if text:
+        target_uid = await _major_text_target(arg)
+        if target_uid is None:
+            await hwdetail.finish(f"未找到虚拟主播 {text}，可用 /主播作业 列表 查看")
+        uid = target_uid
 
     screenshot = await _get_major_detail_screenshot(gid, uid)
     if screenshot:
         await hwdetail.finish(image_segment(screenshot))
     await hwdetail.finish("生成作业详情截图失败，请稍后重试")
+
+@hwstreamer.handle()
+async def hwstreamer_function(message: MessageEvent, arg: Message = CommandArg()):
+    text = normalize('NFKC', arg.extract_plain_text()).strip()
+    if not text:
+        await hwstreamer.finish(HWSTREAMER_USAGE)
+
+    head = text.split(None, 1)[0]
+
+    if head == "列表":
+        users = (await get_registry()).all()
+        if not users:
+            await hwstreamer.finish("暂无已登记的虚拟主播，可用 /主播作业 添加 <uid> <名称> <头像URL> [别名] 登记")
+        lines = [
+            f"{user.name}（{user.uid}）头像 {user.avatar or 'QQ 默认'} 别名 {list(user.aliases)}"
+            for user in users
+        ]
+        await hwstreamer.finish("已登记虚拟主播：\n" + "\n".join(lines))
+
+    if head == "添加":
+        parts = text.split(None, 4)
+        if len(parts) < 4:
+            await hwstreamer.finish("格式：/主播作业 添加 <uid> <名称> <头像URL> [别名1,别名2]")
+        _, streamer_uid, streamer_name, streamer_avatar = parts[:4]
+        aliases = [
+            item.strip()
+            for item in re.split(r"[,，;；|/]+", parts[4] if len(parts) > 4 else "")
+            if item.strip()
+        ]
+        try:
+            user = await register_virtual_user(streamer_uid, streamer_name, streamer_avatar, aliases)
+        except ValueError as error:
+            await hwstreamer.finish(f"登记失败：{error}")
+        await hwstreamer.finish(
+            f"已登记虚拟主播 {user.name}（{user.uid}），头像 {user.avatar or 'QQ 默认'}，别名 {list(user.aliases)}"
+        )
+
+    if len(major_teams) == 0:
+        await hwstreamer.finish("当前阶段不可做作业")
+    target, _, teams_text = text.partition(" ")
+    if not teams_text.strip():
+        await hwstreamer.finish(HWSTREAMER_USAGE)
+    user = await resolve_virtual_user(target)
+    if user is None:
+        await hwstreamer.finish(f"未找到虚拟主播 {target}，请先 /主播作业 添加 <uid> <名称> <头像URL> 登记")
+
+    teams = [get_name(team) for team in teams_text.split(",")]
+    await hwstreamer.send(f"{user.name} 模糊匹配得到队伍 {teams}，请仔细核对")
+    if config.major_stage == "playoffs":
+        if len(teams) != 7:
+            await hwstreamer.finish("请输入 7 个队伍：4强x4,2强x2,冠军x1")
+        quad = teams[:4]
+        semi = teams[4:6]
+        final = teams[6:]
+        if error := validate_playoff_bracket(quad, semi, final, playoff_matchups):
+            await hwstreamer.finish(f"作业不是合法锦标赛结果：{error}")
+        await db.add_hw(user.uid, major_stage_name + "-quad", json.dumps(quad))
+        await db.add_hw(user.uid, major_stage_name + "-semi", json.dumps(semi))
+        await db.add_hw(user.uid, major_stage_name + "-final", json.dumps(final))
+        await calc_val(user.uid)
+        await hwstreamer.finish(f"成功添加 {user.name} 的淘汰赛作业")
+    else:
+        if len(teams) != 10 or len(set(teams)) != 10:
+            await hwstreamer.finish("请输入十只不同队伍")
+        teams_json = json.dumps(teams)
+        await db.add_hw(user.uid, major_stage_name, teams_json)
+        await hwstreamer.send("成功添加预测，开始计算概率")
+        calc_result = await calc_val(user.uid)
+        assert calc_result is not None
+        prob_ge5, expected_value = calc_result
+        await save_current_homework_snapshot(user.uid, teams_json, prob_ge5, expected_value)
+        await hwstreamer.finish(
+            f"{user.name} >= 5 的概率 = {prob_ge5:.6f}，正确数期望 = {expected_value:.6f}"
+        )
+
 
 @hwupd.handle()
 async def hwupd_function():
@@ -602,7 +725,7 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
         for stage in major_all_stages:
             text += to_emoji(data.get(stage, float("nan")))
         text += " "
-        text += await getcard(bot, gid, uid)
+        text += await _major_member_name(bot, gid, uid)
         text += "\n"
     await allrank.finish(text)
 
@@ -617,7 +740,7 @@ async def hwout_function(bot: Bot, args: Message = CommandArg()):
     res = await db.get_all_hw(stage)
     out = []
     for member in res:
-        out.append({'nickname': await getcard(bot, gid, member.uid), 'teams': json.loads(member.teams)})
+        out.append({'nickname': await _major_member_name(bot, gid, member.uid), 'teams': json.loads(member.teams)})
     await hwout.finish(json.dumps({
         'stage': stage,
         'games': json.loads(await local_storage.get(f"hltvresult{eventid}", default="[]")),
