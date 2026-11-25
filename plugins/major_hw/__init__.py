@@ -956,7 +956,7 @@ async def _get_major_rank_screenshot(group_id: str | int) -> bytes | None:
         from ..cs_server import get_screenshot
 
         token = await server_db.get_bot_token(str(group_id))
-        return await get_screenshot("/major-homework", token, width=800)
+        return await get_screenshot("/major-homework", token, width=820)
     except Exception:
         logger.exception("failed to create major homework ranking screenshot")
         return None
