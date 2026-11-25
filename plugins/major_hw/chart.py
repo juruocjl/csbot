@@ -24,7 +24,7 @@ import math
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Collection, Iterable, Sequence
 
 import matplotlib
 
@@ -58,6 +58,9 @@ MUTED_TEXT = "#6b7a8b"
 SCALE_LINEAR = "linear"
 SCALE_LOG = "log"
 
+#: 打🌟（未购通行证）玩家的折线样式：长虚线，区别于对数模式跌零辅助短点线。
+STARRED_LINESTYLE = (0, (6, 3))
+
 PALETTE_MAPS = ("tab20", "tab20b", "tab20c")
 MAX_NAME_CHARS = 12
 
@@ -75,6 +78,7 @@ class HomeworkSeries:
     uid: str
     name: str
     points: list[tuple[int, float]] = field(default_factory=list)
+    starred: bool = False
 
     @property
     def first_match_count(self) -> int | None:
@@ -115,15 +119,19 @@ def chronological_games(games: Iterable | None) -> list:
 def build_series(
     rows: Iterable,
     names: dict[str, str] | None = None,
+    *,
+    starred_uids: Collection[str] | None = None,
 ) -> list[HomeworkSeries]:
     """把 ``MajorHWSnapshot`` 行整理成每人一条序列。
 
     * 同一 ``uid`` 同一 ``match_count`` 有多条（赛中改作业）时取 ``created_at`` 最新的一条；
     * ``winrate`` 为 ``NaN`` / 非有限值的点直接忽略；
-    * 中途入场玩家只从自己首个快照点开始，绝不补 0、也不要求长度一致。
+    * 中途入场玩家只从自己首个快照点开始，绝不补 0、也不要求长度一致；
+    * ``starred_uids`` 命中的玩家序列标记 ``starred=True``（仅影响线条样式）。
     """
 
     names = names or {}
+    starred_set = {str(uid).strip() for uid in (starred_uids or ()) if str(uid).strip()}
     buckets: dict[str, dict[int, tuple[int, float]]] = {}
     for row in rows:
         uid = str(getattr(row, "uid", "") or "").strip()
@@ -151,7 +159,12 @@ def build_series(
     series: list[HomeworkSeries] = []
     for uid, bucket in buckets.items():
         points = sorted((match_count, value) for match_count, (_, value) in bucket.items())
-        series.append(HomeworkSeries(uid=uid, name=str(names.get(uid) or uid), points=points))
+        series.append(HomeworkSeries(
+            uid=uid,
+            name=str(names.get(uid) or uid),
+            points=points,
+            starred=uid in starred_set,
+        ))
     return series
 
 
@@ -415,7 +428,7 @@ def _render(
             framealpha=0.96,
             edgecolor="#d6dde5",
             labelspacing=0.5,
-            handlelength=1.9,
+            handlelength=2.6,
             columnspacing=1.0,
             prop=_font(font, 9.0),
             title_fontproperties=_font(font, 9.6),
@@ -446,6 +459,7 @@ def _plot_series(
     """单条曲线：线性直接画到 0；对数只画正概率并把归零点拉到底部打 ×。"""
 
     label = f"{display_name(item.name)} ({(item.latest_winrate or 0.0) * 100:.2f}%)"
+    linestyle = STARRED_LINESTYLE if item.starred else "-"
 
     if not is_log:
         xs = [match_count for match_count, _ in item.points]
@@ -455,6 +469,7 @@ def _plot_series(
             ys,
             color=color,
             linewidth=1.9,
+            linestyle=linestyle,
             marker="o",
             markersize=4.6,
             markerfacecolor="white",
@@ -463,6 +478,7 @@ def _plot_series(
             label=label,
             zorder=3,
             solid_capstyle="round",
+            dash_capstyle="round",
         )
         zero_index = first_zero_index(item)
         if zero_index is not None:
@@ -486,6 +502,7 @@ def _plot_series(
             [winrate for _, winrate in positive_points],
             color=color,
             linewidth=1.9,
+            linestyle=linestyle,
             marker="o",
             markersize=4.6,
             markerfacecolor="white",
@@ -494,6 +511,7 @@ def _plot_series(
             label=label,
             zorder=3,
             solid_capstyle="round",
+            dash_capstyle="round",
         )
     else:
         # 全程 0：没有正概率可画，仅在图例占位（画一个底部 × 说明已淘汰）。
@@ -594,6 +612,7 @@ __all__ = [
     "HomeworkSeries",
     "SCALE_LINEAR",
     "SCALE_LOG",
+    "STARRED_LINESTYLE",
     "build_palette",
     "build_series",
     "chronological_games",

@@ -26,6 +26,7 @@ import asyncio
 import gzip
 import time
 from pathlib import Path
+from typing import Sequence
 from sqlalchemy import update, select
 
 from .gen_win_matrix import gen_win_matrix, resolve_team_name
@@ -38,6 +39,13 @@ from .virtual_users import (
     register_virtual_user,
     resolve_virtual_user,
     virtual_display_name,
+)
+from .stars import (
+    add_starred_uids,
+    assign_homework_ranks,
+    get_starred_uids,
+    list_starred_uids,
+    remove_starred_uids,
 )
 
 from .config import Config
@@ -252,6 +260,7 @@ hwupd = on_command("更新作业", priority=10, block=True, permission=SUPERUSER
 simupd = on_command("更新模拟", priority=10, block=True, permission=SUPERUSER)
 hwout = on_command("作业导出", priority=10, block=True, permission=SUPERUSER)
 hwstreamer = on_command("主播作业", priority=10, block=True, permission=SUPERUSER)
+hwstar = on_command("作业打星", aliases={"打星"}, priority=10, block=True, permission=SUPERUSER)
 
 HWSTREAMER_USAGE = """/主播作业 <主播名或uid> <队伍1,队伍2,...>
 录入或更新当前阶段的主播作业（复用模糊匹配与合法性校验）
@@ -259,6 +268,16 @@ HWSTREAMER_USAGE = """/主播作业 <主播名或uid> <队伍1,队伍2,...>
 查看已登记的虚拟主播
 /主播作业 添加 <uid> <名称> <头像URL> [别名1,别名2]
 热注册新主播（写入 local_storage，不改默认配置）"""
+
+HWSTAR_USAGE = """用法：
+/作业打星 列表 —— 查看当前赛事打🌟名单（未购通行证，不占名次）
+/作业打星 @某人 [更多@ / QQ号 / 主播名] —— 加入打🌟名单
+/作业打星 取消 @某人 [更多@ / QQ号 / 主播名] —— 移出打🌟名单
+同一届 Major 的 stage1/stage2/stage3/playoffs 共享名单，不同赛事彼此隔离。"""
+
+STAR_LIST_TOKENS = {"列表", "list", "ls"}
+STAR_ADD_TOKENS = {"添加", "add"}
+STAR_REMOVE_TOKENS = {"取消", "移除", "删除", "del", "remove", "rm"}
 
 
 async def _major_member_name(bot: Bot, gid: str, uid: str) -> str:
@@ -304,7 +323,11 @@ async def hwhelp_funtion():
 /作业排名
 查看当前作业排名
 /赛事作业结果
-查看赛事整体结果""")
+查看赛事整体结果
+/作业打星 列表
+（管理员）查看当前赛事打🌟名单（未购通行证，不占名次）
+/作业打星 @某人 [更多目标]
+（管理员）加入打🌟名单；/作业打星 取消 @某人 移出""")
     else:
         await hwhelp.finish(f"""当前状态 {major_stage_name}
 /做作业 team30,team30,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team31/team32,team03,team03
@@ -322,7 +345,11 @@ async def hwhelp_funtion():
 /赛事作业结果
 查看赛事整体结果
 /主播作业 <主播名或uid> <队伍1,队伍2,...>
-（管理员）录入或更新虚拟主播作业""")
+（管理员）录入或更新虚拟主播作业
+/作业打星 列表
+（管理员）查看当前赛事打🌟名单（未购通行证，不占名次）
+/作业打星 @某人 [更多目标]
+（管理员）加入打🌟名单；/作业打星 取消 @某人 移出""")
 
 async def calc_val(uid: str) -> tuple[float, float] | None:
     if config.major_stage == "playoffs":
@@ -458,10 +485,13 @@ async def hwrank_function(bot: Bot, message: GroupMessageEvent):
 
     res = await db.get_all_hw(major_stage_name)
     res = sorted(res, key=lambda x: x.winrate, reverse=True)
+    starred_uids = await get_starred_uids(config.major_name)
+    ranks = assign_homework_ranks([member.uid for member in res], starred_uids)
     text = f"{major_stage_name} 作业排行"
-    for member in res:
+    for member, (starred, rank) in zip(res, ranks):
         name = await _major_member_name(bot, gid, member.uid)
-        text += f"\n{name} 通过率 {member.winrate}"
+        prefix = "🌟 " if starred else f"{rank}. "
+        text += f"\n{prefix}{name} 通过率 {member.winrate}"
     await hwrank.finish(text)
 
 @hwdetail.handle()
@@ -585,6 +615,123 @@ async def parse_chart_request(arg: Message | None, sender_uid: str) -> ChartRequ
     return request
 
 
+def parse_star_action(arg: Message | None) -> tuple[str, list[str], list[str]]:
+    """解析 ``/作业打星`` 参数：``(action, at_uids, text_tokens)``。
+
+    ``action`` 为 ``list`` / ``add`` / ``remove``；只从 ``CommandArg()`` 取 ``@``，
+    绝不读整条消息，避免把前置 ``@bot`` 当成目标。
+    """
+
+    at_uids = chart_at_targets(arg)
+    tokens = chart_text_tokens(arg)
+    action = "add"
+    if tokens:
+        head = tokens[0].casefold()
+        if head in STAR_LIST_TOKENS:
+            action = "list"
+            tokens = tokens[1:]
+        elif head in STAR_REMOVE_TOKENS:
+            action = "remove"
+            tokens = tokens[1:]
+        elif head in STAR_ADD_TOKENS:
+            action = "add"
+            tokens = tokens[1:]
+    return action, at_uids, tokens
+
+
+async def parse_star_targets(
+    at_uids: Sequence[str],
+    tokens: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    """把 ``@`` / QQ 号 / 虚拟主播名解析成 UID 列表，返回 ``(uids, unknown)``。"""
+
+    uids: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+
+    def add(uid: str) -> None:
+        value = str(uid).strip()
+        if value and value not in seen:
+            seen.add(value)
+            uids.append(value)
+
+    for qq in at_uids:
+        add(qq)
+    for token in tokens:
+        virtual_user = await resolve_virtual_user(token)
+        if virtual_user is not None:
+            add(virtual_user.uid)
+            continue
+        if CHART_QQ_UID.match(token):
+            add(token)
+            continue
+        unknown.append(token)
+    return uids, unknown
+
+
+def _star_gid(message: MessageEvent) -> str | None:
+    parts = str(message.get_session_id()).split("_")
+    if len(parts) > 1 and parts[0] == "group":
+        return parts[1]
+    return None
+
+
+async def _star_member_lines(bot: Bot, gid: str | None, uids: list[str]) -> list[str]:
+    lines: list[str] = []
+    for uid in uids:
+        name = await _major_member_name(bot, gid or "", uid)
+        lines.append(f"🌟 {name}（{uid}）" if name != uid else f"🌟 {uid}")
+    return lines
+
+
+async def _star_list_text(bot: Bot, gid: str | None, event_name: str) -> str:
+    uids = await list_starred_uids(event_name)
+    if not uids:
+        return f"{event_name} 暂无打🌟成员。\n{HWSTAR_USAGE}"
+    lines = await _star_member_lines(bot, gid, uids)
+    return f"{event_name} 打🌟名单（{len(uids)} 人，未购通行证，不占名次）：\n" + "\n".join(lines) + f"\n{HWSTAR_USAGE}"
+
+
+@hwstar.handle()
+async def hwstar_function(bot: Bot, message: MessageEvent, arg: Message = CommandArg()):
+    event_name = config.major_name
+    action, at_uids, tokens = parse_star_action(arg)
+    gid = _star_gid(message)
+
+    if action == "list":
+        await hwstar.finish(await _star_list_text(bot, gid, event_name))
+    if not at_uids and not tokens:
+        await hwstar.finish(await _star_list_text(bot, gid, event_name))
+
+    targets, unknown = await parse_star_targets(at_uids, tokens)
+    if unknown:
+        await hwstar.finish(f"未识别目标：{'、'.join(unknown)}\n{HWSTAR_USAGE}")
+    if not targets:
+        await hwstar.finish(HWSTAR_USAGE)
+
+    if action == "remove":
+        removed, current = await remove_starred_uids(event_name, targets)
+        if removed:
+            lines = await _star_member_lines(bot, gid, removed)
+            head = f"已移出打🌟名单 {len(removed)} 人：\n" + "\n".join(lines)
+        else:
+            head = "目标均不在当前打🌟名单内"
+    else:
+        added, current = await add_starred_uids(event_name, targets)
+        if added:
+            lines = await _star_member_lines(bot, gid, added)
+            head = f"已加入打🌟名单 {len(added)} 人：\n" + "\n".join(lines)
+        else:
+            head = "目标均已在当前打🌟名单内"
+
+    if current:
+        lines = await _star_member_lines(bot, gid, current)
+        tail = f"当前名单（{len(current)} 人）：\n" + "\n".join(lines)
+    else:
+        tail = "当前名单为空"
+    await hwstar.finish(f"{head}\n{tail}")
+
+
 async def _major_chart_names(bot: Bot, gid: str, uids: list[str]) -> dict[str, str]:
     """并发解析展示名：主播用配置昵称、群友用群名片；单个失败只回退 uid。"""
 
@@ -658,7 +805,11 @@ async def send_major_chart(
             CHART_PARTIAL_HINT.format(targets="、".join(names.get(uid, uid) for uid in missing))
         )
 
-    series = hw_chart.build_series(rows, names)
+    series = hw_chart.build_series(
+        rows,
+        names,
+        starred_uids=await get_starred_uids(config.major_name),
+    )
     if not series:
         await matcher.finish(chart_empty_hint(requested, sender_uid))
 
@@ -805,7 +956,7 @@ async def _get_major_rank_screenshot(group_id: str | int) -> bytes | None:
         from ..cs_server import get_screenshot
 
         token = await server_db.get_bot_token(str(group_id))
-        return await get_screenshot("/major-homework", token, width=760)
+        return await get_screenshot("/major-homework", token, width=800)
     except Exception:
         logger.exception("failed to create major homework ranking screenshot")
         return None
@@ -941,6 +1092,7 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
                 res[member.uid] = {}
             res[member.uid][stage] = member.winrate
     text = ""
+    starred_uids = await get_starred_uids(config.major_name)
     for uid, data in res.items():
         right = 0
         wrong = 0
@@ -961,6 +1113,8 @@ async def allrank_function(bot: Bot, message: GroupMessageEvent):
             text += to_emoji(data.get(stage, float("nan")))
         text += " "
         text += await _major_member_name(bot, gid, uid)
+        if str(uid).strip() in starred_uids:
+            text += " 🌟"
         text += "\n"
     await allrank.finish(text)
 

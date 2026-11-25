@@ -64,6 +64,7 @@ from ..major_hw import db as db_major_hw
 from ..major_hw import get_name as get_major_team_name
 from ..major_hw import major_teams, major_stage_name
 from ..major_hw.virtual_users import virtual_avatar, virtual_display_name
+from ..major_hw.stars import assign_homework_ranks, get_starred_uids, is_starred_uid
 
 require("allmsg")
 from ..allmsg import get_msg_status
@@ -2591,6 +2592,8 @@ class MajorHomeworkRankItem(BaseModel):
     expected: float | None = Field(None, description="Expected correct picks")
     score: float | None = Field(None, description="Current deterministic score")
     scoreLabel: str | None = Field(None, description="Human-readable score breakdown")
+    rank: int | None = Field(None, description="Rank excluding starred players; null when starred")
+    isStarred: bool = Field(False, description="Whether player is starred for this Major event")
     picks: dict[str, list[MajorHomeworkPick]] = Field(..., description="Grouped picks")
 
 class MajorHomeworkRankResponse(BaseModel):
@@ -2612,6 +2615,7 @@ class MajorHomeworkHistoryItem(BaseModel):
     uid: str = Field(..., description="QQ user id")
     avatar: str = Field(..., description="QQ avatar URL")
     displayName: str | None = Field(None, description="Virtual user display name")
+    isStarred: bool = Field(False, description="Whether player is starred for this Major event")
     points: list[MajorHomeworkHistoryPoint] = Field(..., description="History points")
 
 class MajorHomeworkHistoryResponse(BaseModel):
@@ -2638,6 +2642,7 @@ class MajorHomeworkPersonalResponse(BaseModel):
     uid: str = Field(..., description="QQ user id")
     avatar: str = Field(..., description="QQ avatar URL")
     displayName: str | None = Field(None, description="Virtual user display name")
+    isStarred: bool = Field(False, description="Whether player is starred for this Major event")
     categories: list[str] = Field(..., description="Pick categories")
     rows: list[MajorHomeworkPersonalRow] = Field(..., description="Personal homework history")
 
@@ -3025,8 +3030,7 @@ async def _major_playoff_homework_members(state: dict[str, object]) -> list[Majo
             picks=grouped,
         ))
 
-    return sorted(
-        players,
+    players.sort(
         key=lambda player: (
             player.score or 0.0,
             sum(1 for pick in player.picks.get("冠军", []) if pick.status == "pending"),
@@ -3035,6 +3039,12 @@ async def _major_playoff_homework_members(state: dict[str, object]) -> list[Majo
         ),
         reverse=True,
     )
+    starred_uids = await get_starred_uids(major_hw_config.major_name)
+    rank_pairs = assign_homework_ranks([player.uid for player in players], starred_uids)
+    for player, (starred, rank) in zip(players, rank_pairs):
+        player.isStarred = starred
+        player.rank = rank
+    return players
 
 def _major_records_at_count(games: list, match_count: int) -> dict[str, tuple[int, int]]:
     chronological_games = list(reversed(games))
@@ -3183,7 +3193,9 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
     members = sorted(members, key=lambda item: _major_sort_value(item.winrate), reverse=True)
 
     players: list[MajorHomeworkRankItem] = []
-    for member in members:
+    starred_uids = await get_starred_uids(major_hw_config.major_name)
+    rank_pairs = assign_homework_ranks([member.uid for member in members], starred_uids)
+    for member, (starred, rank) in zip(members, rank_pairs):
         teams = json.loads(member.teams)
         grouped = {
             "3-0": _major_sort_picks([_major_pick(team, "3-0", records) for team in teams[:2]]),
@@ -3196,6 +3208,8 @@ async def get_major_homework_rank(_ = Depends(get_current_user)):
             displayName=await virtual_display_name(member.uid),
             probability=_major_safe_float(member.winrate),
             expected=_major_safe_float(member.expval),
+            rank=rank,
+            isStarred=starred,
             picks=grouped,
         ))
 
@@ -3234,6 +3248,7 @@ async def get_major_homework_history(_ = Depends(get_current_user)):
             expected=_major_safe_float(snapshot.expval),
         ))
 
+    starred_uids = await get_starred_uids(major_hw_config.major_name)
     return MajorHomeworkHistoryResponse(
         stage=major_stage_name,
         players=[
@@ -3241,6 +3256,7 @@ async def get_major_homework_history(_ = Depends(get_current_user)):
                 uid=uid,
                 avatar=await virtual_avatar(uid),
                 displayName=await virtual_display_name(uid),
+                isStarred=uid in starred_uids,
                 points=points,
             )
             for uid, points in grouped.items()
@@ -3320,6 +3336,7 @@ async def get_major_homework_personal(
         uid=target_uid,
         avatar=await virtual_avatar(target_uid),
         displayName=await virtual_display_name(target_uid),
+        isStarred=await is_starred_uid(major_hw_config.major_name, target_uid),
         categories=MAJOR_HOMEWORK_CATEGORIES,
         rows=rows,
     )
