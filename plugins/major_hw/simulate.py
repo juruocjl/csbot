@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache, partial
 from multiprocessing import Pool
 from os import cpu_count
@@ -61,15 +61,18 @@ class Record:
         wins: 胜场数
         losses: 负场数
         teams_faced: 已对阵的队伍集合
+        match_history: 按轮次先后记录的 ``(对手, 是否获胜)`` 列表
+            （索引 ``k`` 对应第 ``k + 1`` 轮，用于盘中还原上一轮末的精确快照）
     """
     wins: int
     losses: int
     teams_faced: set[Team]
+    match_history: list[tuple[Team, bool]] = field(default_factory=list)
 
     @staticmethod
     def new() -> Record:
         """创建新的比赛记录"""
-        return Record(wins=0, losses=0, teams_faced=set())
+        return Record(wins=0, losses=0, teams_faced=set(), match_history=[])
 
     @property
     def diff(self) -> int:
@@ -205,6 +208,8 @@ class SwissSystem:
         # 记录对阵队伍
         self.records[team_a].teams_faced.add(team_b)
         self.records[team_b].teams_faced.add(team_a)
+        self.records[team_a].match_history.append((team_b, team_a_win))
+        self.records[team_b].match_history.append((team_a, not team_a_win))
 
         # 处理晋级/淘汰
         if is_bo3:
@@ -239,12 +244,95 @@ class SwissSystem:
         self.records[loser].losses += 1
         self.records[winner].teams_faced.add(loser)
         self.records[loser].teams_faced.add(winner)
+        self.records[winner].match_history.append((loser, True))
+        self.records[loser].match_history.append((winner, False))
         if is_bo3:
             for team in [winner, loser]:
                 if team in self.remaining and (self.records[team].wins == 3 or self.records[team].losses == 3):
                     self.remaining.remove(team)
 
+    def _has_mid_round_progress(self, round_num: int) -> bool:
+        """当前状态是否已经打完了第 ``round_num`` 轮的部分场次。
+
+        ``match_history`` 必须与 ``wins + losses`` 完全一致，否则（例如单测里
+        手工构造的 ``Record`` 未填历史）一律视为轮次边界，退回原有快速路径。
+        """
+
+        history_consistent = all(
+            len(record.match_history) == record.wins + record.losses
+            for record in self.records.values()
+        )
+        return history_consistent and any(
+            len(record.match_history) >= round_num
+            for record in self.records.values()
+        )
+
+    def _unplayed_teams(self, round_num: int) -> set[Team]:
+        """本场次尚未开打第 ``round_num`` 轮、且仍在赛程内的队伍。"""
+
+        return {
+            team
+            for team in self.remaining
+            if self.records[team].wins + self.records[team].losses == round_num - 1
+        }
+
+    def _round_matches_from_previous_round(self, round_num: int) -> list[tuple[Team, Team]]:
+        """盘中重算：先还原第 ``round_num - 1`` 轮结束时的快照，再锁定整轮对阵。
+
+        瑞士轮第 R 轮的对阵必须在第 R-1 轮全部结束时一次性锁定；本轮先打完的
+        场次绝不能反过来改写同轮尚未开打场次的 Buchholz 排序。因此这里用
+        ``match_history`` 还原上一轮末的精确战绩/对手集合，复用既有配对逻辑得到
+        **整轮真实对阵**，最后剔除本轮已经打完的场次。
+        """
+
+        unplayed_teams = self._unplayed_teams(round_num)
+        prev_records: dict[Team, Record] = {}
+        for team, record in self.records.items():
+            prev_history = list(record.match_history[: round_num - 1])
+            prev_wins = sum(1 for _, won in prev_history if won)
+            prev_records[team] = Record(
+                wins=prev_wins,
+                losses=len(prev_history) - prev_wins,
+                teams_faced={opp for opp, _ in prev_history},
+                match_history=prev_history,
+            )
+        prev_remaining = {
+            team
+            for team, record in prev_records.items()
+            if len(record.match_history) >= round_num - 1
+            and record.wins < 3
+            and record.losses < 3
+        }
+        prev_state = SwissSystem(
+            win_matrix=self.win_matrix,
+            records=prev_records,
+            remaining=prev_remaining,
+            force_bo3=self.force_bo3,
+        )
+        # prev_state 全队历史都不超过 round_num - 1，必定走快速路径，不会递归。
+        full_round_matches = prev_state.round_matches(round_num)
+        remaining_matches = [
+            (team_a, team_b)
+            for team_a, team_b in full_round_matches
+            if team_a in unplayed_teams and team_b in unplayed_teams
+        ]
+        matched = {team for pair in remaining_matches for team in pair}
+        leftover = unplayed_teams - matched
+        if leftover:
+            # 极端非标准数据的防御性兜底：只对未被覆盖的队伍补配对，绝不静默丢队。
+            fallback_state = SwissSystem(
+                win_matrix=self.win_matrix,
+                records=prev_state.records,
+                remaining=set(leftover),
+                force_bo3=self.force_bo3,
+            )
+            remaining_matches.extend(fallback_state.round_matches(round_num))
+        return remaining_matches
+
     def round_matches(self, round_num: int) -> list[tuple[Team, Team]]:
+        if self._has_mid_round_progress(round_num):
+            return self._round_matches_from_previous_round(round_num)
+
         # 按战绩分组
         groups: dict[int, list[Team]] = {}  # 用字典存储不同战绩的组
         eligible_teams = [
@@ -529,6 +617,7 @@ class Simulation:
                     wins=record.wins,
                     losses=record.losses,
                     teams_faced=set(record.teams_faced),
+                    match_history=list(record.match_history),
                 )
                 for team, record in ss.records.items()
             },

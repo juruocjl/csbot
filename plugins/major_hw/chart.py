@@ -480,40 +480,16 @@ def _plot_series(
             solid_capstyle="round",
             dash_capstyle="round",
         )
-        zero_index = first_zero_index(item)
-        if zero_index is not None:
-            axes.plot(
-                [zero_index],
-                [0.0],
-                linestyle="none",
-                marker="x",
-                markersize=8.4,
-                markeredgewidth=1.9,
-                color="#111820",
-                zorder=6,
-                label="_nolegend_",
-            )
+        # 线性模式完整折线仍然连续，但每一处「>0 跌到 0」都要打 × 标注。
+        previous_winrate: float | None = None
+        for match_count, winrate in item.points:
+            if previous_winrate is not None and previous_winrate > 0.0 and winrate <= 0.0:
+                _plot_zero_marker(axes, match_count, 0.0, label="_nolegend_")
+            previous_winrate = winrate
         return
 
     positive_points = [(match_count, winrate) for match_count, winrate in item.points if winrate > 0.0]
-    if positive_points:
-        axes.plot(
-            [match_count for match_count, _ in positive_points],
-            [winrate for _, winrate in positive_points],
-            color=color,
-            linewidth=1.9,
-            linestyle=linestyle,
-            marker="o",
-            markersize=4.6,
-            markerfacecolor="white",
-            markeredgewidth=1.3,
-            markeredgecolor=color,
-            label=label,
-            zorder=3,
-            solid_capstyle="round",
-            dash_capstyle="round",
-        )
-    else:
+    if not positive_points:
         # 全程 0：没有正概率可画，仅在图例占位（画一个底部 × 说明已淘汰）。
         first_match_count = item.first_match_count or 0
         axes.plot(
@@ -527,29 +503,99 @@ def _plot_series(
             zorder=6,
             label=label,
         )
-
-    zero_index = first_zero_index(item)
-    if zero_index is None:
         return
-    last_match_count, last_winrate = positive_points[-1]
+
+    # 对数坐标没有 0，按「连续正区间 / 连续零区间」切段绘制：
+    # 主线绝不跨过 0 点桥接，归零与复活都用短虚线 + 底部 × 表达。
+    runs: list[tuple[bool, list[tuple[int, float]]]] = []
+    for point in item.points:
+        is_positive = point[1] > 0.0
+        if runs and runs[-1][0] == is_positive:
+            runs[-1][1].append(point)
+        else:
+            runs.append((is_positive, [point]))
+
+    previous_positive: tuple[int, float] | None = None
+    labelled = False
+    for index, (is_positive, run) in enumerate(runs):
+        xs = [match_count for match_count, _ in run]
+        ys = [winrate for _, winrate in run]
+        if is_positive:
+            axes.plot(
+                xs,
+                ys,
+                color=color,
+                linewidth=1.9,
+                linestyle=linestyle,
+                marker="o",
+                markersize=4.6,
+                markerfacecolor="white",
+                markeredgewidth=1.3,
+                markeredgecolor=color,
+                label=label if not labelled else "_nolegend_",
+                zorder=3,
+                solid_capstyle="round",
+                dash_capstyle="round",
+            )
+            labelled = True
+            previous_positive = run[-1]
+            continue
+
+        zero_start_x = run[0][0]
+        zero_end_x = run[-1][0]
+        next_positive: tuple[int, float] | None = None
+        if index + 1 < len(runs):
+            next_positive = runs[index + 1][1][0]
+
+        if previous_positive is not None:
+            previous_x, previous_y = previous_positive
+            _plot_log_helper(axes, [previous_x, zero_start_x], [previous_y, floor_value], color)
+            _plot_zero_marker(axes, zero_start_x, floor_value)
+
+        if next_positive is not None:
+            next_x, next_y = next_positive
+            if previous_positive is None:
+                # 序列以 0 开局后复活：零区间起点补一个底部 ×。
+                _plot_zero_marker(axes, zero_end_x, floor_value)
+            elif zero_end_x > zero_start_x:
+                # 连续多场为 0：底部补一段水平短虚线，避免虚线跨场斜连。
+                _plot_log_helper(
+                    axes,
+                    [zero_start_x, zero_end_x],
+                    [floor_value, floor_value],
+                    color,
+                )
+            _plot_log_helper(axes, [zero_end_x, next_x], [floor_value, next_y], color)
+
+        previous_positive = None
+
+
+def _plot_zero_marker(axes, match_count: int, y: float, *, label: str = "_nolegend_") -> None:
+    """在 ``(match_count, y)`` 画一个归零 ``×``。"""
+
     axes.plot(
-        [last_match_count, zero_index],
-        [last_winrate, floor_value],
-        color=color,
-        linewidth=1.4,
-        linestyle=(0, (3, 2)),
-        zorder=2,
-        label="_nolegend_",
-    )
-    axes.plot(
-        [zero_index],
-        [floor_value],
+        [match_count],
+        [y],
         linestyle="none",
         marker="x",
         markersize=8.4,
         markeredgewidth=1.9,
         color="#111820",
         zorder=6,
+        label=label,
+    )
+
+
+def _plot_log_helper(axes, xs: list[int], ys: list[float], color) -> None:
+    """对数模式的跌零/复活辅助短虚线。"""
+
+    axes.plot(
+        xs,
+        ys,
+        color=color,
+        linewidth=1.4,
+        linestyle=(0, (3, 2)),
+        zorder=2,
         label="_nolegend_",
     )
 

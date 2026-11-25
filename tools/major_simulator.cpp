@@ -24,6 +24,10 @@ struct Record {
     int wins = 0;
     int losses = 0;
     uint32_t faced = 0;
+    // 按轮次先后记录的 (对手, 是否获胜)；栈上固定长度，零堆分配。
+    int opp_history[8] = {};
+    bool win_history[8] = {};
+    int history_len = 0;
 
     int diff() const {
         return wins - losses;
@@ -134,6 +138,16 @@ static void apply_result(const Input& input, State& state, int winner, int loser
     state.records[loser].losses += 1;
     state.records[winner].faced |= 1u << loser;
     state.records[loser].faced |= 1u << winner;
+    if (state.records[winner].history_len < 8) {
+        state.records[winner].opp_history[state.records[winner].history_len] = loser;
+        state.records[winner].win_history[state.records[winner].history_len] = true;
+        state.records[winner].history_len += 1;
+    }
+    if (state.records[loser].history_len < 8) {
+        state.records[loser].opp_history[state.records[loser].history_len] = winner;
+        state.records[loser].win_history[state.records[loser].history_len] = false;
+        state.records[loser].history_len += 1;
+    }
 
     if (bo3) {
         for (int team : {winner, loser}) {
@@ -232,6 +246,72 @@ static std::vector<std::pair<int, int>> try_match_teams(const Input& input, cons
 
 static std::vector<std::pair<int, int>> round_matches(const Input& input, const State& state, int round_num) {
     int n = static_cast<int>(input.teams.size());
+
+    // 盘中重算：本轮已有场次打完时，先还原第 round_num-1 轮结束时的快照锁定整轮对阵。
+    bool has_mid_round_progress = false;
+    for (int i = 0; i < n; ++i) {
+        if (state.records[i].history_len >= round_num) {
+            has_mid_round_progress = true;
+            break;
+        }
+    }
+    if (has_mid_round_progress) {
+        State prev_state;
+        prev_state.records.assign(n, Record{});
+        const int keep = round_num - 1;
+        for (int i = 0; i < n; ++i) {
+            const Record& record = state.records[i];
+            Record& prev = prev_state.records[i];
+            const int limit = std::min(record.history_len, keep);
+            for (int j = 0; j < limit && prev.history_len < 8; ++j) {
+                const int opponent = record.opp_history[j];
+                prev.opp_history[prev.history_len] = opponent;
+                prev.win_history[prev.history_len] = record.win_history[j];
+                prev.history_len += 1;
+                prev.faced |= 1u << opponent;
+                if (record.win_history[j]) {
+                    prev.wins += 1;
+                } else {
+                    prev.losses += 1;
+                }
+            }
+        }
+        prev_state.remaining = 0;
+        for (int i = 0; i < n; ++i) {
+            const Record& prev = prev_state.records[i];
+            if (prev.history_len >= keep && prev.wins < 3 && prev.losses < 3) {
+                prev_state.remaining |= 1u << i;
+            }
+        }
+        // prev_state 全队历史都不超过 round_num-1，必定命中下方快速路径，不会递归。
+        auto full_matches = round_matches(input, prev_state, round_num);
+
+        uint32_t unplayed = 0;
+        for (int i = 0; i < n; ++i) {
+            if (active(state, i) && games_played(state.records[i]) == round_num - 1) {
+                unplayed |= 1u << i;
+            }
+        }
+        std::vector<std::pair<int, int>> remaining_matches;
+        uint32_t matched = 0;
+        for (auto [a, b] : full_matches) {
+            const uint32_t pair_mask = (1u << a) | (1u << b);
+            if ((unplayed & pair_mask) == pair_mask) {
+                remaining_matches.emplace_back(a, b);
+                matched |= pair_mask;
+            }
+        }
+        const uint32_t leftover = unplayed & ~matched;
+        if (leftover != 0) {
+            // 极端非标准数据的防御性兜底：只补未覆盖队伍，绝不静默丢队。
+            State fallback = prev_state;
+            fallback.remaining = leftover;
+            auto extra = round_matches(input, fallback, round_num);
+            remaining_matches.insert(remaining_matches.end(), extra.begin(), extra.end());
+        }
+        return remaining_matches;
+    }
+
     std::map<int, std::vector<int>, std::greater<int>> groups;
     std::vector<int> eligible;
     for (int i = 0; i < n; ++i) {
