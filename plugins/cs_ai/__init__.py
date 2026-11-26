@@ -74,6 +74,7 @@ __plugin_meta__ = PluginMetadata(
 
 config = get_plugin_config(Config)
 runtime_config.register_default("cs_ai_model", config.cs_ai_model)
+runtime_config.register_default("cs_ai_blocked_users", [])
 
 GROUP_RANKING_RESULT_LIMIT = 10
 AI_FORWARD_MIN_CHARS = 500
@@ -1062,7 +1063,22 @@ class DataManager:
         
 db = DataManager()
 
+async def _is_blocked_user(user_id: object) -> bool:
+    """群聊 AI 黑名单：命中后相关规则一律拒绝，allmsg 日志不受影响。"""
+    uid = str(user_id).strip()
+    if not uid:
+        return False
+    try:
+        blocked = await runtime_config.get("cs_ai_blocked_users")
+        return uid in {str(item).strip() for item in blocked}
+    except Exception:
+        logger.warning("读取 AI 黑名单热配置失败，按未拉黑处理")
+        return False
+
+
 async def _human_group(bot: Bot, event: GroupMessageEvent) -> bool:
+    if await _is_blocked_user(event.user_id):
+        return False
     return str(event.user_id) != str(bot.self_id)
 
 
@@ -1080,6 +1096,7 @@ aiasktmr = on_command("aitmr", rule=_human_group, priority=10, block=True)
 
 async def _explicitly_called(bot: Bot, event: GroupMessageEvent) -> bool:
     if str(event.user_id)==str(bot.self_id): return False
+    if await _is_blocked_user(event.user_id): return False
     if any(seg.type=="at" and str(seg.data.get("qq"))==str(bot.self_id) for seg in event.original_message):
         return True
     return bool(event.reply and str(event.reply.sender.user_id)==str(bot.self_id))

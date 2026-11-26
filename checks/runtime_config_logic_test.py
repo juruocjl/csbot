@@ -162,6 +162,44 @@ class RuntimeConfigLogicTest(unittest.TestCase):
                     LOGIC.encode_value(definition, value)
         self.assertEqual(definition.default, {})
 
+    def test_ai_blocked_users_round_trip_and_normalize(self) -> None:
+        definition = LOGIC.get_definition("cs_ai_blocked_users")
+
+        value, encoded = LOGIC.encode_value(
+            definition,
+            [" 2864405242 ", "123456", "2864405242", "123456"],
+        )
+
+        self.assertEqual(value, ["2864405242", "123456"])
+        self.assertEqual(encoded, '["2864405242","123456"]')
+        self.assertEqual(LOGIC.decode_value(definition, encoded), value)
+        self.assertEqual(LOGIC.decode_value(definition, "[]"), [])
+        self.assertEqual(definition.default, [])
+        self.assertEqual(definition.value_type, "string_list")
+
+    def test_invalid_ai_blocked_users_are_rejected(self) -> None:
+        definition = LOGIC.get_definition("cs_ai_blocked_users")
+        for value in (
+            ["", "   "],
+            ["2864405242", ""],
+            ["2864405242", "   "],
+            ["abc123"],
+            ["2864405242", "2864405242; DROP TABLE x"],
+            ["2864405242", "+2864405242"],
+            ["2864405242", "28644 05242"],
+            [2864405242],
+            [True],
+            [None],
+            "2864405242",
+            "2864405242,123456",
+            {"2864405242": "blocked"},
+            None,
+            [str(number) for number in range(10**5, 10**5 + 201)],
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    LOGIC.encode_value(definition, value)
+
 
 if __name__ == "__main__":
     unittest.main()

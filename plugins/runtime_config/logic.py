@@ -30,6 +30,7 @@ FollowedTeamList = Annotated[list[FollowedTeamName], Field(max_length=50)]
 
 BIRTHDAY_QQ_PATTERN = re.compile(r"^\d{5,12}$")
 BIRTHDAY_MMDD_PATTERN = re.compile(r"^(\d{1,2})-(\d{1,2})$")
+BLOCKED_AI_QQ_PATTERN = re.compile(r"^\d{5,12}$")
 
 
 def normalize_birthday_override(value: Any) -> dict[str, str]:
@@ -67,6 +68,34 @@ def normalize_birthday_override(value: Any) -> dict[str, str]:
 
 BirthdayOverrides = Annotated[
     dict[str, str], Field(max_length=500), AfterValidator(normalize_birthday_override)
+]
+
+
+def normalize_blocked_ai_users(value: Any) -> list[str]:
+    """Normalize and validate the QQ numbers ignored by group AI replies.
+
+    Items are trimmed, must be pure 5-12 digit QQ numbers, duplicates are
+    dropped while keeping the first occurrence order.
+    """
+    if not isinstance(value, list):
+        raise ValueError("AI 黑名单配置必须是字符串数组")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_item in value:
+        if not isinstance(raw_item, str):
+            raise ValueError("AI 黑名单配置的每个 QQ 号都必须是字符串")
+        item = raw_item.strip()
+        if not BLOCKED_AI_QQ_PATTERN.fullmatch(item):
+            raise ValueError(f"AI 黑名单配置的 QQ 号非法: {raw_item!r}")
+        if item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
+
+
+BlockedAIUsers = Annotated[
+    list[str], Field(max_length=200), AfterValidator(normalize_blocked_ai_users)
 ]
 
 
@@ -161,6 +190,18 @@ DEFINITIONS: dict[str, RuntimeConfigDefinition] = {
         annotation=AIModelName,
         default="gpt-6.2-sol",
         value_type="string",
+    ),
+    "cs_ai_blocked_users": RuntimeConfigDefinition(
+        key="cs_ai_blocked_users",
+        name="AI 回复黑名单",
+        description=(
+            "群聊 AI 忽略的用户 QQ 号数组，例如 [\"2864405242\"]。"
+            "命中后不再响应 /ai、/aitb、/aixmm、/aixhs、/aitmr，也不响应被 @ 或被回复的 AI 调用；"
+            "群聊日志 allmsg 仍照常记录。保存后下一次群消息生效，设为空数组即解除全部拉黑。"
+        ),
+        annotation=BlockedAIUsers,
+        default=[],
+        value_type="string_list",
     ),
     "live_watch_list": RuntimeConfigDefinition(
         key="live_watch_list",
